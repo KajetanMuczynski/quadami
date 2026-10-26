@@ -213,6 +213,7 @@ another result object shows that object's own report.
 | **Quads** | `N of T target (P %)`: quads made, the target, the ratio. | 60–150 %. |
 | **Non-quads** | Triangles, pentagons and other faces that are not quads. | 0. A handful on a sculpt is common today; see [§7](#7-sculpts-what-works-and-what-struggles). |
 | **Holes** | Only shown if your model was closed. Holes the remesh opened, with the number of border edges. | 0. Anything else is a defect; see [§6](#6-warnings-and-what-to-do). |
+| **Handles** | Tunnels and loops through your model (the hole of a ring, a handle, an eyelet) compared with your model: `as input`, or how many were lost or added. | `as input`. Lost ones are tunnels too narrow for the quad size. |
 | **Non-manifold edges** | Edges with three or more faces. | 0. |
 | **Non-manifold vertices** | Points where surfaces only touch. | 0. |
 | **Winding flips** | Neighbouring faces facing opposite ways. | 0. |
@@ -239,6 +240,8 @@ Warnings appear under the rows, with a red icon when they are a problem.
 |---|---|---|
 | Dialog **"Remesh to 200,000+ quads?"** with a memory estimate | The **Target Quads guard**: a big target can use all your memory (about 2 GB per 100,000 quads) and take long. Often a typo (an extra zero). | Press Cancel unless you meant it and have the memory. |
 | **"Output has N holes where the input was closed (E open edges)"**, plus a hint, and a red **Holes** row | The remesh tore the surface open. On sculpts this happens almost only at folded input ([§7](#7-sculpts-what-works-and-what-struggles)). | Try another Target Quads (a few hundred up or down often closes it). Find the holes with the hint (Non Manifold). If they sit at swirls or pinched creases, smooth those in Sculpt Mode and run again. |
+| **"Output has N handles fewer than the input …"**, red **Handles** row | Tunnels or loops only a few quads wide closed up (a ring's hole, a strap's eyelet, a tiny gap in hair). | Raise Target Quads; each step up keeps more of them, but tunnels much narrower than a quad close at any count you would use. If the tunnel should not be there, ignore it. |
+| **"Output has N handles more than the input …"**, red **Handles** row | Two surfaces were joined across a thin gap. Rare; seen only on badly folded or very noisy input. | Try another Target Quads, or smooth the folded spot and run again. |
 | **"Folded input: N faces in K spots. …"** and a **Repair Folds and Re-run** button | Your model's surface is folded over itself in K places, on sculpts usually left by a brush. The quads there may come out messy or with holes. | Press **Repair Folds and Re-run** ([§8](#8-folded-input-and-repair-folds)). |
 | **"N folded faces in K spots could not be repaired safely and were left as they were"** | After a repair: these spots were too steep, too thin or too tangled to fix without changing your shape. | Smooth those spots in Sculpt Mode and run again ([§7](#7-sculpts-what-works-and-what-struggles)). |
 | Red **Non-manifold vertices** or **edges** | Points or edges that are not a clean surface. | Same as holes: another Target Quads, or clean the input at that spot. Report it with the build line if it stays. |
@@ -303,6 +306,15 @@ faces in K spots"** and, below it, a **Repair Folds and Re-run** button.
 3. The new result replaces the old one (the old one is hidden). The rows show **Folds repaired: X of
    N faces** (counted in faces, because a repair can split one spot into several smaller ones); if some
    could not be fixed, a red **Folds left: F faces in S spots** row and a line saying so.
+
+**Also Flatten Needle Spikes** (a checkbox above the button, off by default). Some folds sit on the
+flank of a needle: a single vertex pulled far out of the surface. The normal repair cannot fix those
+without moving the needle's tip, so it leaves them. With the box ticked, it lowers such a tip to the
+middle of its base when that clears the fold, which **changes your shape** at that spot. Only tips
+near a fold the normal repair left are lowered, never a spike on a clean surface. The result then
+shows a **Spikes flattened** row, for example "1, tip lowered by up to 0.6 quads" (how far the
+farthest tip moved, measured in quad edges at your Target Quads), and a line saying the shape
+changed. On our test sculpts it lowered 1 or 2 tips per model.
 
 What it does and does not do:
 - **Your original object is never changed.** The repair works on the copy the remesher gets.

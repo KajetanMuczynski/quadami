@@ -64,6 +64,9 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "                              island; trace: only our own (default qex)\n"
                           "  --fold-repair on|off        untangle folded-over input triangles (brush\n"
                           "                              leftovers) before remeshing (default off)\n"
+                          "  --flatten-spikes on|off     with --fold-repair on: where a fold cannot be\n"
+                          "                              untangled, also lower needle spikes near it\n"
+                          "                              (changes the shape; default off)\n"
                           "  --stdin-control             cancel when stdin receives the line \"cancel\"\n"
                           "                              or is closed; the report then says \"cancelled\"\n"
                           "  -h, --help                  show this text\n"
@@ -181,6 +184,12 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
                 return 1;
             }
             parameters.repairFolds = "on" == value;
+        } else if ("--flatten-spikes" == name) {
+            if ("on" != value && "off" != value) {
+                std::fprintf(stderr, "Error: --flatten-spikes must be on or off, not %s\n", value.c_str());
+                return 1;
+            }
+            parameters.flattenSpikes = "on" == value;
         } else {
             std::fprintf(stderr, "Error: unknown option %s (see --help)\n", name.c_str());
             return 1;
@@ -192,6 +201,10 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
     }
     if (options->inputPath.empty() || options->outputPath.empty()) {
         std::fprintf(stderr, "Error: --input and --output are required (see --help)\n");
+        return 1;
+    }
+    if (options->parameters.flattenSpikes && !options->parameters.repairFolds) {
+        std::fprintf(stderr, "Error: --flatten-spikes on needs --fold-repair on\n");
         return 1;
     }
     // Above the core's maximum the remesh itself refuses with a message.

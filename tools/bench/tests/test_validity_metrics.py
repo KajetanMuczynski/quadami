@@ -34,6 +34,14 @@ def torus_point(u, v, R=1.0, r=0.3, shift=0.0):
     return [(R + r * np.cos(v)) * np.cos(u) + shift, (R + r * np.cos(v)) * np.sin(u), r * np.sin(v)]
 
 
+def sheet(nx, ny, ly, z=0.0):
+    """Quads of the rectangle [0, 1] x [0, ly] at height z, normals up."""
+    x, y = np.meshgrid(np.linspace(0, 1, nx + 1), np.linspace(0, ly, ny + 1), indexing="ij")
+    V = np.stack([x.ravel(), y.ravel(), np.full(x.size, z)], 1)
+    return V, [[a * (ny + 1) + b, (a + 1) * (ny + 1) + b, (a + 1) * (ny + 1) + b + 1, a * (ny + 1) + b + 1]
+               for a in range(nx) for b in range(ny)]
+
+
 def write(path, V, F):
     with open(path, "w") as fp:
         for p in V:
@@ -99,7 +107,24 @@ class Validity(unittest.TestCase):
             F[f] = F[f][::-1]
         r = self.run_metrics((Vin, Fin), (V, F))
         self.assertEqual(r["flipped"]["faces_vs_input"], len(turned))
+        self.assertEqual(r["flipped"]["faces_off_input_folds"], len(turned))  # no input fold on a torus
         self.assertFalse(r["flipped"]["output_reversed"])
+
+    def test_flips_over_folded_input_are_counted_apart(self):
+        # A strip with a pleat narrower than input_folds' radius (the band around x = 0.5 turned over in
+        # place, as a brush leaves it); the output is flat, so its faces over the pleat point against the
+        # input there. One more output face, far from the pleat, is turned for real.
+        V, Q = sheet(400, 40, 0.1)
+        F = [t for q in Q for t in ([q[0], q[1], q[2]], [q[0], q[2], q[3]])]
+        band = np.abs(V[:, 0] - 0.5) < 0.005
+        V[band, 0] = 1 - V[band, 0]
+        V[band, 2] = 0.002
+        Vo, Fo = sheet(41, 4, 0.1, 0.002)
+        Fo[21] = Fo[21][::-1]  # x = 0.13
+        f = self.run_metrics((V, F), (Vo, Fo))["flipped"]
+        self.assertEqual(f["faces_off_input_folds"], 1)
+        self.assertEqual(f["faces_over_input_folds"], 4)  # the column of output faces at x = 0.5
+        self.assertEqual(f["faces_vs_input"], 5)
 
     def test_globally_reversed_output_is_not_flipped(self):
         V, F = self.torus_out()
@@ -165,6 +190,24 @@ class Validity(unittest.TestCase):
         faces = [[0, 1, 2, 3, 4]]
         self.assertEqual(metrics.folded_faces(P, faces, np.array([5])), 1)
         self.assertEqual(metrics.folded_faces(V, [[0, 1, 2, 3]], np.array([4])), 0)
+
+
+class TurnedOver(unittest.TestCase):
+    def test_only_clusters_with_a_turned_edge_count_as_folds(self):
+        # Two flagged clusters on a strip: one around the in-place pleat (edges turned by ~180 degrees),
+        # one on smooth flat triangles (a stand-in for a tight but valid curl).
+        V, Q = sheet(400, 40, 0.1)
+        F = np.array([t for q in Q for t in ([q[0], q[1], q[2]], [q[0], q[2], q[3]])])
+        band = np.abs(V[:, 0] - 0.5) < 0.005
+        V[band, 0] = 1 - V[band, 0]
+        V[band, 2] = 0.002
+        C = V[F].mean(1)
+        mask = (np.abs(C[:, 0] - 0.5) < 0.01) | (np.abs(C[:, 0] - 0.2) < 0.01)
+        adj = metrics.face_adjacency(F)
+        adj = (adj + adj.T).tocsr()
+        kept = metrics.turned_over(V, F, mask, adj)
+        self.assertTrue(kept[np.abs(C[:, 0] - 0.5) < 0.005].all())
+        self.assertFalse(kept[np.abs(C[:, 0] - 0.2) < 0.01].any())
 
 
 class OrientLikeCore(unittest.TestCase):

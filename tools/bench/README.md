@@ -7,7 +7,7 @@ directory you choose.
 
 | File | What it does |
 |---|---|
-| `ab.py` | **A/B harness** for quality: builds `autoremesher-cli` from a git ref, runs it over a mesh set (optionally with 1-ulp replicates), adds metrics and topology, and compares two runs as Markdown tables. See [A/B a change](#ab-a-change). |
+| `ab.py` | **A/B harness** for quality: builds `autoremesher-cli` from a git ref, runs it over a mesh set (optionally with 1-ulp replicates), adds metrics and topology, and compares two runs as Markdown tables. `lane` says how much A/B a change needs. See [A/B a change](#ab-a-change) and [Test lanes](#test-lanes). |
 | `build.sh <work>` | apt deps (skip with `SKIP_APT=1`; `JOBS=2` to keep a laptop cool), out-of-tree qmake build of the Qt app, the Qt-free `ar_bench` build of the same core, and a Python venv. Builds this checkout unless `AR_SOURCE_DIR` points elsewhere. |
 | `bench/ar_bench.cpp` | Qt-free driver for time and memory: same OBJ loader and `AutoRemesher::remesh()` call as the app's headless mode; writes JSON with wall/CPU time, peak RSS (overall and per pipeline step), the core's phase report, result counts and UV flip checks on the integer-grid map; `--stage-diagnostics` writes the core's per-stage records (solver sizes and times, rounding passes). |
 | `bench/CMakeLists.txt` | Builds `ar_bench` from a source tree (`-DAR_SOURCE_DIR`) with the `.pro` release flags (`-O3 -flto -funroll-loops -march=x86-64-v2`). |
@@ -19,6 +19,7 @@ directory you choose.
 | `make_stress.py` | Generates the stress families (`stress_<family>` sets in its own corpus file for `AR_CORPUS`): thin capsules as islands and attached, thin ribbons, up to 1,000 crumbs, intersecting/touching/nested/duplicated shells, slivers and graded density, fins, holes, triangle soups, flipped normals, scale and offset, 1.3M/5.2M triangles, spikes, jitter, brush-like twists, coarse input, self-intersection. Writes a manifest with probe points on each feature under test. Docstring lists the families. |
 | `stress_report.py` | Scores `ab.py` runs of any set: whether a feature survived (probes), how far the input lies from the output in h0 (coverage: area shares and the largest distance), islands with under half their planned quads, the share of libQEx faces the cleanup keeps, local input thickness, and whether the add-on panel (`addon/quadami/report.py` on the same report) shows any red row or warning. Results: ENVELOPE §3.3. |
 | `sculpt_report.py` | What a sculptor gets, over `ab.py` or `run_compare.py` runs: triangles/pentagons and their clusters, where non-quads and folds sit (smooth, curved, sharp/thin at quad scale), one Catmull-Clark step (folds survive it, isolated n-gons become poles), non-manifold vertices, folded input (`input_folds`) and how many non-quads and folds sit on it; summary per mesh and tool, replicate table. |
+| `genus_report.py` | Wrong genus per island over `ab.py` runs (2g = 2C − χ − B from `metrics.json` → `validity` → `per_island`), joined with what the core recorded for that island (T's Euler characteristic, the `map_check` stage, the extractor used and any fallback) and the same island in a run with `--cli-arg=--extractor=trace` (`--trace`) or any other run (`--alt NAME=RUN`). Classes each changed island: non-manifold input, T wrong, map0/map2 (zero or 2-quad ring in the rounded map, tracer loses it too), extractor (tracer keeps it), both. Also checks the core's own `islands.handles_lost/added` (report interface 1.7) against `metrics.py`. `genus_report.py RUN --set S [--trace RUN_T] [--per-run] [--json f]`. |
 | `map_check_eval.py` | Scores the core's `map_check` stage records (validity of the map before extraction) of an `ab.py` run against the output defects: precision, recall and lift per failure class, ROC AUC, and whether a feature separates failing from passing 1-ulp replicates of the same run. |
 | `defect_ledger.py` | Per-run cause ledger over `ab.py` run folders: locates every non-quad, folded quad, face flipped against the input, hole, dropped or thinned part and wrong genus, tests the input and the map around it (folded input within 2h, tip, a part thinner than a quad, libQEx fallback, flipped map within h) and gives it one cause class; `summary` prints the share per class and kind, the lift of each feature against random surface points, and the worst runs; `--pair` against the same runs without `--fold-repair` adds the class "repair". The map test needs run folders of a probe build (patch in the research note `defect-ledger-2026-10-22`). |
 | `speed_report.py` | Where time and memory of `ab.py` runs go (`--no-metrics --jobs 1` for timing): the core's step shares per target, island phases (input preprocessing, resample, parameterize, extract, surface projection), the rounding loop and curl solve (iterations, n, nnz(L), seconds), quad count against the parameterization's cell count, a peak-RSS model (KB per input triangle and per target quad, with the worst actual/model ratio as upper bound) and a wall-time model for a pre-run estimate; with several `--runs` folders, geo-mean time ratios and byte-identical outputs. Results: `research/speed-memory-2026-10-22.md`. |
@@ -27,9 +28,9 @@ directory you choose.
 | `fold_repair.py` | Offline prototype of a local repair of folded input (TODO 2.19 candidate, not in the core): per fold cluster from `input_folds`, untangles the folded faces and a few rings in a planar chart (Tutte, then pulled back as close to the original as the faces stay positive), puts moved vertices back on the original surface, keeps every face. `fold_repair.py in.obj out.obj --json report.json`; the report has folds before and after, skipped clusters and why, and the largest move. |
 | `corpus.json` | Mesh sets with their default targets and resolutions: `corpus` (the 18-mesh baseline corpus, 72 runs), `closed` (13 thin ellipsoids and tori, 78 runs; genus regressions show here first), `suzanne` (Suzanne + Subdivision 1–3, 9 runs; open, the add-on's first bug report), `sculpt` (7 sculpt stand-ins from `make_sculpt.py` at 2k/5k/15k, 42 runs), `brush` (12 brush stand-ins from `make_sculpt.py --set brush` at 2k/5k quality, 24 runs; about 1 h with `--replicates 5 --jobs 4` on 4 cores), `gallery` (the public gallery's entries, each with its own target and camera; run through `tools/gallery/gallery.py`, public-license or procedural meshes only, checked by `tests/test_gallery_set.py`). Categories and symmetry planes per mesh. |
 | `run_corpus.py` | Runs `ar_bench` (+ metrics) per mesh and target over the `corpus` set; writes `record.json` per run and `summary.json`. For time and memory; quality A/B goes through `ab.py`. |
-| `gates.py RUN --set S` | docs/TARGETS.md §3 gates (H1–H8, V1–V6, coverage) over an `ab.py` run folder, per family: runs passing as the mean over replicates and in every replicate, defects per 1k faces, fidelity medians. |
+| `gates.py RUN --set S` | docs/TARGETS.md §3 gates (H1–H8, V1–V6, coverage, libQEx fallbacks) over an `ab.py` run folder, per family: runs passing as the mean over replicates and in every replicate, defects per 1k faces, fidelity medians. |
 | `release_gate.py CAND --baseline BASE` | The release check's decision (docs/RELEASING.md), on `gates.py`'s gates: structural gates (H1–H6, H8) no worse than the baseline for 0.x or on every run with `--hard` (1.0), and the §3.2 ratchet (V1–V6 clean runs, defects per 1k). Run by `.github/workflows/release-check.yml` on Linux, Windows and macOS. |
-| `metrics.py` | Output quality: face/valence statistics, corner angles, scaled Jacobian, degenerate and flipped faces (against the input oriented like the core does), non-manifold edges and vertices, topology against the input (Euler characteristic, components, boundary loops; globally and per input island: dropped, merged, holes, handles), input area lost or collapsed (thin parts), two-sided Hausdorff, geometric and topological mirror symmetry. |
+| `metrics.py` | Output quality: face/valence statistics, corner angles, scaled Jacobian, degenerate and flipped faces (against the input oriented like the core does; those over folded input counted apart for V3), non-manifold edges and vertices, topology against the input (Euler characteristic, components, boundary loops; globally and per input island: dropped, merged, holes, handles), input area lost or collapsed (thin parts), two-sided Hausdorff, geometric and topological mirror symmetry. |
 | `summarize.py` | Markdown tables + CSV from `summary.json`. |
 | `claims.py` | Aggregates per REFERENCE claim (stage shares, M1/M2 counts, P3 correlations and scaling slopes, thread/ladder/allocator/adaptivity comparisons). |
 | `experiments.sh` | Thread sweep (P1), input-size ladder (P4/P6), allocator swap (P5), adaptivity off (M7), perf profiles. |
@@ -117,7 +118,9 @@ $P tools/bench/ab.py run HEAD --set closed   # genus check; also --set suzanne
   records, a **libQEx fallbacks** section lists the replicate-runs with a fallback, the reasons, and folds,
   non-quads and topology on exactly those runs for both sides. `--per-run` adds one row per run.
 - **Re-measuring.** After a change to `metrics.py`, `run <ref> --remeasure` recomputes `metrics.json` of the
-  finished runs without running the CLI again.
+  finished runs without running the CLI again. With `--jobs 4` on 2M-triangle inputs (nefertiti, cat)
+  metrics.py can run out of memory; such a run keeps `"metrics": null` (never the old file) and
+  `gates.py` lists it as "left out": re-measure it with `--jobs 1`.
 - **Timing.** The `time` row is the CLI's own total under `--jobs` load. Use it for effects of 20 % or
   more; for anything finer run `--jobs 1` on an idle machine, or `ar_bench` with `--repeat`.
 
@@ -139,6 +142,65 @@ The Qt CLI (what the Blender bridge calls) runs headless only with an offscreen 
 `QT_QPA_PLATFORM=offscreen $W/app/autoremesher --input in.obj --output out.obj --report r.txt
 --target-quads 10000`. Without it, on a machine with no display, it aborts (exit 134). `--report`
 holds only totals; the per-step phase report goes to stderr.
+
+## Test lanes
+
+How much A/B a change needs is decided by what it does to the output, not by its size or by the
+author: a one-line change in rounding can move every run (#67 moved 50 of 225), a 3,000-line opt-in
+feature can move none (#71). `ab.py lane` gives the lane:
+
+```bash
+$P tools/bench/ab.py lane $(git merge-base origin/master HEAD) HEAD --jobs 4
+```
+
+| lane | when (`lane` prints it) | what the PR needs |
+|---|---|---|
+| **none** | nothing compiled into the CLI changed (`src/`, `include/`, `thirdparty/`, `CMakeLists.txt`): docs, add-on, tools, CI. 28 of the 45 PRs #26–#73. | CI only. |
+| **light** | compiled code changed, but `out.obj` is byte-identical to the base in every run of every public set with default targets (265 runs since `external` was added, each with the plain input and one float32 replicate; `gallery` has no default targets and is skipped). Opt-in code behind a flag, report-only fields, refactors that keep the bytes. #60, #65, #71 would have been light. | The `lane` output in the PR, plus an A/B of the new option (`--cli-arg=...`) on the meshes it is for, with the noise rule for any discrete claim. |
+| **full** | anything else: some run moved, failed or is missing. | `run --replicates 5` on every public set for both sides and `compare` per set, as before; private sets (`AR_CORPUS`) when the change is aimed at sculpts. |
+
+- **Why a float32 replicate.** The plain input (u0) is double precision; Blender hands the add-on
+  float32. Replaying #67 at ×6 (2026-10-22): 28 of the 175 runs whose plain output was identical moved in
+  some float32 replicate. A check on u0 alone would pass changes the add-on sees. `--replicates N`
+  checks more.
+- **No replicate shortcut in the full lane.** "Replicates only where the plain run moved" was tested on
+  #67 against full ×6: it reached the same unanimous verdicts (none either way) but missed most of the
+  effect where the change acts through float32 noise (sculpt flips ×0.79 full vs ×0.90, p99 ×0.76 vs
+  ×0.92). Checking u0 and u1 still missed 20 runs. So the full lane keeps ×6 on every run.
+- **Base.** Compare against the merge base, or against master right after merging it, never against a
+  newer master than the branch has: other merges would show up as differences.
+- **Gap.** Light proves identical default output on the public sets only. A change in input handling
+  (cleanup, orientation, fold detection) also runs `lane` with `AR_CORPUS` on the private set, or goes full.
+  Non-default options (`--sharp-edge`, `--adaptivity`) are not covered either; a change that touches
+  their code adds a `lane`-style check with that `--cli-arg` via `run`/`compare`.
+- **Cost** (measured 2026-10-22, 4-vCPU cloud container, `--jobs 4`, master 0e9bec8): full lane
+  56 min per side (closed 6, corpus 25, brush 9, sculpt 14, suzanne 2 min), plus 15 min for `external`
+  (2026-10-23, master dd03272), so about 71 min per side and 2 h 20 min for an A/B, more with private
+  sets; `lane` on a light change about 25 min for both sides from scratch without `external`, no metrics
+  (plain runs 787 s, the float32 replicate 705 s more; #60, #65 and #71 all came out light, 450 of 450
+  identical), plus 9 min with it (262 s per side); none: 0.
+  Reruns of a key are free (runs are cached), and a `lane` run's folders are reused by a later full
+  `run`, which adds the metrics.
+- **Drift guard.** Light PRs cannot drift the default output (they are identical by construction), but
+  full PRs each within noise can add up: the 2026-10-21 net-effect run found slips no single PR showed.
+  Master's ×6 side is deterministic, so it needs computing only once per core merge (a change of
+  `source_key`), not once per PR. After a core merge, one thread runs it and compares it with the
+  previous core merge, set by set; a later full-lane A/B in the same work folder reuses it as its base:
+
+  ```bash
+  NEW=$(git rev-parse origin/master); OLD=<the previous core merge on master>   # lane none merges keep the key
+  for s in closed corpus brush sculpt suzanne external; do
+    $P tools/bench/ab.py run $NEW --set $s --replicates 5 --jobs 4 --timeout 1200
+    $P tools/bench/ab.py compare $OLD $NEW --set $s     # needs OLD's runs in this work folder too
+  done
+  ```
+
+  A row worse beyond the replicate spread is bisected by PR (`lane` on each merge in between finds the
+  ones that moved it). Not automated yet: a CI workflow doing this after each core merge is a
+  follow-up decision.
+- **Determinism.** The lane test relies on outputs being reproducible: 225 of 225 plain runs of master
+  were byte-identical between two work folders (2026-10-22), and earlier across `--jobs` and thread
+  counts (72/72). Builds with another compiler or flags are not comparable byte for byte.
 
 ## Adding your own meshes
 

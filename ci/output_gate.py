@@ -10,10 +10,13 @@ case the gate fails on:
   - a quad count outside [MIN_RATIO, MAX_RATIO] x target;
   - non-quad faces above MAX_NON_QUAD_SHARE of all faces;
   - any non-manifold edge;
+  - an input island with more than MAX_UNCOVERED of its area farther than one output edge (the
+    output's mean edge length) from the output: a dropped island, or a part collapsed into a blob,
+    which keeps the input's genus and so passes every topology count (TARGETS H4, Kajetan 2026-10-23);
   - an output OBJ whose own counts disagree with the report (so a broken counter can't hide a
     bad mesh).
-Folded faces, empty islands, boundary edges, holes in closed islands and components are reported,
-not gated, until the plan sets targets for them (TODO 0.7). The thresholds are wide on purpose: this
+Folded faces, boundary edges, holes in closed islands and components are reported, not gated (an
+island without output fails the coverage check), until the plan sets targets for them (TODO 0.7). The thresholds are wide on purpose: this
 gate catches broken output, not small quality changes. A Markdown table goes to $GITHUB_STEP_SUMMARY when set.
 """
 import json
@@ -25,6 +28,7 @@ import time
 
 MIN_RATIO, MAX_RATIO = 0.6, 1.5
 MAX_NON_QUAD_SHARE = 0.02
+MAX_UNCOVERED = 0.01
 
 
 class Mesh:
@@ -159,6 +163,115 @@ def obj_counts(path):
     return quads, others, sum(1 for c in edge_faces.values() if c > 2)
 
 
+def read_obj(path):
+    vertices, faces = [], []
+    with open(path) as f:
+        for line in f:
+            if line.startswith("v "):
+                vertices.append(tuple(float(t) for t in line.split()[1:4]))
+            elif line.startswith("f "):
+                faces.append([int(t.split("/")[0]) - 1 for t in line.split()[1:]])
+    return vertices, faces
+
+
+def sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def closest_on_triangle(p, a, b, c):
+    """Closest point to p on triangle abc (Ericson, Real-Time Collision Detection, 5.1.5)."""
+    ab, ac, ap = sub(b, a), sub(c, a), sub(p, a)
+    d1, d2 = dot(ab, ap), dot(ac, ap)
+    if d1 <= 0 and d2 <= 0:
+        return a
+    bp = sub(p, b)
+    d3, d4 = dot(ab, bp), dot(ac, bp)
+    if d3 >= 0 and d4 <= d3:
+        return b
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0 and d1 >= 0 and d3 <= 0:
+        v = d1 / (d1 - d3)
+        return (a[0] + v * ab[0], a[1] + v * ab[1], a[2] + v * ab[2])
+    cp = sub(p, c)
+    d5, d6 = dot(ab, cp), dot(ac, cp)
+    if d6 >= 0 and d5 <= d6:
+        return c
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0 and d2 >= 0 and d6 <= 0:
+        w = d2 / (d2 - d6)
+        return (a[0] + w * ac[0], a[1] + w * ac[1], a[2] + w * ac[2])
+    va = d3 * d6 - d5 * d4
+    if va <= 0 and d4 - d3 >= 0 and d5 - d6 >= 0:
+        w = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+        return (b[0] + w * (c[0] - b[0]), b[1] + w * (c[1] - b[1]), b[2] + w * (c[2] - b[2]))
+    denom = 1.0 / (va + vb + vc)
+    v, w = vb * denom, vc * denom
+    return (a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w)
+
+
+def uncovered_share(mesh, output):
+    """Per input island (vertex-connected), the share of its area whose triangle centroid lies farther
+    than h, the output's mean edge length, from the output surface. Returns the largest share."""
+    V, faces = read_obj(output)
+    tris = [(f[0], f[k], f[k + 1]) for f in faces for k in range(1, len(f) - 1)]
+    edges = [math.dist(V[f[k]], V[f[k - 1]]) for f in faces for k in range(len(f))]
+    if not tris or not edges:
+        return 1.0
+    h = sum(edges) / len(edges)
+
+    def cell(p):
+        return (math.floor(p[0] / h), math.floor(p[1] / h), math.floor(p[2] / h))
+
+    grid = {}
+    for t in tris:
+        lo = cell([min(V[i][k] for i in t) for k in range(3)])
+        hi = cell([max(V[i][k] for i in t) for k in range(3)])
+        for x in range(lo[0], hi[0] + 1):
+            for y in range(lo[1], hi[1] + 1):
+                for z in range(lo[2], hi[2] + 1):
+                    grid.setdefault((x, y, z), []).append(t)
+
+    def covered(p):
+        # A triangle within h of p has its closest point, inside its bounding box, in a cell next to p's.
+        cx, cy, cz = cell(p)
+        for x in (cx - 1, cx, cx + 1):
+            for y in (cy - 1, cy, cy + 1):
+                for z in (cz - 1, cz, cz + 1):
+                    for t in grid.get((x, y, z), ()):
+                        if math.dist(p, closest_on_triangle(p, V[t[0]], V[t[1]], V[t[2]])) <= h:
+                            return True
+        return False
+
+    parent = list(range(len(mesh.vertices)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for a, b, c in mesh.triangles:
+        parent[root(b)] = root(a)
+        parent[root(c)] = root(a)
+    area, lost = {}, {}
+    P = mesh.vertices
+    for a, b, c in mesh.triangles:
+        k = root(a)
+        s = 0.5 * math.sqrt(sum(x * x for x in cross(sub(P[b], P[a]), sub(P[c], P[a]))))
+        area[k] = area.get(k, 0.0) + s
+        centroid = tuple((P[a][i] + P[b][i] + P[c][i]) / 3 for i in range(3))
+        if not covered(centroid):
+            lost[k] = lost.get(k, 0.0) + s
+    return max(lost.get(k, 0.0) / area[k] for k in area if area[k] > 0)
+
+
 def run_case(cli, work, name, mesh, target):
     source = os.path.join(work, name + ".obj")
     output = os.path.join(work, name + "-quads.obj")
@@ -198,6 +311,10 @@ def run_case(cli, work, name, mesh, target):
         row["failures"].append("%d non-quad faces, allowed %.0f%%" % (others, 100 * MAX_NON_QUAD_SHARE))
     if non_manifold:
         row["failures"].append("%d non-manifold edges" % non_manifold)
+    row["uncovered"] = uncovered_share(mesh, output)
+    if row["uncovered"] > MAX_UNCOVERED:
+        row["failures"].append("%.1f%% of an input island farther than one output edge from the output, "
+                               "allowed %.0f%%" % (100 * row["uncovered"], 100 * MAX_UNCOVERED))
     for key, mine in (("quads", quads), ("non_quads", others), ("non_manifold_edges", non_manifold)):
         if out[key] != mine:
             row["failures"].append("report says %s = %d, the OBJ has %d" % (key, out[key], mine))
@@ -212,10 +329,11 @@ def main():
     rows = [run_case(cli, work, name, mesh, target) for name, mesh, target in corpus()]
 
     columns = ["case", "target", "quads", "non_quads", "non_manifold", "folded", "empty_islands",
-               "islands", "boundary", "holes", "components", "seconds"]
+               "islands", "boundary", "holes", "components", "uncovered", "seconds"]
     lines = ["| " + " | ".join(columns) + " | result |", "|" + "---|" * (len(columns) + 1)]
     for row in rows:
-        cells = [("%.2f" % row[c]) if c == "seconds" else str(row.get(c, "-")) for c in columns]
+        cells = [("%.2f" % row[c]) if c == "seconds" and c in row else
+                 ("%.2g" % row[c]) if c == "uncovered" and c in row else str(row.get(c, "-")) for c in columns]
         lines.append("| " + " | ".join(cells) + " | " + ("; ".join(row["failures"]) or "pass") + " |")
     table = "\n".join(lines)
     print(table)

@@ -34,7 +34,8 @@ void measureMesh(const RemeshMesh& mesh, QualityReport* report);
 // Adds the closed-island counts to report (closedInputIslandCount and the
 // three after it) by running measureMesh() on the output of each island,
 // where mesh is the islands' outputs one after the other, as remesh() returns
-// them.
+// them, and the handle counts (handlesLost and the two after it) from each
+// island's inputTwiceHandles and outputTwiceHandles.
 void measureClosedIslands(const RemeshMesh& mesh,
     const std::vector<::AutoRemesher::AutoRemesher::RemeshedIsland>& islands,
     QualityReport* report);

@@ -548,6 +548,8 @@ namespace {
         // in the same pass.
         std::vector<size_t> touched;
         double offset = 0.0;
+        // Spike tips lowered instead of an untangled patch.
+        size_t spikes = 0;
     };
 
     struct PatchScratch {
@@ -787,6 +789,106 @@ namespace {
                 }
                 if (!best.ok)
                     best = std::move(result);
+            }
+            return best;
+        }
+
+        // Interior vertices within the radius of the cluster whose angle sum
+        // is below spikeAngleSum: needles, a single vertex pulled out of the
+        // surface.  Each tip, then all of them together, goes down to the
+        // mean of its ring, not more than maximumSpikeDrop; kept as for a
+        // patch if the detector then flags fewer triangles around it and
+        // none it did not flag outside the tips' triangles.  A shape change,
+        // so only on request.
+        PatchResult flattenSpikes(const std::vector<Vector3>& vertices, const std::vector<size_t>& seedFaces, PatchScratch& s) const
+        {
+            const Topology& t = m_topology;
+            PatchResult none;
+            // Vertices within the radius of the spot: a fold on a needle's
+            // flank need not touch its tip.
+            std::vector<size_t> seeds;
+            for (size_t f : seedFaces)
+                for (size_t v : t.faces[f])
+                    seeds.push_back(v);
+            const std::vector<size_t> corners = verticesWithin(vertices, seeds, m_radius, s);
+            std::vector<size_t> tips;
+            std::vector<Vector3> lowered;
+            for (size_t v : corners) {
+                if (boundaryVertex(v))
+                    continue;
+                double angles = 0.0;
+                for (size_t k = t.vertexFaceStart[v]; k < t.vertexFaceStart[v + 1]; ++k) {
+                    const Face& face = t.faces[t.vertexFaces[k]];
+                    const size_t i = face[0] == v ? 0 : (face[1] == v ? 1 : 2);
+                    const Vector3 a = vertices[face[(i + 1) % 3]] - vertices[v], b = vertices[face[(i + 2) % 3]] - vertices[v];
+                    const double la = a.length(), lb = b.length();
+                    if (!(la > 0.0) || !(lb > 0.0)) {
+                        angles = std::numeric_limits<double>::infinity();
+                        break;
+                    }
+                    angles += std::acos(std::max(-1.0, std::min(1.0, Vector3::dotProduct(a, b) / (la * lb))));
+                }
+                if (!(angles < m_options.spikeAngleSum))
+                    continue;
+                Vector3 mean;
+                const size_t ring = t.vertexVertexStart[v + 1] - t.vertexVertexStart[v];
+                for (size_t k = t.vertexVertexStart[v]; k < t.vertexVertexStart[v + 1]; ++k)
+                    mean += vertices[t.vertexVertices[k]];
+                mean = mean / (double)ring;
+                if ((mean - vertices[v]).length() > m_options.maximumSpikeDrop * m_radius)
+                    continue;
+                tips.push_back(v);
+                lowered.push_back(mean);
+            }
+            if (tips.empty())
+                return none;
+
+            // Each tip alone, then all together, the most flags removed wins.
+            std::vector<std::vector<size_t>> trials;
+            for (size_t i = 0; i < tips.size(); ++i)
+                trials.push_back({ i });
+            if (tips.size() > 1) {
+                trials.emplace_back();
+                for (size_t i = 0; i < tips.size(); ++i)
+                    trials.back().push_back(i);
+            }
+            PatchResult best;
+            size_t bestRemoved = 0;
+            for (const std::vector<size_t>& trial : trials) {
+                PatchResult result;
+                std::vector<size_t> freeList;
+                for (size_t i : trial) {
+                    result.moved.push_back(tips[i]);
+                    result.positions.push_back(lowered[i]);
+                    freeList.push_back(tips[i]);
+                }
+                // A tip next to another tip of the same trial would move on
+                // a ring that moves too.
+                bool adjacent = false;
+                for (size_t i : trial)
+                    for (size_t k = t.vertexVertexStart[tips[i]]; k < t.vertexVertexStart[tips[i] + 1]; ++k)
+                        adjacent = adjacent || std::binary_search(freeList.begin(), freeList.end(), t.vertexVertices[k]);
+                if (adjacent)
+                    continue;
+                s.patchFaces.reset(t.faces.size());
+                std::vector<size_t> touched;
+                for (size_t v : freeList) {
+                    touched.push_back(v);
+                    for (size_t k = t.vertexFaceStart[v]; k < t.vertexFaceStart[v + 1]; ++k)
+                        s.patchFaces.set(t.vertexFaces[k]);
+                    for (size_t k = t.vertexVertexStart[v]; k < t.vertexVertexStart[v + 1]; ++k)
+                        touched.push_back(t.vertexVertices[k]);
+                }
+                const std::pair<size_t, size_t> flags = flagsAround(vertices, result, freeList, s);
+                if (flags.first == std::numeric_limits<size_t>::max() || flags.first - flags.second <= bestRemoved)
+                    continue;
+                bestRemoved = flags.first - flags.second;
+                std::sort(touched.begin(), touched.end());
+                touched.erase(std::unique(touched.begin(), touched.end()), touched.end());
+                result.touched = touched;
+                result.ok = true;
+                result.spikes = trial.size();
+                best = result;
             }
             return best;
         }
@@ -1283,7 +1385,11 @@ namespace {
         // cluster that failed and has nothing moved near it would fail again.
         std::set<std::vector<size_t>> failed;
         std::vector<char> moved(topology.vertexCount, 0);
-        for (size_t pass = 0; pass < options.passes && !clusters.empty(); ++pass) {
+        // Spikes only once untangling alone moves nothing more, so a tip is
+        // lowered only where no patch would do; then as many passes again.
+        bool spikePhase = false;
+        size_t passesLeft = options.passes;
+        for (; passesLeft > 0 && !clusters.empty(); --passesLeft) {
             // Every cluster against the same positions, so the result does not
             // depend on the threads; then applied in cluster order, and a patch
             // that overlaps one applied before waits for the next pass.
@@ -1300,6 +1406,8 @@ namespace {
                             && !movedNear(topology, current, moved, clusters[k], options.maximumRings + 2, 3.0 * stats.radius))
                             continue;
                         results[k] = repairer.repairCluster(current, geometry, folded, clusters[k], s);
+                        if (!results[k].ok && spikePhase)
+                            results[k] = repairer.flattenSpikes(current, clusters[k], s);
                     }
                 });
             });
@@ -1321,15 +1429,26 @@ namespace {
                 for (size_t v : result.touched)
                     used[v] = 1;
                 for (size_t m = 0; m < result.moved.size(); ++m) {
+                    if (result.spikes)
+                        stats.maximumSpikeDrop = std::max(stats.maximumSpikeDrop, (result.positions[m] - original[result.moved[m]]).length());
                     current[result.moved[m]] = result.positions[m];
                     moved[result.moved[m]] = 1;
                 }
                 stats.maximumOffset = std::max(stats.maximumOffset, result.offset);
-                ++stats.repairedPatches;
+                if (result.spikes)
+                    stats.flattenedSpikes += result.spikes;
+                else
+                    ++stats.repairedPatches;
                 any = true;
             }
-            if (!any)
-                break;
+            if (!any) {
+                if (!options.flattenSpikes || spikePhase)
+                    break;
+                spikePhase = true;
+                passesLeft = options.passes + 1;
+                failed.clear();
+                continue;
+            }
             // Flags change only near the moved triangles.
             std::vector<Vector3> focus;
             std::vector<char> movedFace(topology.faces.size(), 0);
@@ -1432,6 +1551,8 @@ namespace {
         total->movedVertices += part.movedVertices;
         total->maximumOffset = std::max(total->maximumOffset, part.maximumOffset);
         total->maximumMove = std::max(total->maximumMove, part.maximumMove);
+        total->flattenedSpikes += part.flattenedSpikes;
+        total->maximumSpikeDrop = std::max(total->maximumSpikeDrop, part.maximumSpikeDrop);
     }
 
     // Each part with its own radius, so that joining a long blade to a vine,

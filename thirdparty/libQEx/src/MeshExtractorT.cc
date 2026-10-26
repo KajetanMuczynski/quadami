@@ -18,7 +18,7 @@
  * You should have received a copy of the GNU General Public License
  * along with QEx.  If not, see <http://www.gnu.org/licenses/>.
  *
- * Modified by the Quadami fork, 2026-10-21 (TODO 6.1b): connectivity checks, step budget and grid-vertex cap (Guards.hh); getNextConnectedLeiWithHE returns null instead of an edge without a halfedge; add_face refuses local edges connected one way only; faces of more than 4 boundary grid vertices (boundary caps) are not added; no log output.
+ * Modified by the Quadami fork, 2026-10-21 (TODO 6.1b): connectivity checks, step budget and grid-vertex cap (Guards.hh); getNextConnectedLeiWithHE returns null instead of an edge without a halfedge; add_face refuses local edges connected one way only and a previous edge without a halfedge; faces of more than 4 boundary grid vertices (boundary caps) are not added; no log output.
  * See thirdparty/libQEx/PATCHES.md.
  */
 
@@ -3285,6 +3285,12 @@ typename PolyMeshT::FaceHandle MeshExtractorT<TMeshT>::add_face(PolyMeshT &qmesh
 #endif
                 qmesh.set_next_halfedge_handle(heh1, qmesh.halfedge_handle(opposite_next_lei->halfedgeIndex));
             }
+            // Quadami fork: on folded maps the opposite of the previous
+            // connected local edge can still lack its halfedge; `next` was
+            // then written through halfedge index -1 (heap overflow, then
+            // "free(): invalid size" on a test-only scan at Quality 10000).
+            if (opposite_prev_lei && opposite_prev_lei->halfedgeIndex < 0)
+                throw Abort("previous edge around a vertex has no halfedge");
             //if (opposite_prev_lei->halfedgeIndex != -1) {
             if (opposite_prev_lei) {
                 assert(!qmesh.face_handle(qmesh.halfedge_handle(opposite_prev_lei->halfedgeIndex)).is_valid());

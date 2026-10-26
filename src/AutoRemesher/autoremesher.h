@@ -134,6 +134,13 @@ public:
         m_repairInputFolds = repair;
     }
 
+    // With the fold repair: also lower needle tips where a fold cannot be
+    // untangled (FoldRepair::Options::flattenSpikes).
+    void setFlattenSpikes(bool flatten)
+    {
+        m_flattenSpikes = flatten;
+    }
+
     // Asked at every progress point and at island and stage boundaries; once it
     // returns true the run stops and remesh() returns false with cancelled()
     // set.  Called from the island worker threads, so it must be thread-safe.
@@ -167,6 +174,12 @@ public:
         size_t vertexCount = 0;
         size_t faceCount = 0;
         bool closedInput = false;
+        // Twice the handle count (twiceHandleCount()) of the island's input
+        // and of its output; -1 where it is not measured: an input with a
+        // non-manifold edge has no genus to keep, an island without output
+        // has nothing to compare.
+        long long inputTwiceHandles = -1;
+        long long outputTwiceHandles = -1;
     };
 
     const std::vector<RemeshedIsland>& remeshedIslands() const
@@ -388,6 +401,7 @@ private:
     double m_smoothNormalDegrees = 0.0;
     bool m_useQex = true;
     bool m_repairInputFolds = false;
+    bool m_flattenSpikes = false;
     ModelType m_modelType = ModelType::Organic;
     AutoRemesherProgressHandler m_progressHandler = nullptr;
     void* m_tag = nullptr;

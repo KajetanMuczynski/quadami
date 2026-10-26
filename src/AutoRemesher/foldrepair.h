@@ -88,6 +88,16 @@ public:
         // Largest distance of a moved vertex from the original surface, as a
         // fraction of the radius.
         double maximumOffset = 0.25;
+        // Off by default, since it changes the shape: where a spot cannot be
+        // untangled, lower the tips of needles within the radius of it
+        // (interior vertices with an angle sum below spikeAngleSum, flat is
+        // 2 pi) to
+        // the mean of their ring, if that is at most maximumSpikeDrop (a
+        // fraction of the radius) away.  Kept under the same detector test
+        // as a patch; maximumOffset does not apply.
+        bool flattenSpikes = false;
+        double spikeAngleSum = 3.14159265358979323846;
+        double maximumSpikeDrop = 2.0;
     };
 
     struct Stats {
@@ -107,6 +117,9 @@ public:
         // largest move, as fractions of the radius of its part.
         double maximumOffset = 0.0;
         double maximumMove = 0.0;
+        // Spike tips lowered, and the largest drop, in model units.
+        size_t flattenedSpikes = 0;
+        double maximumSpikeDrop = 0.0;
         double seconds = 0.0;
     };
 

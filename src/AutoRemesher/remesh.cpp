@@ -268,6 +268,16 @@ void measureClosedIslands(const RemeshMesh& mesh,
         size_t cornerCount = 0;
         for (size_t face = faceBegin; face < faceBegin + island.faceCount; ++face)
             cornerCount += mesh.faceSizes[face];
+        if (island.inputTwiceHandles >= 0 && island.outputTwiceHandles >= 0
+            && island.inputTwiceHandles != island.outputTwiceHandles) {
+            // Rounded up: an odd difference (a one-sided piece) still changed.
+            const long long change = island.outputTwiceHandles - island.inputTwiceHandles;
+            if (change > 0)
+                report->handlesAdded += (size_t)((change + 1) / 2);
+            else
+                report->handlesLost += (size_t)((1 - change) / 2);
+            ++report->handlesChangedIslandCount;
+        }
         if (island.closedInput) {
             ++report->closedInputIslandCount;
             if (island.faceCount > 0) {
@@ -427,6 +437,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     engine.setSmoothNormalDegrees(parameters.smoothNormalDegrees);
     engine.setUseQex(Extractor::Qex == parameters.extractor);
     engine.setRepairInputFolds(parameters.repairFolds);
+    engine.setFlattenSpikes(parameters.flattenSpikes);
     engine.setTrianglesPerQuad(MeshResolution::Fast == parameters.resolution
             ? ::AutoRemesher::FastTrianglesPerQuad
             : ::AutoRemesher::QualityTrianglesPerQuad);
@@ -506,6 +517,52 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
             + (1 == report.closedIslandHoleCount ? " hole" : " holes") + " where the input was closed ("
             + std::to_string(report.closedIslandHoleEdgeCount) + " open edges)");
     }
+    if (report.handlesLost > 0) {
+        report.warnings.push_back("Output has " + std::to_string(report.handlesLost)
+            + (1 == report.handlesLost ? " handle" : " handles")
+            + " fewer than the input (tunnels or loops closed up, on "
+            + std::to_string(report.handlesChangedIslandCount)
+            + (1 == report.handlesChangedIslandCount ? " island" : " islands")
+            + "): handles only a few quads around close up. A higher Target Quads keeps more of them");
+    }
+    if (report.handlesAdded > 0) {
+        report.warnings.push_back("Output has " + std::to_string(report.handlesAdded)
+            + (1 == report.handlesAdded ? " handle" : " handles")
+            + " more than the input (surfaces joined across a thin gap)");
+    }
+    {
+        // Parts thinner than one quad (ThinParts).  On the corpus, 3 % of the
+        // surface, or 10 spots on 1 %, catches 84 % of the runs whose thin
+        // parts fold or get lost; a third of the runs it fires on come out
+        // clean (closed thin shells, sharp creases), so it states a risk.
+        double share = 0.0, spots = 0.0, growth = 0.0;
+        for (const auto& it : report.diagnostics) {
+            if (it.first == "thin_area_share")
+                share = it.second;
+            else if (it.first == "thin_spots")
+                spots = it.second;
+            else if (it.first == "thin_growth_p50")
+                growth = it.second;
+        }
+        const bool warned = share >= 0.03 || (spots >= 10 && share >= 0.01);
+        if (warned) {
+            std::string text = std::to_string((int)std::lround(100.0 * share)) + " % of the surface ("
+                + std::to_string((long long)spots) + (1 == spots ? " spot" : " spots")
+                + ") is thinner than one quad; expect folds or lost parts there. ";
+            const double needed = growth * (double)parameters.targetQuadCount;
+            if (needed > (double)MaximumTargetQuadCount) {
+                text += "No target quad count fits a quad across most of it: thicken those parts";
+            } else {
+                // Two significant digits; a lower bound, since a finer T shows thinner parts.
+                const double step = std::pow(10.0, std::floor(std::log10(std::max(needed, 1.0))) - 1.0);
+                text += "Try at least "
+                    + std::to_string((long long)(std::ceil(needed / step) * step)) + " target quads, or thicken those parts";
+            }
+            report.warnings.push_back(text);
+        }
+        // For front ends that add their own hint under the warning.
+        report.diagnostics.push_back({ "thin_parts_warned", warned ? 1.0 : 0.0 });
+    }
     return finish(RemeshStatus::Ok, std::string());
 }
 
@@ -534,6 +591,7 @@ std::string toJson(const RemeshResult& result)
         << ", \"smooth_normal_degrees\": " << jsonNumber(parameters.smoothNormalDegrees)
         << ", \"resolution\": " << jsonString(toString(parameters.resolution))
         << ", \"repair_folds\": " << (parameters.repairFolds ? "true" : "false")
+        << ", \"flatten_spikes\": " << (parameters.flattenSpikes ? "true" : "false")
         << ", \"extractor\": " << jsonString(toString(parameters.extractor))
         << "},\n";
     out << "  \"input\": {"
@@ -562,6 +620,9 @@ std::string toJson(const RemeshResult& result)
         << ", \"opened\": " << jsonCount(report.openedClosedIslandCount)
         << ",\n              \"holes\": " << jsonCount(report.closedIslandHoleCount)
         << ", \"hole_edges\": " << jsonCount(report.closedIslandHoleEdgeCount)
+        << ",\n              \"handles_lost\": " << jsonCount(report.handlesLost)
+        << ", \"handles_added\": " << jsonCount(report.handlesAdded)
+        << ", \"handles_changed\": " << jsonCount(report.handlesChangedIslandCount)
         << "},\n";
     out << "  \"time\": {\"total_seconds\": " << jsonNumber(report.seconds) << ", \"steps\": [";
     for (size_t i = 0; i < report.stepSeconds.size(); ++i) {

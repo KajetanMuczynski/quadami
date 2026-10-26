@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 6;
+const int InterfaceVersionMinor = 7;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -88,6 +88,10 @@ struct RemeshParameters {
     bool repairFolds = false;
     // Since 1.6.
     Extractor extractor = Extractor::Qex;
+    // Since 1.7.  With repairFolds: where a fold cannot be untangled, also
+    // lower the tips of needle spikes near it (a shape change, so off by
+    // default; diagnostics input_fold_spikes and input_fold_spike_drop_quads).
+    bool flattenSpikes = false;
 };
 
 struct RemeshRequest {
@@ -176,6 +180,14 @@ struct QualityReport {
     size_t openedClosedIslandCount = 0;
     size_t closedIslandHoleCount = 0;
     size_t closedIslandHoleEdgeCount = 0;
+    // Since 1.7.  Handles (tunnels) the output has fewer or more than the
+    // input, summed over the islands whose input has no non-manifold edge,
+    // and the islands where the count changed.  Per island the count is
+    // 2C - chi - B over its pieces, so a hole cut or filled does not count; a
+    // handle lost and another one added on the same island cancel out.
+    size_t handlesLost = 0;
+    size_t handlesAdded = 0;
+    size_t handlesChangedIslandCount = 0;
     // Wall time of the whole call.
     double seconds = 0.0;
     // Per-step times summed over the islands, in pipeline order.

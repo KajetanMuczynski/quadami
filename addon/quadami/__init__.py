@@ -137,6 +137,13 @@ class RemeshSettings(bpy.types.PropertyGroup):
         default="quality",
         description="Triangle mesh the quads are solved on. The quad count is the same either way")
 
+    # Not a remesh parameter: a choice next to Repair Folds and Re-run.
+    flatten_spikes: BoolProperty(
+        name="Also Flatten Needle Spikes", default=False,
+        description="Where a fold sits on a needle-like spike and cannot be smoothed out, "
+                    "lower the spike's tip to its base. This changes the shape: the panel "
+                    "says how many tips moved and how far")
+
     def parameters(self):
         return {name: getattr(self, name) for name in worker.PARAMETER_FLAGS}
 
@@ -205,6 +212,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
     # the fold repair on, and hide the old result.
     source: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})
     repair_folds: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})
+    flatten_spikes: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})
 
     @classmethod
     def poll(cls, context):
@@ -246,6 +254,8 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         parameters = _settings(context).parameters()
         if self.repair_folds:
             parameters["repair_folds"] = True
+            if self.flatten_spikes:
+                parameters["flatten_spikes"] = True
         job = worker.RemeshJob(executable, positions, triangles, parameters)
         try:
             job.start()
@@ -345,13 +355,15 @@ class OBJECT_OT_remesh_quads_cancel(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _draw_fold_offer(box, source_name):
+def _draw_fold_offer(box, settings, source_name):
     column = box.column(align=True)
     for line in report_rows.fold_offer_lines():
         column.label(text=line)
+    box.prop(settings, "flatten_spikes")
     operator = box.operator(OBJECT_OT_remesh_quads.bl_idname, text="Repair Folds and Re-run", icon="MOD_SMOOTH")
     operator.source = source_name
     operator.repair_folds = True
+    operator.flatten_spikes = settings.flatten_spikes
 
 
 class VIEW3D_PT_remesh_quads(bpy.types.Panel):
@@ -413,7 +425,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
                     row.label(text=text, icon=icon)
                 source_name = obj.get(SOURCE_PROPERTY, "") if obj is not None else ""
                 if report_rows.offers_fold_repair(report) and source_name:
-                    _draw_fold_offer(box, source_name)
+                    _draw_fold_offer(box, settings, source_name)
 
         preferences = _preferences(context)
         _draw_build(layout, worker.find_executable(bpy.path.abspath(preferences.executable) if preferences else ""))

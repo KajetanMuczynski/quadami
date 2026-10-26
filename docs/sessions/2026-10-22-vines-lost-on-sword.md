@@ -24,3 +24,20 @@
 - Next: the thin-strip cleanup passes (separate PR); a panel warning when the output leaves part of the input
   uncovered (share of input area farther than one quad edge from the output, per island); thickness-aware
   fold detection (radius below the local thickness).
+
+## Second PR: cleanup passes (TODO 2.21)
+- Did: guarded `collapseThreeValenceEdgePairs` (offset of the collapsed pair over the new diagonal ≤ 0.4 of its length)
+  and made `removeIsolatedFaces` keep every piece of 16 faces or more instead of only the largest. Probe build
+  (face count per cleanup step, component sizes) on the sword, corpus and sculpt sets chose both thresholds.
+- Measured (`ab.py`, master 0797a4c → branch, one replicate except the private sword ×6): area_uncovered corpus ×0.91,
+  closed ×0.84, brush ×0.33, stress_thin ×0.63, stress_attached ×0.92, stress_ribbon ×0.86, sword ×0.52, realsculpt
+  equal; separate capsules lost > 10 % in 41 → 33 of 56 stress_thin runs. Cost: SJ ≤ 0 ×1.02-1.10 on the public
+  sets and ×1.24 on the sword, irregular vertices +0.4-5 %. Threshold 0.25 instead of 0.4: same coverage gain, SJ ≤ 0
+  corpus ×1.035 instead of ×1.017.
+- Replicates (×6, 1-ulp inputs) on the runs whose topology changed: 2 of them were 3-face closed crumbs the later
+  passes pinched off a thin neck (attached r0.016 at 2k, 5 of 6 replicates); a second crumb sweep after the last pass
+  removes them and changes nothing else on any set (only 2 stress_attached runs and 1 sword replicate differ). Every
+  remaining change is an extra closed component: a thin part master deleted and the branch keeps, detached at its
+  neck (attached r0.008 at 8k 6/6, Hausdorff 0.10 → 0.007-0.009; r0.004 at 32k 3/6, 0.11-0.14 → 0.054-0.058;
+  corpus sword at 2k 1/6, 0.12 → 0.021).
+- Next: the "Lost parts" warning; a do-no-harm guard per cleanup pass once the core measures coverage.
