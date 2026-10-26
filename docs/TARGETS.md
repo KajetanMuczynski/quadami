@@ -253,8 +253,8 @@ computed and no reference values (§7).
   when a count moves less than 1.5×); no soft metric worsens beyond the §2.4 margins. Anything else needs
   a reason in the PR and Kajetan's yes.
 - **Releases**: on every platform, the §3.2 ratchet; §3.1 on every run and replicate for 1.0, and
-  for 0.x previews (§6, decision 3) no §3.1 gate failing on more runs than in the previous release
-  (it fails on master today: RELEASING.md, "Gaps"); for 1.0 also the §3.2 bar and the organic min
+  for 0.x previews (§6, decision 3) no §3.1 gate failing on every replicate of more cases than in
+  the previous release (a flip on some replicates only is noise, CLAUDE.md; strict §3.1 fails on master today: RELEASING.md, "Gaps"); for 1.0 also the §3.2 bar and the organic min
   targets of §4. Checked by `release-check.yml` (`tools/bench/release_gate.py`).
 - **Gate 7.1** (proposal, for when 7.1 is decided): keep upgrading inside the current structure if,
   after 3.3, untangling and 4.1, the §3.2 1.0 bar holds on ≥ 95 % of corpus runs and the corpus meets

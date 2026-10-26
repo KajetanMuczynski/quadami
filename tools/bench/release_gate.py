@@ -12,7 +12,9 @@ this script only decides:
 - §3.1 structural gates (H1-H6, H8; H2 for edges only until TODO 2.18, H7 is not checked here).
   With --hard (the 1.0 bar) or without a baseline: no run may fail one. With a baseline (0.x
   previews ship under the ratchet, TARGETS §6 decision 3): over the runs both folders have, no gate
-  may fail on more runs than in the baseline, and a candidate run the baseline lacks may fail none.
+  may fail on every replicate of more cases (mesh, resolution, target) than in the baseline, and a
+  candidate run the baseline lacks may fail none. One ulp of input can flip a run's topology, so a
+  failure on some replicates only is listed but is not a regression (CLAUDE.md, noise rule).
 - §3.2 ratchet, only with a baseline: per validity gate (V1-V6) no fewer clean runs, and per defect
   no more defects per 1k faces, than the baseline. Aggregates over a set need no replicate vote
   (CLAUDE.md, noise rule), so a single extra defect counts as worse.
@@ -59,6 +61,15 @@ def failing(runs, keys, gate):
     return sum(not runs[k][0][gate] for k in keys)
 
 
+def failing_cases(runs, keys, gate):
+    """Cases (mesh, resolution, target) where every replicate in `keys` fails `gate`: the noise rule
+    (CLAUDE.md) claims a discrete result only where all replicates agree."""
+    cases = {}
+    for k in keys:
+        cases.setdefault(k[:3], []).append(not runs[k][0][gate])
+    return sum(all(v) for v in cases.values())
+
+
 def per_1k(runs, keys, defect):
     faces = sum(runs[k][1].get("faces", 0) for k in keys)
     return 1000.0 * sum(runs[k][1].get(defect, 0) for k in keys) / faces if faces else 0.0
@@ -76,11 +87,12 @@ def check_set(cand, base, hard):
         common = sorted(set(cand) & set(base))
         bad = any(k not in base for k in broken)
         lines += ["", "Over the %d runs both have (baseline / candidate):" % len(common), "",
-                  "| gate | runs failing | |", "|---|---|---|"]
+                  "| gate | runs failing | cases failing on every replicate | |", "|---|---|---|---|"]
         for g in STRUCTURAL:
             b, c = failing(base, common, g), failing(cand, common, g)
-            lines.append("| %s | %d / %d | %s |" % (g, b, c, "**worse**" if c > b else "ok"))
-            bad |= c > b
+            bc, cc = failing_cases(base, common, g), failing_cases(cand, common, g)
+            lines.append("| %s | %d / %d | %d / %d | %s |" % (g, b, c, bc, cc, "**worse**" if cc > bc else "ok"))
+            bad |= cc > bc
         lines += ["", "| validity | runs clean | |", "|---|---|---|"]
         for g in VALIDITY:
             b, c = len(common) - failing(base, common, g), len(common) - failing(cand, common, g)
@@ -89,7 +101,7 @@ def check_set(cand, base, hard):
         lines += ["", "| defect | per 1k faces | |", "|---|---|---|"]
         for d in DEFECTS:
             b, c = per_1k(base, common, d), per_1k(cand, common, d)
-            lines.append("| %s | %.3f / %.3f | %s |" % (d, b, c, "**worse**" if c > b + 1e-12 else "ok"))
+            lines.append("| %s | %.4f / %.4f | %s |" % (d, b, c, "**worse**" if c > b + 1e-12 else "ok"))
             bad |= c > b + 1e-12
         if len(common) < len(cand):
             lines += ["", "%d candidate runs have no baseline run." % (len(cand) - len(common))]
