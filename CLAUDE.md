@@ -8,8 +8,8 @@ Notes for Claude working in this repository.
   isotropic remesh, frame field, singularity simplification, mixed-integer quad parameterization
   (Eigen `SimplicialLDLT` + own rounding), quad extraction. Parallelism via TBB.
 - GUI (`src/*.cpp`, Qt 5.15 or Qt 6 + OpenGL) wraps the core; built with qmake (`autoremesher.pro`).
-- Vendored in `thirdparty/`: eigen, tbb (2017-era), isotropicremesher, meshoptimizer, QtAwesome,
-  QtWaitingSpinner. Upstream README mentions Geogram/libigl, but the `.pro` uses neither.
+- Vendored in `thirdparty/`: eigen, tbb (2017-era), isotropicremesher, meshoptimizer, libQEx (patched,
+  default extractor), OpenMesh (used by libQEx), QtAwesome, QtWaitingSpinner. Upstream README mentions Geogram/libigl, but the `.pro` uses neither.
 - `origin` = Kajetan's fork (github.com/KajetanMuczynski/quadami), `upstream` = huxingyi. Never push upstream.
 
 ## License policy

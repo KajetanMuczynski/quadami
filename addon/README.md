@@ -14,7 +14,8 @@ This file is for building and packaging. **Using** the add-on: [docs/USER-GUIDE.
 ## What it does
 
 - **Sidebar > Quadami** shows the parameters of the core's `remesh()`
-  (docs/INTERFACE.md §3) and nothing else: target quads, adaptivity and sharp
+  (INTERFACE.md §3, in the maintainer's plan folder, not in this repository; the
+  code side is `src/AutoRemesher/remesh.h`) and nothing else: target quads, adaptivity and sharp
   edge angle, and in a collapsed *Advanced* section resolution (Quality or
   Fast), anisotropy, edge scaling and smooth normal angle. Ranges and defaults
   are the Qt app's; the tooltips describe the measured effect of each. The
@@ -30,8 +31,10 @@ This file is for building and packaging. **Using** the add-on: [docs/USER-GUIDE.
 - On success it adds `<name>_remesh` next to the source with the same
   transform and collections, hides the source and selects the result.
 - The panel shows the quality report from the worker: status, quads against
-  the target, non-quads, non-manifold edges, winding flips, folded faces, empty
-  islands, time and warnings; non-zero defects are drawn in red. The report is
+  the target, non-quads, holes, handles, non-manifold edges and vertices,
+  winding flips, folded faces, input cleanup, empty islands, missing parts,
+  fold repair rows, time and warnings (`quadami/report.py`; meanings in the
+  user guide §5 and §6); defects are drawn in red. The report is
   kept on the result object (custom property `quadami_report`), so it is
   still there after saving the file. A failed or cancelled run shows its
   status and message instead; the worker's last output lines go to Blender's
@@ -123,10 +126,10 @@ notarized. Not yet tried on a real Mac: if macOS refuses to start it, run
 preferences). Intel Macs: build it yourself as for Linux below
 (`brew install cmake`).
 
-## Install (Linux, Blender 4.2 or newer)
+## Build and install from source (Linux, Blender 4.2 or newer)
 
-The remesher binary has to be built on the same machine and OS as the
-Blender that uses it.
+For the ready-made zip see the user guide §2. A zip built this way needs the
+same Linux (glibc) as the machine it was built on.
 
 1. **Blender.** Any Blender 4.2 or newer from blender.org (the Linux `.tar.xz`,
    extracted anywhere) or the Snap. Not the Flatpak: its sandbox cannot start

@@ -8,7 +8,7 @@ Copyright (C) 2026 Quadami contributors
 For people who sculpt or model in Blender and want a clean quad mesh, and who are not programmers.
 Written for **Blender 4.5 LTS**; Blender 4.2 and newer work the same way.
 
-What the add-on does is checked against its code (`addon/quadami/`, master of 2026-10-22). Blender's
+What the add-on does is checked against its code (`addon/quadami/`, master of 2026-10-26). Blender's
 own menus are described from memory where marked *(from memory, check)*: if a menu looks different on
 your screen, trust your screen and tell us.
 
@@ -262,8 +262,8 @@ Warnings appear under the rows, with a red icon when they are a problem.
 | Title **Failed** | The remesher stopped (e.g. "remeshing produced no faces"). | Try another Target Quads or Fast/Quality, then report it ([§9](#9-troubleshooting)). |
 | Title **Cancelled** | You pressed Esc or Cancel, or Blender stopped it (loading another file). If the remesher does not stop within 5 seconds, the add-on kills it. | Nothing to do. |
 
-*Planned, not yet in the add-on:* a warning before remeshing when the input has thin parts or
-self-intersections.
+*Planned, not yet in the add-on:* a check *before* remeshing for self-intersections and thin
+parts (today thin and missing parts are reported after the run, as above).
 
 ---
 
