@@ -120,6 +120,17 @@ class ReportTest(unittest.TestCase):
         self.assertIn(("Time", "0.8 s", False), rows)
         self.assertFalse(any(label in ("Input cleanup", "Holes") for label, _, _ in rows))
 
+    def test_missing_parts(self):
+        # Kajetan's joined sword at 3k: the vines came out missing (2026-10-22).
+        base = {"status": "ok", "parameters": {"target_quads": 3000}, "output": {"quads": 1979},
+                "islands": {"input": 10, "without_output": 0}}
+        lost = dict(base, lost_parts={"farthest_input_quad_widths": 7.6, "far_input_vertices": 812})
+        self.assertIn(("Missing parts", "up to 7 quad widths", True), report.summary_rows(lost))
+        kept = dict(base, lost_parts={"farthest_input_quad_widths": 0.4, "far_input_vertices": 0})
+        self.assertIn(("Missing parts", "none", False), report.summary_rows(kept))
+        # A worker from before the measure sends no lost_parts: no row.
+        self.assertFalse(any(label == "Missing parts" for label, _, _ in report.summary_rows(base)))
+
     def test_warnings_are_wrapped(self):
         lines = report.warning_lines({"status": "ok", "warnings": ["1 of 3 islands produced no faces"]},
                                      width=20)

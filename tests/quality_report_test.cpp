@@ -25,6 +25,7 @@
 // head at 10k came out with 2 holes and the add-on showed nothing.
 
 #include <AutoRemesher/MeasureMesh>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -161,6 +162,51 @@ int closedIslandFailures()
     return ok ? 0 : 1;
 }
 
+// Lost parts: the input is two unit cubes, at x = 0 and at x = 10, the output
+// only the first.  Input area 12 at a target of 12 quads makes the quad width
+// 1, so the second cube's corners are 9 to 10 quad widths from the output.
+// Islands without output are not collapsed; one with 2 of 6 planned quads is.
+int lostPartFailures()
+{
+    using Island = ::AutoRemesher::AutoRemesher::RemeshedIsland;
+    std::vector<double> positions = cubeCorners(0.0);
+    const std::vector<double> second = cubeCorners(10.0);
+    positions.insert(positions.end(), second.begin(), second.end());
+    std::vector<uint32_t> triangles;
+    for (const uint32_t first : { 0u, 8u }) {
+        for (const auto& face : cubeFaces(first))
+            triangles.insert(triangles.end(), { face[0], face[1], face[2], face[0], face[2], face[3] });
+    }
+    AutoRemesher::RemeshMesh mesh;
+    mesh.positions = cubeCorners(0.0);
+    for (const auto& face : cubeFaces(0)) {
+        mesh.faceSizes.push_back(4);
+        mesh.faceIndices.insert(mesh.faceIndices.end(), face.begin(), face.end());
+    }
+    std::vector<Island> islands(3);
+    islands[0].faceCount = 6;
+    islands[0].targetQuads = 6.0;
+    islands[1].targetQuads = 6.0;
+    islands[2].faceCount = 2;
+    islands[2].targetQuads = 6.0;
+
+    AutoRemesher::QualityReport report;
+    AutoRemesher::measureLostParts(positions, triangles, 12, mesh, islands, &report);
+    const bool ok = 8 == report.farInputVertexCount && std::fabs(report.farthestInputQuadWidths - 10.0) < 1e-9
+        && 1 == report.collapsedIslandCount && 2 == report.smallestCollapsedIslandFaces
+        && 6 == report.smallestCollapsedIslandTargetQuads;
+    AutoRemesher::QualityReport whole;
+    AutoRemesher::measureLostParts(positions, std::vector<uint32_t>(triangles.begin(), triangles.begin() + 36), 12,
+        mesh, {}, &whole);
+    const bool wholeOk = 0 == whole.farInputVertexCount && whole.farthestInputQuadWidths < 1e-9;
+    printf("far vertices %zu (want 8), farthest %.3f quad widths (want 10), collapsed %zu (want 1), "
+           "smallest %zu of %zu (want 2 of 6); kept cube: far %zu (want 0)%s\n\n",
+        report.farInputVertexCount, report.farthestInputQuadWidths, report.collapsedIslandCount,
+        report.smallestCollapsedIslandFaces, report.smallestCollapsedIslandTargetQuads,
+        whole.farInputVertexCount, ok && wholeOk ? "" : "  FAIL");
+    return ok && wholeOk ? 0 : 1;
+}
+
 // Handles per island from the islands' twice-handle counts: a torus that came
 // out as a sphere, a sphere that gained two handles, an island with a
 // non-manifold input (not measured) and an unchanged genus-2 island.
@@ -219,6 +265,7 @@ int main()
     failures += topologyFailures();
     failures += closedIslandFailures();
     failures += handleFailures();
+    failures += lostPartFailures();
     printf("%-24s %13s %17s %11s\n", "case", "folded", "degenerate", "flips");
     for (const auto& c : cases) {
         const AutoRemesher::QualityReport report = measure(c.positions, c.faces);

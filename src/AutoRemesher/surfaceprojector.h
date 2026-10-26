@@ -112,6 +112,10 @@ public:
     RelaxResult relax(std::vector<Vector3>* points, const std::vector<std::vector<size_t>>& faces,
         size_t iterations) const;
 
+    // Distance from `position` to the closest point of the surface, whichever
+    // way its face points; `maxDistance` when nothing is closer.
+    double distance(const Vector3& position, double maxDistance) const;
+
 private:
     struct EdgeTree {
         std::vector<std::pair<size_t, size_t>> edges;

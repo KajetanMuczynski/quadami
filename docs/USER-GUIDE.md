@@ -220,6 +220,7 @@ another result object shows that object's own report.
 | **Folded faces** | Quads bent over or twisted ([§1](#1-words-used-here)). | 0. A few on sculpts is a known weakness. |
 | **Input cleanup** | Only shown when the remesher fixed your *input* before starting: tiny broken triangles removed, triangles turned to face the same way as their neighbours. | Information, not a problem. |
 | **Empty islands** | `E of N`: separate pieces of your model that got no quads at all. | 0 of N. |
+| **Missing parts** | How far the farthest point of your model is from the result, counted in quad widths (the planned quad size). Red above 3: a part such as a vine, a limb or a spike did not come out. | none. |
 | **Time** | Seconds the remesher ran. | — |
 
 To find defects on the result: select it, **Tab** into Edit Mode, press **1** (vertex select) or **3**
@@ -246,6 +247,8 @@ Warnings appear under the rows, with a red icon when they are a problem.
 | **"N folded faces in K spots could not be repaired safely and were left as they were"** | After a repair: these spots were too steep, too thin or too tangled to fix without changing your shape. | Smooth those spots in Sculpt Mode and run again ([§7](#7-sculpts-what-works-and-what-struggles)). |
 | Red **Non-manifold vertices** or **edges** | Points or edges that are not a clean surface. | Same as holes: another Target Quads, or clean the input at that spot. Report it with the build line if it stays. |
 | **"N of M islands produced no faces"**, red **Empty islands** | A small separate piece (an eyeball, a tiny flower) got nothing. | Raise Target Quads, or remesh that piece on its own: Edit Mode, select it, **P > Selection** to make it its own object *(from memory, check)*, and remesh both. |
+| **"Parts of the model are missing in the result (up to N quad widths away). …"**, red **Missing parts** | A part thinner than about two quads (a vine, a strap, a finger, a spike) was smoothed away or cut off. The model is still one piece where it was, so no other row shows it. | Raise Target Quads until the warning goes away; each doubling halves the quad width. Or remesh the thin part on its own at a higher target ([§7](#7-sculpts-what-works-and-what-struggles)). |
+| **"K islands came out with far fewer quads than planned (smallest: F of P)"** | A separate piece came out as a lump of a few quads instead of its shape, usually because it is thin or small for the target. | Raise Target Quads, or remesh that piece on its own (as for empty islands). |
 | **"Blender's mesh validation changed the result"** | Blender had to repair the remesher's result when building the object. Should not happen. | Report it with the build line and the settings. |
 | Title **Invalid input** | The model cannot be remeshed as it is: no faces, broken coordinates, a target of 0 or above 2,000,000. The reason is shown under it. | Fix what it says. "The mesh has no faces" means you picked a mesh of only points or edges. |
 | Title **Failed** | The remesher stopped (e.g. "remeshing produced no faces"). | Try another Target Quads or Fast/Quality, then report it ([§9](#9-troubleshooting)). |

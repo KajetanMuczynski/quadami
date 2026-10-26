@@ -105,6 +105,13 @@ def summary_rows(report):
     islands = report.get("islands", {})
     empty = islands.get("without_output", 0)
     rows.append(("Empty islands", "%d of %d" % (empty, islands.get("input", 0)), empty > 0))
+    # Parts of the input farther than three quad widths from the result: a
+    # limb, vine or spike that came out missing.  Older workers don't send it.
+    lost = report.get("lost_parts")
+    if report.get("status") == "ok" and lost is not None:
+        far = int(lost.get("far_input_vertices", 0))
+        rows.append(("Missing parts", "up to %d quad widths" % int(lost.get("farthest_input_quad_widths", 0))
+                     if far else "none", far > 0))
     seconds = report.get("time", {}).get("total_seconds")
     if seconds is not None:
         rows.append(("Time", "%.1f s" % seconds, False))

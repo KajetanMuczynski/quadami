@@ -426,6 +426,22 @@ void SurfaceProjector::buildEdgeTree(EdgeTree* edgeTree) const
     edgeTree->tree.reset(new AxisAlignedBoudingBoxTree(edgeTree->boxes.get(), edgeIndices, edgeGroupBox));
 }
 
+double SurfaceProjector::distance(const Vector3& position, double maxDistance) const
+{
+    const auto& points = *m_vertices;
+    double best = maxDistance * maxDistance;
+    nearestInTree(m_triangleTree->root(), position, &best, [&](size_t index, double* bestDistanceSquared) {
+        const auto& triangle = (*m_triangles)[index];
+        const double distanceSquared = (closestPointOnTriangle(position,
+                                            points[triangle[0]], points[triangle[1]], points[triangle[2]])
+            - position)
+                                           .lengthSquared();
+        if (distanceSquared < *bestDistanceSquared)
+            *bestDistanceSquared = distanceSquared;
+    });
+    return std::sqrt(best);
+}
+
 bool SurfaceProjector::closestFacingPoint(const Vector3& position, const Vector3& normal,
     double maxDistance, Vector3* closest, Vector3* closestNormal) const
 {
