@@ -192,6 +192,100 @@ def nonmanifold_vertex_mask(faces, nv):
 
 
 
+def edge_faces(faces):
+    fid, v, nx, _ = corners(faces)
+    nv = int(max(v.max(), nx.max())) + 1 if len(v) else 1
+    # one int64 per edge: much faster than np.unique(axis=0), same (lexicographic) order
+    uk, inv = np.unique(np.minimum(v, nx).astype(np.int64) * nv + np.maximum(v, nx), return_inverse=True)
+    return np.stack([uk // nv, uk % nv], 1), inv.ravel(), fid
+
+
+def face_adjacency(faces):
+    _, inv, fid = edge_faces(faces)
+    order = np.argsort(inv, kind="stable")
+    inv, fid = inv[order], fid[order]
+    same = inv[1:] == inv[:-1]
+    a, b = fid[:-1][same], fid[1:][same]
+    m = len(faces)
+    from scipy.sparse import coo_matrix
+
+    return coo_matrix((np.ones(len(a)), (a, b)), shape=(m, m)).tocsr()
+
+
+def input_folds(V, F, radius=None, faces=None, tree=None, adj=None):
+    """Faces whose normal points against the area-weighted mean normal of the surface within geodesic
+    distance `radius` of them (default 1 % of the bounding-box diagonal; distances between centroids
+    of edge-adjacent faces; the faces sharing an edge always count, for triangles larger than the
+    radius): folded-over input left by brush strokes (twists, over-pinched creases,
+    pleats), where nearly all defects of the 2026-10-21 real-sculpt tests sat. Geodesic, so the other
+    side of a thin part or a separate island nearby does not count. Returns a boolean mask over F.
+
+    `faces` (indices) limits the test to those faces, the rest stay False: the full test costs minutes
+    on a 2M-triangle scan, where metrics.py needs it only around flipped output faces. `tree` is a
+    cKDTree over the face centroids and `adj` the symmetric face_adjacency(F), if the caller has them."""
+    import heapq
+
+    if radius is None:
+        radius = 0.01 * np.linalg.norm(V.max(0) - V.min(0))
+    C = V[F].mean(1)
+    A = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]) / 2
+    area = np.linalg.norm(A, axis=1)
+    n = A / np.maximum(area[:, None], 1e-300)
+    out = np.zeros(len(F), bool)
+    faces = np.arange(len(F)) if faces is None else np.asarray(faces, np.int64)
+    if not len(faces):
+        return out
+    tree = cKDTree(C) if tree is None else tree
+    # Euclidean candidates first (a superset on the same sheet), then the geodesic test on those only.
+    cand = [i for i, nb in zip(faces, tree.query_ball_point(C[faces], radius)) if n[i] @ A[nb].sum(0) < 0]
+    if not cand:
+        return out
+    if adj is None:
+        adj = face_adjacency(F)
+        adj = (adj + adj.T).tocsr()
+    for i in cand:
+        dist = {i: 0.0}
+        heap = [(0.0, i)]
+        m = np.zeros(3)
+        while heap:
+            d, f = heapq.heappop(heap)
+            if d > dist[f]:
+                continue
+            m += A[f]
+            for g in adj.indices[adj.indptr[f]:adj.indptr[f + 1]]:
+                nd = d + float(np.linalg.norm(C[g] - C[f]))
+                if (nd <= radius or f == i) and nd < dist.get(g, np.inf):  # the first ring always counts
+                    dist[g] = nd
+                    heapq.heappush(heap, (nd, g))
+        out[i] = n[i] @ m < 0
+    return out
+
+
+def turned_over(V, F, mask, adj, min_deg=150.0):
+    """The faces of `mask` in an edge-connected cluster (of masked faces) that has an edge where the
+    surface turns over: dihedral angle above min_deg between a masked face and a neighbour.
+
+    input_folds() alone also flags tight but valid shapes, where the surface curves back within its
+    radius without a crease (human_neutral's lips and eyelids: 550 faces, 2 clusters with a turned
+    edge, 78 faces); a fold left by a brush has the turned edge (brush_twist 408 of 434 faces kept,
+    brush_box_relief 59 of 70)."""
+    from scipy.sparse.csgraph import connected_components
+
+    idx = np.flatnonzero(mask)
+    out = np.zeros(len(F), bool)
+    if not len(idx):
+        return out
+    N = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])
+    n = N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-300)
+    sub = adj[idx]
+    rows = np.repeat(np.arange(len(idx)), np.diff(sub.indptr))
+    turned = np.zeros(len(idx), bool)
+    turned[rows[np.einsum("ij,ij->i", n[idx[rows]], n[sub.indices]) < np.cos(np.radians(min_deg))]] = True
+    _, lab = connected_components(sub[:, idx], directed=False)
+    out[idx[np.isin(lab, lab[turned])]] = True
+    return out
+
+
 def orient_like_core(Vin, Fin):
     """Input triangles turned the way the core's orientInput turns them (TODO 2.7, PR #51).
 
@@ -593,6 +687,25 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
                       "faces_vs_raw_input": min(raw_neg, len(faces) - raw_neg),
                       "input_reoriented_triangles": int(inp["input_reoriented"]),
                       "input_nonorientable_pieces": int(inp["input_nonorientable_pieces"])}
+    # Flips over folded input (TARGETS V3, 2026-10-23): a flipped face within 1.5 output edges of a folded
+    # input triangle (input_folds on the oriented input, in a cluster with a turned-over edge) follows the
+    # sculptor's fold, not ours; on the real sculpts 96-100 % of the defects sat there. Counted apart so
+    # V3 gates only the rest. Clusters are cut at the 1.5-edge balls, so a turned edge outside them
+    # is missed (counted off-fold, the safe side).
+    flip_idx = np.flatnonzero(dots >= 0 if reversed_out else dots < 0)  # sums to faces_vs_input
+    on_fold = np.zeros(len(flip_idx), bool)
+    if len(flip_idx):
+        Cin = Vin[Fo].mean(1)
+        tin = cKDTree(Cin)
+        balls = [np.union1d(b, [c]).astype(np.int64)
+                 for b, c in zip(tin.query_ball_point(cent[flip_idx], 1.5 * mean_edge), cf[flip_idx])]
+        adj = face_adjacency(Fo)
+        adj = (adj + adj.T).tocsr()
+        folds = input_folds(Vin, Fo, 0.01 * diag, faces=np.unique(np.concatenate(balls)), tree=tin, adj=adj)
+        folds = turned_over(Vin, Fo, folds, adj)
+        on_fold = np.array([folds[b].any() for b in balls])
+    out["flipped"]["faces_over_input_folds"] = int(on_fold.sum())
+    out["flipped"]["faces_off_input_folds"] = int(len(flip_idx) - on_fold.sum())
     # Normal deviation (TARGETS D3): angle between each output face and the input face closest to its
     # centroid, after the global orientation fix above, so flipped faces count as > 90 degrees.
     cos_in = (-dots if reversed_out else dots) / np.maximum(np.linalg.norm(nin, axis=1) * np.linalg.norm(normals, axis=1), 1e-300)

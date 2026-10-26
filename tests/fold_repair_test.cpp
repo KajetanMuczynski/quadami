@@ -25,7 +25,9 @@
 // untangle the twist locally with every moved vertex still on the sphere,
 // untangle the pleat without moving the sheet's open border, keep the
 // vertices of a crease next to a fold where they are, leave clean input
-// bit for bit as it was, and give the same result on every run.
+// bit for bit as it was, and give the same result on every run.  Spike
+// flattening, only when asked for, lowers a folded needle's tip and leaves
+// a needle that does not fold alone.
 
 #include <AutoRemesher/FoldRepair>
 #include <algorithm>
@@ -383,6 +385,41 @@ int main()
         check(stats.foldedTriangles > 0 && stats.foldedTrianglesAfter < stats.foldedTriangles, "a twist next to a box edge is repaired");
         check(edgeKept, "the box edge does not move");
         check(onTop, "moved vertices stay on the top face");
+    }
+    {
+        // A needle pulled out of a sphere and leaning past its base: its
+        // flank folds over and untangling cannot fix it without moving the
+        // tip off the surface.  Spike flattening lowers the tip, only when
+        // asked for; a needle that does not fold stays.
+        Mesh needle = icosphere(6);
+        size_t tip = 0;
+        for (size_t v = 0; v < needle.vertices.size(); ++v)
+            if (needle.vertices[v].z() > needle.vertices[tip].z())
+                tip = v;
+        Mesh upright = needle;
+        upright.vertices[tip] = upright.vertices[tip] * 1.05;
+        needle.vertices[tip] = needle.vertices[tip] * 1.02 + Vector3(0.05, 0.0, 0.0);
+        const std::vector<Vector3> input = needle.vertices;
+        Mesh plain = needle;
+        const FoldRepair::Stats off = FoldRepair::repair(&plain.vertices, plain.triangles, FoldRepair::Options());
+        FoldRepair::Options flatten;
+        flatten.flattenSpikes = true;
+        const FoldRepair::Stats on = FoldRepair::repair(&needle.vertices, needle.triangles, flatten);
+        std::printf("needle: %zu folded -> %zu without spikes, %zu with, %zu spikes, drop %g\n", off.foldedTriangles,
+            off.foldedTrianglesAfter, on.foldedTrianglesAfter, on.flattenedSpikes, on.maximumSpikeDrop);
+        check(off.foldedTrianglesAfter > 0 && 0 == off.flattenedSpikes && same(input, plain.vertices),
+            "without spike flattening a folded needle is left as it was");
+        check(1 == on.flattenedSpikes && 0 == on.foldedTrianglesAfter, "spike flattening lowers the needle and clears its fold");
+        bool onlyTip = true;
+        for (size_t v = 0; v < input.size(); ++v)
+            if (v != tip && !same(input[v], needle.vertices[v]))
+                onlyTip = false;
+        check(onlyTip && std::abs(on.maximumSpikeDrop - (input[tip] - needle.vertices[tip]).length()) < 1e-12,
+            "only the tip moves, by the reported drop");
+        const std::vector<Vector3> standing = upright.vertices;
+        const FoldRepair::Stats kept = FoldRepair::repair(&upright.vertices, upright.triangles, flatten);
+        check(0 == kept.foldedTriangles && 0 == kept.flattenedSpikes && same(standing, upright.vertices),
+            "a needle that does not fold stays");
     }
     return failures ? 1 : 0;
 }

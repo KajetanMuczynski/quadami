@@ -32,22 +32,23 @@ import gates  # noqa: E402
 STRUCTURAL = ["H1 completes", "H2 no non-manifold edge", "H3 consistently oriented",
               "H4 islands kept (none dropped, split or merged)", "H5 no hole added or closed",
               "H6 count within ±10 %", "H8 no 6+-gon"]
-VALIDITY = ["V1 provisional (all-quad on hard surface, else clusters ≤ 2)", "V2 no folded quad",
-            "V3 no face flipped vs input", "V4 no degenerate face", "V5 no interior valence 2 or ≥ 7",
+VALIDITY = ["V1 all-quad", "V2 no folded quad",
+            "V3 no face flipped vs input (off input folds)", "V4 no degenerate face", "V5 no interior valence 2 or ≥ 7",
             "V6 topology same as input per island"]
-DEFECTS = ["non-quads", "folded quads", "flipped vs input", "degenerate", "valence 2 / ≥ 7"]
+DEFECTS = ["non-quads", "folded quads", "flipped off input folds", "degenerate", "valence 2 / ≥ 7"]
 
 
 def score(folder, setname):
     """{(mesh, res, target, replicate): (gates passed, defect counts)} of one set; a run that did not
-    complete fails every gate."""
+    complete, or completed without metrics, fails every gate."""
     _, meshes = ab.load_set(setname)
     fams = {m["id"]: gates.family(m, setname) for m in meshes}
     out = {}
     for key, by_rep in ab.load_runs(folder, setname).items():
         for u, rec in by_rep.items():
             run_dir = os.path.join(folder, setname, key[0], f"{key[1]}-t{key[2]}", f"u{u}")
-            g, d = gates.gates(rec, run_dir, fams.get(key[0], setname))
+            res = gates.gates(rec, run_dir, fams.get(key[0], setname))
+            g, d = res if res is not None else ({"H1 completes": False}, {})
             if not g["H1 completes"]:
                 g = {name: False for name in STRUCTURAL + VALIDITY}
             out[key + (u,)] = (g, d)

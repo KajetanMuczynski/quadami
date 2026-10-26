@@ -10,7 +10,9 @@ reported as the mean over replicates of the runs that pass ("61.5/72"), next to 
 in every replicate ("unanimous"), per family. Families: the corpus families of TARGETS §2.1 from
 each mesh's corpus.json category (organic, hard surface, thin shell, scan, multi-island); any other
 set is one family. Defects per 1k faces are sums over all replicate-runs. Needs the metrics of
-metrics.py from 2026-10-22 on (`validity`); older runs: `ab.py run ... --remeasure`.
+metrics.py from 2026-10-22 on (`validity`) and, for V3's fold mask, from 2026-10-23 on (older runs
+count every flip in V3): `ab.py run ... --remeasure`. V1 is all-quad again (Kajetan, 2026-10-23); the
+retired cluster rule of 2026-10-21 is still printed for comparison.
 """
 import argparse
 import collections
@@ -70,8 +72,11 @@ def largest_nonquad_cluster(path):
 
 
 def gates(rec, run_dir, fam):
-    """Pass/fail of each gate for one replicate-run, and its defect counts."""
+    """Pass/fail of each gate for one replicate-run, and its defect counts; None when the run completed
+    but has no metrics (metrics.py failed, e.g. out of memory with several 2M-triangle inputs at once)."""
     m = rec.get("metrics") or {}
+    if rec.get("rc") == 0 and not rec.get("metrics"):
+        return None
     if rec.get("rc") != 0 or not m.get("ok"):
         return {"H1 completes": False}, {}
     f, t, v, q = m["faces"], m["topology"], m.get("validity") or {}, m.get("quads") or {}
@@ -79,7 +84,9 @@ def gates(rec, run_dir, fam):
     v5 = sum(n for k, n in val.items() if int(k) == 2 or int(k) >= 7)
     nonquads = f["total"] - f["quads"]
     cluster = largest_nonquad_cluster(os.path.join(run_dir, "out.obj")) if nonquads else 0
-    v1 = nonquads == 0 if fam == "hard surface" else (f["other"] == 0 and cluster <= 2)
+    fl = m["flipped"]
+    v3 = fl.get("faces_off_input_folds", fl["faces_vs_input"])  # metrics.py before 2026-10-23: no fold mask
+    ex = rec.get("extractor") or {}
     g = {"H1 completes": True,
          "H2 no non-manifold edge": t["non_manifold_edges"] == 0,
          "H2 no non-manifold vertex": v.get("non_manifold_vertices") == 0,
@@ -89,11 +96,13 @@ def gates(rec, run_dir, fam):
          "H5 no hole added or closed": v.get("holes_added") == 0 and v.get("holes_closed") == 0,
          "H6 count within ±10 %": abs(f["quads"] / rec["target"] - 1) <= 0.10 + 1e-9,  # 2200/2000 - 1 > 0.1 in floats
          "H8 no 6+-gon": f["other"] == 0,
-         "V1 provisional (all-quad on hard surface, else clusters ≤ 2)": v1,
-         "V1 old (all-quad)": nonquads == 0,
+         "V1 all-quad": nonquads == 0,
+         "V1 retired cluster rule of 2026-10-21 (all-quad on hard surface, else clusters ≤ 2)": (
+             nonquads == 0 if fam == "hard surface" else (f["other"] == 0 and cluster <= 2)),
          "V2 no folded quad": q.get("sj_le_0", 0) == 0,
          "V2+ no folded face of any size": v.get("folded_faces") == 0,
-         "V3 no face flipped vs input": m["flipped"]["faces_vs_input"] == 0,
+         "V3 no face flipped vs input (off input folds)": v3 == 0,
+         "V3 incl. flips over input folds": fl["faces_vs_input"] == 0,
          "V4 no degenerate face": m["degenerate"]["faces"] == 0,
          "V5 no interior valence 2 or ≥ 7": v5 == 0,
          "V6 topology same as input (global)": bool(t["same_as_input"]),
@@ -101,16 +110,20 @@ def gates(rec, run_dir, fam):
          "no handle lost or added": v.get("handles_lost") == 0 and v.get("handles_added") == 0,
          "thin parts kept (wrong-side area < 0.1 %)": (v.get("area_wrong_side") or 0) < 1e-3,
          "no input area lost (uncovered < 0.1 %)": (v.get("area_uncovered") or 0) < 1e-3}
-    g["V1–V5 together (provisional V1)"] = all(g[k] for k in (
-        "V1 provisional (all-quad on hard surface, else clusters ≤ 2)", "V2 no folded quad",
-        "V3 no face flipped vs input", "V4 no degenerate face", "V5 no interior valence 2 or ≥ 7"))
-    g["V1–V5 together (old V1)"] = g["V1–V5 together (provisional V1)"] and g["V1 old (all-quad)"]
+    if ex.get("islands"):  # runs with stages.jsonl from the libQEx extractor
+        g["no libQEx fallback (every island extracted by libQEx)"] = ex["fallbacks"] == 0
+    g["V1–V5 together"] = all(g[k] for k in (
+        "V1 all-quad", "V2 no folded quad", "V3 no face flipped vs input (off input folds)",
+        "V4 no degenerate face", "V5 no interior valence 2 or ≥ 7"))
+    g["V1–V5 together, flips over input folds included"] = g["V1–V5 together"] and g["V3 incl. flips over input folds"]
     d = {"faces": f["total"], "non-quads": nonquads, "folded quads": q.get("sj_le_0", 0),
-         "folded faces (any size)": v.get("folded_faces", 0), "flipped vs input": m["flipped"]["faces_vs_input"],
-         "flipped vs raw input": m["flipped"].get("faces_vs_raw_input", 0), "valence 2 / ≥ 7": v5,
+         "folded faces (any size)": v.get("folded_faces", 0), "flipped vs input": fl["faces_vs_input"],
+         "flipped off input folds": v3, "flipped over input folds": fl.get("faces_over_input_folds", 0),
+         "flipped vs raw input": fl.get("faces_vs_raw_input", 0), "valence 2 / ≥ 7": v5,
          "degenerate": m["degenerate"]["faces"], "non-manifold vertices": v.get("non_manifold_vertices", 0),
          "holes added": v.get("holes_added", 0), "handles lost": v.get("handles_lost", 0),
-         "handles added": v.get("handles_added", 0), "islands dropped": v.get("islands_dropped", 0)}
+         "handles added": v.get("handles_added", 0), "islands dropped": v.get("islands_dropped", 0),
+         "libQEx fallback islands": ex.get("fallbacks", 0)}
     return g, d
 
 
@@ -123,7 +136,7 @@ def table(path, setname, work):
     defects = collections.defaultdict(collections.Counter)
     fidelity = collections.defaultdict(lambda: collections.defaultdict(list))
     reps = set()
-    failed = []
+    failed, unmeasured = [], []
     for key, by_rep in runs.items():
         fam = fams.get(key[0])
         if fam is None:
@@ -131,7 +144,11 @@ def table(path, setname, work):
         for u, rec in by_rep.items():
             reps.add(u)
             run_dir = os.path.join(path, setname, key[0], f"{key[1]}-t{key[2]}", f"u{u}")
-            g, d = gates(rec, run_dir, fam)
+            res = gates(rec, run_dir, fam)
+            if res is None:
+                unmeasured.append(f"{key[0]} {key[1]}-t{key[2]} u{u}")
+                continue
+            g, d = res
             if not g["H1 completes"]:
                 failed.append((key, fam))
             for name, ok in g.items():
@@ -146,8 +163,10 @@ def table(path, setname, work):
                 fidelity["vertex-to-input median (×10⁻³ diag)"][fam].append(dist["vertex_to_in_median"] * 1e3)
     n = len(reps)
     out = [f"### Set {setname} ({len(runs)} runs × {n} replicate{'s' if n > 1 else ''}; {path})\n",
-           "Cells: runs passing, mean over replicates / runs [runs passing in every replicate].\n",
-           "| gate | " + " | ".join(order) + " | all |", "|---|" + "---|" * (len(order) + 1)]
+           "Cells: runs passing, mean over replicates / runs [runs passing in every replicate].\n"]
+    if unmeasured:
+        out.append(f"**Left out, completed but without metrics** (`ab.py run ... --remeasure`): {', '.join(unmeasured)}\n")
+    out += ["| gate | " + " | ".join(order) + " | all |", "|---|" + "---|" * (len(order) + 1)]
     for (key, fam) in failed:  # a run that did not complete fails every gate
         for name in per:
             if name != "H1 completes":

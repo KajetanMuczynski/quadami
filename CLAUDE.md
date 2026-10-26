@@ -78,8 +78,8 @@ CI (`.github/workflows/`):
     `ci/build_linux_portable.sh`, glibc 2.28 checked by `ci/check_linux_libs.py`), with the core tests: `ctest --no-tests=error`,
     `ci/output_gate.py` on the installed CLI (procedural sphere, torus, box, open tube, two islands, sphere centred at 1e5;
     fails on exit status, quads outside 0.6-1.5x target, >2 % non-quads, any non-manifold edge,
-    report/OBJ mismatch; folded faces and empty islands are reported in the job summary, not gated
-    yet), worker tests, zip installed into a real Blender (4.2 LTS on Linux, 5.2 on Windows and
+    an input island more than 1 % farther than one output edge from the output (TARGETS H4 coverage: dropped
+    or collapsed parts), report/OBJ mismatch; folded faces are reported in the job summary, not gated yet), worker tests, zip installed into a real Blender (4.2 LTS on Linux, 5.2 on Windows and
     macOS). All three zips (Linux glibc 2.28+, macOS 11.2+ Apple silicon) are uploaded as artifacts
     `addon-<platform>`. One macOS job per PR, since macOS runners are the scarce ones.
   - `release (draft)`: only on a `v*` tag, after **CI passed**: `ci/release.py` checks the tag
@@ -113,6 +113,14 @@ Running the binary with no args opens the GUI. The core needs `setTargetTriangle
   a run that fails or recovers), repeat those runs on both sides with `--replicates 5` (1-ulp perturbed
   inputs) and claim only what every replicate agrees on. Aggregates over a whole set need no replicates.
 - A change that can move topology also runs `--set closed`.
+- Test lanes (Kajetan, 2026-10-22; tools/bench/README "Test lanes"): `ab.py lane <merge-base> HEAD` decides,
+  never the PR's size or the author. **none** (nothing compiled changed): CI only. **light** (compiled code
+  changed, `out.obj` byte-identical on every public set with default targets, 265 runs since the `external` set, plain + one float32 replicate): paste the
+  `lane` output, A/B only the new option on its meshes. **full** (anything moved): `--replicates 5` on every
+  public set, both sides, as before; no replicate shortcuts (tested on #67, they miss float32-only effects).
+  Input-handling changes (cleanup, orientation, fold detection) also run `lane` on the private set (`AR_CORPUS`).
+  Drift guard: master's ×6 side is deterministic, so compute it once per core merge and `compare` it with
+  the previous core merge (README "Test lanes").
 
 ## PRs, branches and commits (Kajetan's rules, 2026-10-15)
 - Every PR targets `master` of KajetanMuczynski/quadami. Never a feature branch, no stacked PRs

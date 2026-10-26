@@ -38,7 +38,7 @@ from scipy.spatial import cKDTree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from metrics import corners, flat, nonmanifold_vertices, read_obj  # noqa: E402,F401
+from metrics import corners, edge_faces, face_adjacency, flat, input_folds, nonmanifold_vertices, read_obj  # noqa: E402,F401
 
 BANDS = ("smooth", "curved", "sharp")
 
@@ -69,23 +69,6 @@ def scaled_jacobian(V, faces):
     np.minimum.at(sj, fid, s)
     sj[np.array([len(f) for f in faces]) != 4] = np.nan
     return sj
-
-
-def edge_faces(faces):
-    fid, v, nx, _ = corners(faces)
-    key = np.sort(np.stack([v, nx], 1), 1)
-    uniq, inv = np.unique(key, axis=0, return_inverse=True)
-    return uniq, inv.ravel(), fid
-
-
-def face_adjacency(faces):
-    _, inv, fid = edge_faces(faces)
-    order = np.argsort(inv, kind="stable")
-    inv, fid = inv[order], fid[order]
-    same = inv[1:] == inv[:-1]
-    a, b = fid[:-1][same], fid[1:][same]
-    m = len(faces)
-    return coo_matrix((np.ones(len(a)), (a, b)), shape=(m, m)).tocsr()
 
 
 def catmull_clark(V, faces):
@@ -135,46 +118,6 @@ def catmull_clark(V, faces):
     NV = np.concatenate([VP, EP, FP])
     Q = np.stack([v, nv + en, nv + ne + fid, nv + ep], 1)
     return NV, [list(q) for q in Q], fid
-
-
-def input_folds(V, F, radius=None):
-    """Faces whose normal points against the area-weighted mean normal of the surface within geodesic
-    distance `radius` of them (default 1 % of the bounding-box diagonal; distances between centroids
-    of edge-adjacent faces; the faces sharing an edge always count, for triangles larger than the
-    radius): folded-over input left by brush strokes (twists, over-pinched creases,
-    pleats), where nearly all defects of the 2026-10-21 real-sculpt tests sat. Geodesic, so the other
-    side of a thin part or a separate island nearby does not count. Returns a boolean mask over F."""
-    import heapq
-
-    if radius is None:
-        radius = 0.01 * np.linalg.norm(V.max(0) - V.min(0))
-    C = V[F].mean(1)
-    A = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]) / 2
-    area = np.linalg.norm(A, axis=1)
-    n = A / np.maximum(area[:, None], 1e-300)
-    # Euclidean candidates first (a superset on the same sheet), then the geodesic test on those only.
-    cand = [i for i, nb in enumerate(cKDTree(C).query_ball_point(C, radius)) if n[i] @ A[nb].sum(0) < 0]
-    out = np.zeros(len(F), bool)
-    if not cand:
-        return out
-    adj = face_adjacency([list(f) for f in F])
-    adj = (adj + adj.T).tocsr()
-    for i in cand:
-        dist = {i: 0.0}
-        heap = [(0.0, i)]
-        m = np.zeros(3)
-        while heap:
-            d, f = heapq.heappop(heap)
-            if d > dist[f]:
-                continue
-            m += A[f]
-            for g in adj.indices[adj.indptr[f]:adj.indptr[f + 1]]:
-                nd = d + float(np.linalg.norm(C[g] - C[f]))
-                if (nd <= radius or f == i) and nd < dist.get(g, np.inf):  # the first ring always counts
-                    dist[g] = nd
-                    heapq.heappush(heap, (nd, g))
-        out[i] = n[i] @ m < 0
-    return out
 
 
 def analyse(inp, out, cache={}):

@@ -67,9 +67,11 @@ PARAMETER_FLAGS = {
 }
 
 # Options of one run that are not panel settings -> CLI flag.  repair_folds
-# is offered by the panel after a run that found folded input.
+# is offered by the panel after a run that found folded input, flatten_spikes
+# (only with repair_folds) next to it.
 RUN_FLAGS = {
     "repair_folds": "--fold-repair",
+    "flatten_spikes": "--flatten-spikes",
 }
 
 _PROGRESS_LINE = re.compile(r"^(\d+)% done\.(?: (.*))?$")

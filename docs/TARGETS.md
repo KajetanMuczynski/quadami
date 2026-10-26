@@ -5,8 +5,9 @@ pass, per-family goals with a minimum and a stretch value, and which goal wins w
 Defines TODO 0.7. Written 2026-10-19 from the 2026-10-15 comparison and a re-run of our side at the
 current default; an independent critique changed the first draft (§8). **Status: decided** by Kajetan
 on 2026-10-20 (§6): positioning, priority with margins and release bar accepted; the artist-side
-reference is deferred. **2026-10-21, provisional:** V1 no longer asks for all-quad outside hard
-surface; isolated or paired triangles and pentagons are tolerated (§3.2, §6 item 5).
+reference is deferred. **2026-10-23** (§6 item 5): V1 is all-quad again (the sculpt tolerance of
+2026-10-21 is retired), V3 counts flips over folded input apart, and ratchets use the mean over
+replicates (§3.2).
 **Scope:** the gates apply as written inside the supported-input envelope ([ENVELOPE.md](ENVELOPE.md));
 outside it a defect within 2 h₀ of the out-of-envelope region is an expected limit, still counted and
 ratcheted. ENVELOPE §2 lists the defects that are never exempt.
@@ -26,8 +27,7 @@ scripts that make both).
   small islands, creases) and lies on the input. Measured by distance, normal deviation and crease
   coverage (§4.1).
 - *Valid* (no malformations): a 2-manifold with the input's topology, without folded or flipped
-  quads, doublets or valence ≥ 7 poles (§3.2). All-quad on hard surface; elsewhere a few isolated
-  triangles and pentagons are tolerated, since they subdivide cleanly (provisional, §3.2 V1).
+  quads, doublets or valence ≥ 7 poles (§3.2), all-quad.
 - *Predictable* (no bugs): completes on every input, gives the same output for the same input on one
   build, lands on the count, and small input changes give small output changes (§3.1, §4.4).
 
@@ -52,8 +52,8 @@ ratio < 1 = ours better) [M]:
   deviation (1.36, better in 5/54), because vertices are not projected onto the input (vertex-to-input
   distance ~160× the best tool's; TODO 2.8). So "precise" today means "loses no parts", not "closest
   surface".
-- *Gap:* malformations. Non-quads in 44/54 runs (free tools: none; under the provisional V1 of
-  2026-10-21 only hard surface counts that as a failure, §3.2); doublets or valence ≥ 7 in 17/54
+- *Gap:* malformations. Non-quads in 44/54 runs (free tools: none; libQEx made us all-quad outside
+  tracer fallbacks by 2026-10-22, §3.2 V1); doublets or valence ≥ 7 in 17/54
   (Blender: none); hard surface misses element-shape parity (SJ 1st percentile 0.46 against 0.81);
   poles on hard surface and thin shells 2.0–2.7× QuadriFlow's.
 - *Not checked:* the competitors ran at their defaults. QuadriFlow's `-adaptive` and `-sharp` were never
@@ -138,29 +138,27 @@ cleanup, and on parts thinner than a quad every tool folds (in 13 of the 54 mesh
 five tools or settings is fold-free, among them all three human_neutral counts) [M]. A per-run zero would hold only by luck. So:
 - each gate is tracked as **runs clean** and **defects per 1k faces**, on the corpus and its replicates;
   for V1, defects per 1k is the plain non-quad count, whether or not the run passes V1;
-- **ratchet**: no release is worse than the previous one on either number;
-- the **1.0 bar** is the column below; **stretch** = zero everywhere (for V1: all-quad on hard surface,
-  the tolerance rule elsewhere), made a hard gate once validity is guaranteed by construction (an
-  injective map and an extraction whose non-quads are only the tolerated kind; map-fix thread's next
+- **ratchet**: no release is worse than the previous one on either number. Runs clean counts as the
+  **mean over the plain run and its 5 replicates**, with the runs clean in every replicate next to it
+  (2026-10-23): a single plain run flatters, since 14 of the 33 plain corpus passes of 2026-10-22 fail
+  a 1-ulp replicate;
+- the **1.0 bar** is the column below; **stretch** = zero everywhere, made a hard gate once validity
+  is guaranteed by construction (an injective map and an all-quad extraction; map-fix thread's next
   step, 6.1/6.2).
 
 | ID | Gate | Today: runs clean (per 1k, o / h / t / s / m) [M] | Best free tool [M] | 1.0 bar [I] |
 |---|---|---|---|---|
-| V1 | **Provisional (2026-10-21).** Hard surface: all-quad. Other families: no 6+-gon, and every edge-connected cluster of non-quads (triangles, pentagons) has at most **2** faces | Hard surface all-quad 3/12; others 60/60; closed 78/78 (master `124aeb8`, corpus set 2k/10k fast and quality). Non-quads per 1k faces, max per family: o 6.8, h 20.1, t 26.2, s 5.6, m 2.1. **2026-10-22** (`c2ffd24`, libQEx default; corpus 72 runs × 6 replicates, mean over replicates): hard surface all-quad 11.7/12, others 60/60, closed 78/78; non-quads per 1k faces o 0 / h 0.06 / t 0 / s 0.003 / m 0 [M] | all runs, all three (all-quad) | every run |
+| V1 | All-quad (restored 2026-10-23; the cluster tolerance of 2026-10-21 is retired, see below) | Non-quads per 1k faces, max per family on master `124aeb8`: o 6.8, h 20.1, t 26.2, s 5.6, m 2.1. **2026-10-22** (`c2ffd24`, libQEx default; corpus 72 runs × 6 replicates, mean over replicates): corpus all-quad 71.5/72 (69 in every replicate; the 3 replicate-runs with non-quads, boat, csg_bracket and hammer, are all libQEx fallbacks), closed 77.8/78, sculpt 41.2/42, brush 23.5/24, Suzanne 8.5/9, private 22/22; non-quads per 1k faces o 0 / h 0.06 / t 0 / s 0.003 / m 0 [M] | all runs | every run |
 | V2 | No folded quad: every corner's scaled Jacobian > 0 (`folded_faces`) | 29/54 (0 / 0.31 / 0.72 / 0.04 / 0). **2026-10-22**: corpus 51.5/72 (o 20.0/24, h 9.8/12, t 7.5/16, s 11.2/16, m 3.0/4; per 1k 0.11 / 0.07 / 0.56 / 0.14 / 0.04), closed 54.3/78; on organic only human_neutral folds, on scans all four (demosthenes, spot_noisy, nefertiti, hammer) [M] | Blender 14/48 | every run on organic and scan inputs; elsewhere ≤ the best free tool per 1k |
-| V3 | No face flipped against the input (catches pleats of convex quads that V2 misses; faces where the input is thinner than a quad excluded once 1.4 can measure it) | 25/54 (0 / 0.10 / 1.09 / 0.09 / 0). **2026-10-22**, flips now against the input oriented like the core (`metrics.py`, 1.4): corpus 35.5/72 (o 16.2/24, h 7.2/12, t 5.8/16, s 6.2/16, m 0.2/4; per 1k 0.64 / 0.23 / 2.34 / 0.55 / 0.70), closed 44.2/78 [M] | Instant Meshes 26/54 | as V2 |
+| V3 | No face flipped against the input (catches pleats of convex quads that V2 misses), not counting faces within 1.5 output edges of folded input (`metrics.py` `faces_off_input_folds`, 2026-10-23: a triangle turned against its surroundings within 1 % of the diagonal, in a cluster with an edge turned over by more than 150°; there the output follows the sculptor's fold, counted apart as `faces_over_input_folds`; without the turned edge human_neutral's lips and eyelids counted as folds). Faces where the input is thinner than a quad excluded once 1.4 can measure it | 25/54 (0 / 0.10 / 1.09 / 0.09 / 0). **2026-10-22**, flips now against the input oriented like the core (`metrics.py`, 1.4): corpus 35.5/72 (o 16.2/24, h 7.2/12, t 5.8/16, s 6.2/16, m 0.2/4; per 1k 0.64 / 0.23 / 2.34 / 0.55 / 0.70), closed 44.2/78. **2026-10-23**, flips over folded input left out (`faces_off_input_folds`): corpus 39.0/72 (o 17.5/24, h 8.0/12, t 5.8/16, s 7.5/16, m 0.2/4; 30 in every replicate), closed 44.2/78 (no folded input there), sculpt 17.3/42 (was 11.0), brush 19.0/24 (16.3), private realsculpt 1.8/6 (0.2), realsword 0/16. Flips over folds per 1k faces: corpus 0.07 of 0.93 (scan 0.21 of 0.55), realsculpt 1.33 of 2.56 [M] | Instant Meshes 26/54 | as V2 |
 | V4 | No degenerate face (area < 10⁻⁶ h²) | 54/54. **2026-10-22**: corpus 72/72, closed 77.7/78 [M] | Blender 45/48 | every run |
 | V5 | No interior vertex of valence 2 or ≥ 7 (feature corners exempt once Wave 5 marks them) | 37/54. **2026-10-22**: corpus 53.7/72 (36 in every replicate), closed 76.7/78 [M] | Blender 48/48 | every run |
 | V6 | Genus per island kept for every handle whose shortest loop is ≥ 4 quad edges; thinner handles reported | 63/72 corpus runs (2k/10k) with the right topology, 61.5/72 over the 5 replicates (55 right in all six, 6 wrong in all six); closed set 75/78 (75.5/78); greedy rounding fixed or broke none unanimously. **2026-10-22**: corpus 66.5/72 (64 right in all six; demosthenes loses its 4 scan handles in every run, human_neutral opens its mouth in 8 of 24), closed 77.7/78; per island (`validity.islands_same_as_input`) the same counts on corpus and closed. Handles lost or added are now counted per island, which catches a handle moved between islands; one lost and one added in the same island still passes (1.14) [M] | not measured | every run (needs a loop-length measure in 1.4) |
 
 All of V1–V5 together (headline validity number): ours 9/54, ours at adaptivity 0 9/54 (frozen run),
-Blender's QuadriFlow 11/48, Instant Meshes 8/54, QuadriFlow 4/54 [M]; those used the old all-quad V1.
-With the provisional V1 the competitors' numbers don't move (their output is all-quad), ours does: on
-master `124aeb8` (corpus set, 72 runs) 21/72 under the old V1 and 32/72 under the new one; V2–V5 alone
-pass 35/72, so V1 now costs 3 runs and folds are what holds the number down. Closed set: 37/78 → 40/78,
-equal to V2–V5 alone [M]. Report the headline as "V1–V5 together" with the provisional V1, and the old
-all-quad number next to it while V1 is provisional, so the comparison with the frozen tools stays
-readable.
+Blender's QuadriFlow 11/48, Instant Meshes 8/54, QuadriFlow 4/54 [M]. Report it as the mean over
+replicates with the runs clean in every replicate, and since 2026-10-23 with V3 off input folds; the
+number with every flip counted goes next to it, since the frozen tools were counted that way.
 
 **Re-baseline 2026-10-22** (master `c2ffd24`, libQEx default, `tools/bench/gates.py` over `ab.py`
 runs with 5 replicates) [M]: corpus 33/72 on the plain inputs (32/72 on `124aeb8`), **28.3/72 as the
@@ -170,51 +168,21 @@ alone give the same counts: folds (V2) and flips (V3) hold the number down, V3 m
 The plain-input number flatters: 14 of the 33 plain passes fail in at least one replicate, so the
 ratchet uses the replicate mean. Other sets (mean over replicates): sculpt 10.5/42, brush 15.8/24,
 Suzanne 1.8/9, private realsculpt 0.2/6, realsword 0/16.
+**2026-10-23** (all-quad V1, V3 off input folds; the same runs re-measured): corpus **31.2/72 as the
+mean over replicates, 20 in every replicate** (28.3/72 and 19 with every flip counted), closed 43.3/78
+(no folded input, unchanged), sculpt 15.0/42, brush 17.0/24, Suzanne 1.7/9, realsculpt 1.2/6, realsword
+0/16. The all-quad V1 costs at most half a run per set (Suzanne 1.8 → 1.7) [M].
 
-**Why V1 changed (provisional, 2026-10-21).** For a sculptor the output is a base mesh to subdivide and
-sculpt on. Isolated triangles and pentagons cost nothing under Catmull-Clark (no folded child in 24
-fold-free sculpt-set runs) and Blender's Multires accepts them; folds are the visible defect
-(research/sculpt-inputs-2026-10-21.md §4.3, §5). Hard surface keeps all-quad because creases and
-flat regions show every pole. Easy to revert: restore the old V1 row and headline; nothing else in
-this file depends on the new wording.
-
-**Why the cluster limit is 2** [M] (edge-connected clusters, `sculpt_report.py`; 304 runs: corpus 72 and
-closed 78 on master `124aeb8`, sculpt set 154 incl. replicates on `4d15d5f`;
-research/targets-v1-2026-10-21/):
-- largest cluster per run: corpus 0 / 1 / 2 in 25 / 37 / 10 runs, closed 43 / 31 / 4, never above 2.
-  A triangle next to a pentagon (a 3–5 pole pair) is a cluster of 2; a limit of 1 would fail V1 in
-  10 of these runs outside hard surface (6 corpus, 4 closed).
-- clusters of 3–4 occurred in 10 sculpt-set runs only, all on sculpt_parts and sculpt_degenerate; 9 of
-  the 10 also fold (fail V2), the tenth is a 36k-zero-area-triangle input that the cleanup pre-pass
-  (2.7) targets.
-- the limit barely moves the headline: limit 1 or 2 gives the same V1–V5 count on both sets, because
-  every run with a 2-cluster outside hard surface also fails V2–V5. So 2 is chosen to avoid failing harmless runs, not to
-  gain clean runs; re-derive it when Kajetan's own sculpts are in (1.12).
-- 6+-gons: none in 304 runs, so they are a structural gate (H8), not part of the ratchet.
-- Same line as ENVELOPE §2: 6+-gons and clusters of more than 2 are never exempt, inside or outside
-  the envelope, so the 2 h₀ locality rule (ENVELOPE §5.3) never excuses them. Single non-quads and
-  pairs need no exemption outside hard surface. On hard surface, non-quads at sub-quad tips (ENVELOPE
-  row 3) are not exempt either: row 3 exempts folds and valence ≥ 7 there, not non-quads.
-
-**What the provisional V1 can hide, and the guard for each:**
-- *A fold carried by the non-quads themselves.* V2 tests the scaled Jacobian of quads only
-  (`metrics.py` `quads.sj_le_0`, `sculpt_report.py` likewise), so a non-convex or pleated pentagon is
-  invisible to V2 and now passes V1. V3 (flip against the input) checks every face and catches the
-  flipped ones; a corner-Jacobian test on n-gons belongs in 1.4.
-- *A map fold patched as a pole pair.* In our pipeline non-quads mostly appear where the integer map
-  folded (research/nonquads-folded-faces.md). A pair absorbs such a fold without any quad going
-  negative, so V1 and V2 both pass. The guard is the non-quad count per 1k (ratchet, every PR) and
-  `ab.py`'s map flip counts, not V1.
-- *Many isolated non-quads.* The rule has no density limit. On the sculpt set, 6 runs had more than 5
-  non-quads per 1k with clusters ≤ 2 and no fold-adjacent non-quad, all on sculpt_parts or sculpt_dirty:
-  2 fail topology, 3 more fold, and one (sculpt_parts, Fast 2k, replicate 1, 7.7 per 1k) passes
-  everything else. So density is a real gap, kept under the ratchet with no ceiling yet: the corpus
-  maxima (hard surface 20.1, thin shell 26.2 per 1k) show a fixed ceiling would mostly fail thin parts.
-- *The sculpt note's "touches no folded quad" clause is dropped from the pass condition.* As written it
-  is testable only by `sculpt_report.py` (edge-adjacent to a quad with a corner SJ ≤ 0), not by `ab.py
-  compare` or `ci/output_gate.py`, and at run level it is implied by V2 wherever V2's bar is every run
-  (a fold-adjacent non-quad means the run has a fold). Where V2 is per-1k only (hard surface, thin
-  shell) it would count the same fold twice. `non_quads_touching_fold` stays a reported diagnostic.
+**V1 history.** From 2026-10-21 to 2026-10-23 V1 tolerated edge-connected clusters of up to 2
+triangles or pentagons outside hard surface, since they subdivide cleanly
+(research/targets-v1-2026-10-21/, research/sculpt-inputs-2026-10-21.md). With libQEx as the default
+extractor the rule stopped changing any count: on `c2ffd24` 15 of 1,482 replicate-runs have non-quads
+(1–22 triangles each, never a 5+-gon), every one of them an island where libQEx was rejected and the
+tracer took over, and the V1–V5 counts are the same under both rules (Suzanne 1.8 vs 1.7). All-quad
+catches a return of the tracer's non-quads at no cost, so Kajetan restored it (§6 item 5). The
+tracer fallback itself is tracked by `gates.py`'s "no libQEx fallback" row: 59 of the 1,482
+replicate-runs fell back on some island, 44 of them all-quad anyway, so V1 sees only a quarter of
+them [M].
 
 Why "every run" for folds on organic and scan inputs: those are the add-on's
 main inputs, they are thick and smooth, and a fold there is a defect a user sees as a shading crease [I];
@@ -295,9 +263,10 @@ computed and no reference values (§7).
   - move the comparison metrics into `tools/bench` (1.4), with V3's thin-part exclusion and V6's loop
     length, so every number is computed in the repo (2026-10-22: V3 against the oriented input, per-island
     topology, coverage and non-manifold vertices are in `metrics.py`, every gate of §3 in `gates.py`;
-    the thin-part exclusion, V6's loop length and the pole/loop metrics are still open);
-  - in `ci/output_gate.py`, gate H3, H4, H8 and a 0.9–1.1 count; its `> 2 % non-quads` limit is a
-    per-run guard, not V1, and stays until V1's cluster rule is computed there;
+    2026-10-23: V3's input-fold exclusion; the thin-part exclusion, V6's loop length and the pole/loop metrics are still open);
+  - in `ci/output_gate.py`, gate H3, H4's island count, H8 and a 0.9–1.1 count (H4's coverage is in
+    since 2026-10-23: no input island more than 1 % farther than one output edge from the output); its `> 2 % non-quads` limit is a per-run guard and
+    can become V1's all-quad once the CI meshes are all-quad on every platform;
   - ~~V1 cluster size and non-manifold vertices into `ab.py compare`, and a corner-Jacobian test on
     non-quads for V2 (1.4)~~ done 2026-10-22: `gates.py` (cluster size, every gate), `ab.py compare`
     rows `nm_vertices` and `folded_faces` (any face size);
@@ -322,16 +291,12 @@ computed and no reference values (§7).
    14-day trial is non-commercial and Windows/macOS only [P], so it needs another machine. Read each
    EULA before publishing its numbers (some forbid published benchmarks), and keep their output meshes
    out of the repo. Until then layout goals stay "parity with QuadriFlow" (§4.3).
-5. **V1 for sculpts** (2026-10-21, *provisional*; Kajetan: "i guess so?"): isolated triangles and
-   pentagons are tolerated outside hard surface; hard surface keeps all-quad as its 1.0 bar. The
-   cluster limit comes from the data (≤ 2, §3.2), chosen so that ordinary runs don't fail. H2 counts
-   non-manifold vertices now and becomes a vertex gate after 2.18. 6+-gons are a structural gate
-   (H8). Folds, flips, degenerate faces, wrong genus and H1–H7 are unchanged. No sculpt family in §4
-   yet: it waits for Kajetan's own sculpts (1.12). Revisit after 1.12; reverting means restoring the
-   old V1 row and the headline paragraph of §3.2.
-   What changes in the 1.0 bar: on organic, thin shell, scan and multi-island inputs "every run
-   all-quad" becomes "every run within the tolerance rule", and §5's 7.1 gate counts V1 that way;
-   on hard surface nothing changes.
+5. **V1 for sculpts**: from 2026-10-21 (*provisional*; Kajetan: "i guess so?") isolated triangles and
+   pentagons were tolerated outside hard surface (clusters of at most 2). *Reverted 2026-10-23*
+   (Kajetan: "of course", after the re-baseline): V1 is all-quad on every family again, since with
+   libQEx the tolerance no longer changed any count and only hid tracer fallbacks (§3.2 V1 history).
+   Decided the same day: V3 leaves out flips over folded input and reports them apart; ratchets use
+   the mean over replicates; coverage becomes part of H4 in CI. Homology for V6 (1.14) waits.
 
 ## 7. Not definable yet, and the cheapest way to get the data
 

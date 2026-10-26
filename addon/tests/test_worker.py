@@ -159,6 +159,22 @@ class ReportTest(unittest.TestCase):
         self.assertIn(("Holes", "0", False), report.summary_rows(closed))
         self.assertEqual(report.warning_lines(closed), [])
 
+    def test_handles_row(self):
+        # demosthenes Quality 10k (2026-10-22): two of its three tunnels close up.
+        lost = {"status": "ok", "parameters": {"target_quads": 10000}, "output": {"quads": 9940},
+                "islands": {"input": 1, "handles_lost": 2, "handles_added": 0, "handles_changed": 1},
+                "warnings": ["Output has 2 handles fewer than the input (tunnels or loops closed up, on 1 island): "
+                             "handles only a few quads around close up. A higher Target Quads keeps more of them"]}
+        self.assertIn(("Handles", "2 lost", True), report.summary_rows(lost))
+        self.assertTrue(all(len(text) <= report.WARNING_WIDTH for text, _, _ in report.warning_lines(lost)))
+        both = dict(lost, islands={"input": 2, "handles_lost": 1, "handles_added": 3, "handles_changed": 2})
+        self.assertIn(("Handles", "1 lost, 3 added", True), report.summary_rows(both))
+        same = dict(lost, islands={"input": 1, "handles_lost": 0, "handles_added": 0, "handles_changed": 0},
+                    warnings=[])
+        self.assertIn(("Handles", "as input", False), report.summary_rows(same))
+        older = dict(lost, islands={"input": 1}, warnings=[])
+        self.assertFalse(any(label == "Handles" for label, _, _ in report.summary_rows(older)))
+
     def test_input_cleanup_row(self):
         rows = report.summary_rows({
             "status": "ok", "parameters": {"target_quads": 5000},
@@ -204,6 +220,33 @@ class ReportTest(unittest.TestCase):
         self.assertFalse(any(label in ("Folds repaired", "Folds left") for label, _, _ in report.summary_rows(clean)))
         self.assertFalse(any("Folded input" in text for text, _, _ in report.warning_lines(clean)))
         self.assertFalse(report.offers_fold_repair(clean))
+
+    def test_thin_parts_hint(self):
+        thin = {"status": "ok", "parameters": {"target_quads": 2000}, "output": {"quads": 1980},
+                "diagnostics": {"thin_parts_warned": 1},
+                "warnings": ["18 % of the surface (12 spots) is thinner than one quad; expect folds or "
+                             "lost parts there. Try at least 3300 target quads, or thicken those parts"]}
+        lines = report.warning_lines(thin)
+        self.assertTrue(all(len(text) <= report.WARNING_WIDTH for text, _, _ in lines))
+        self.assertIn("Try at least 3300", " ".join(text for text, _, problem in lines if problem))
+        self.assertIn("Alt+S", " ".join(text for text, _, problem in lines if not problem))
+        clean = dict(thin, diagnostics={"thin_parts_warned": 0}, warnings=[])
+        self.assertEqual(report.warning_lines(clean), [])
+
+    def test_spike_rows(self):
+        flattened = {"status": "ok", "parameters": {"target_quads": 3000, "repair_folds": True, "flatten_spikes": True},
+                     "output": {"quads": 2950},
+                     "diagnostics": {"input_fold_clusters": 20, "input_fold_clusters_after": 3,
+                                     "input_folded_triangles": 45, "input_folded_triangles_after": 7,
+                                     "input_fold_spikes": 1, "input_fold_spike_drop_quads": 0.6015}}
+        self.assertIn(("Spikes flattened", "1, tip lowered by up to 0.6 quads", False), report.summary_rows(flattened))
+        warning = " ".join(t for t, _, _ in report.warning_lines(flattened))
+        self.assertIn("changed the shape: 1 spike tips were lowered", warning)
+        none = dict(flattened, diagnostics=dict(flattened["diagnostics"], input_fold_spikes=0))
+        self.assertIn(("Spikes flattened", "0", False), report.summary_rows(none))
+        self.assertNotIn("changed the shape", " ".join(t for t, _, _ in report.warning_lines(none)))
+        plain = dict(flattened, parameters={"target_quads": 3000, "repair_folds": True})
+        self.assertFalse(any(label == "Spikes flattened" for label, _, _ in report.summary_rows(plain)))
 
 
 class EnvironmentTest(unittest.TestCase):
@@ -313,6 +356,13 @@ class CliTest(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.message + "\n" + outcome.log)
         self.assertIs(outcome.report["parameters"]["repair_folds"], True)
         self.assertEqual(outcome.report["diagnostics"]["input_fold_clusters"], 0)
+
+    def test_flatten_spikes_flag(self):
+        outcome = worker.remesh(EXECUTABLE, self.positions.astype(np.float32), self.triangles,
+                                {"target_quads": 500, "repair_folds": True, "flatten_spikes": True})
+        self.assertEqual(outcome.status, "ok", outcome.message + "\n" + outcome.log)
+        self.assertIs(outcome.report["parameters"]["flatten_spikes"], True)
+        self.assertEqual(outcome.report["diagnostics"]["input_fold_spikes"], 0)
 
     def test_target_above_maximum(self):
         positions, triangles = uv_sphere(16, 32)

@@ -207,6 +207,27 @@ int lostPartFailures()
     return ok && wholeOk ? 0 : 1;
 }
 
+// Handles per island from the islands' twice-handle counts: a torus that came
+// out as a sphere, a sphere that gained two handles, an island with a
+// non-manifold input (not measured) and an unchanged genus-2 island.
+int handleFailures()
+{
+    using Island = ::AutoRemesher::AutoRemesher::RemeshedIsland;
+    std::vector<Island> islands(4);
+    const long long counts[4][2] = { { 2, 0 }, { 0, 4 }, { -1, -1 }, { 4, 4 } };
+    for (size_t i = 0; i < islands.size(); ++i) {
+        islands[i].inputTwiceHandles = counts[i][0];
+        islands[i].outputTwiceHandles = counts[i][1];
+    }
+    AutoRemesher::RemeshMesh mesh;
+    AutoRemesher::QualityReport report;
+    AutoRemesher::measureClosedIslands(mesh, islands, &report);
+    const bool ok = 1 == report.handlesLost && 2 == report.handlesAdded && 2 == report.handlesChangedIslandCount;
+    printf("handles lost %zu (want 1), added %zu (want 2), islands changed %zu (want 2)%s\n\n",
+        report.handlesLost, report.handlesAdded, report.handlesChangedIslandCount, ok ? "" : "  FAIL");
+    return ok ? 0 : 1;
+}
+
 }
 
 int main()
@@ -243,6 +264,7 @@ int main()
     int failures = 0;
     failures += topologyFailures();
     failures += closedIslandFailures();
+    failures += handleFailures();
     failures += lostPartFailures();
     printf("%-24s %13s %17s %11s\n", "case", "folded", "degenerate", "flips");
     for (const auto& c : cases) {

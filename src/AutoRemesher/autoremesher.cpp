@@ -20,6 +20,7 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *  SOFTWARE.
  */
+#include "qexextraction.h"
 #include <AutoRemesher/AutoRemesher>
 #include <AutoRemesher/FoldRepair>
 #include <AutoRemesher/IsotropicRemesher>
@@ -27,6 +28,7 @@
 #include <AutoRemesher/Parameterizer>
 #include <AutoRemesher/QuadExtractor>
 #include <AutoRemesher/SurfaceProjector>
+#include <AutoRemesher/ThinParts>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -970,9 +972,21 @@ bool AutoRemesher::remeshIslands()
     // repaired when asked for.
     if (nullptr != m_progressHandler)
         m_progressHandler(m_tag, 0.0f, m_repairInputFolds ? "Repairing folded input" : "Checking for folded input");
+    FoldRepair::Options foldOptions;
+    foldOptions.flattenSpikes = m_flattenSpikes;
     const FoldRepair::Stats folds = m_repairInputFolds
-        ? FoldRepair::repair(&m_vertices, m_triangles, FoldRepair::Options())
-        : FoldRepair::survey(m_vertices, m_triangles, FoldRepair::Options());
+        ? FoldRepair::repair(&m_vertices, m_triangles, foldOptions)
+        : FoldRepair::survey(m_vertices, m_triangles, foldOptions);
+    // The spikes' largest drop in quad edges: sqrt(area per target quad).
+    double spikeDropQuads = 0.0;
+    if (folds.flattenedSpikes > 0 && m_targetTriangleCount > 0) {
+        double area = 0.0;
+        for (const std::vector<size_t>& t : m_triangles)
+            area += 0.5 * Vector3::crossProduct(m_vertices[t[1]] - m_vertices[t[0]], m_vertices[t[2]] - m_vertices[t[0]]).length();
+        const double quadEdge = std::sqrt(area / (0.5 * m_targetTriangleCount));
+        if (quadEdge > 0.0)
+            spikeDropQuads = folds.maximumSpikeDrop / quadEdge;
+    }
     throwIfCancelled();
 
     // Each label names the step that is about to run, not the one that just
@@ -1007,6 +1021,7 @@ bool AutoRemesher::remeshIslands()
         // Taken before resampling replaces vertices and triangles.
         QuadExtractor::Boundary inputBoundary;
         SurfaceTopology inputTopology;
+        long long inputTwiceHandles = -1;
         double voxelSize;
         double area;
         double targetQuadCount;
@@ -1038,6 +1053,9 @@ bool AutoRemesher::remeshIslands()
         }
         context.area = calculateMeshArea(context.vertices, context.triangles);
         context.inputTopology = surfaceTopology(context.triangles, context.vertices.size());
+        context.inputTwiceHandles = 0 == context.inputTopology.nonManifoldEdges
+            ? twiceHandleCount(context.vertices.size(), context.triangles)
+            : -1;
         context.inputBoundary = QuadExtractor::findBoundary(context.vertices, context.triangles);
 
         context.scaling = m_scaling;
@@ -1286,6 +1304,25 @@ bool AutoRemesher::remeshIslands()
     throwIfCancelled();
     const size_t isotropicPeakRss = peakResidentSetBytes();
 
+    // Parts thinner than one quad at the requested count, on each island's
+    // first T (a retried island's T is finer, the request is not).  Report only.
+    std::vector<ThinParts> thinParts(islandContexes.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                const auto& vertices = islandRuns[i].isotropicVertices;
+                const auto& triangles = islandRuns[i].isotropicTriangles;
+                double area = 0.0;
+                for (const auto& triangle : triangles) {
+                    if (3 == triangle.size())
+                        area += 0.5 * Vector3::crossProduct(vertices[triangle[1]] - vertices[triangle[0]], vertices[triangle[2]] - vertices[triangle[0]]).length();
+                }
+                if (islandContexes[i].targetQuadCount > 0.0 && area > 0.0)
+                    thinParts[i] = measureThinParts(vertices, triangles, std::sqrt(area / islandContexes[i].targetQuadCount));
+            }
+        });
+    auto t_thinPartsEnd = std::chrono::high_resolution_clock::now();
+
     tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
         [&](const tbb::blocked_range<size_t>& range) {
             for (size_t i = range.begin(); i != range.end(); ++i)
@@ -1437,6 +1474,9 @@ bool AutoRemesher::remeshIslands()
         if (!run.remeshedQuads.empty()) {
             island.vertexCount = run.remeshedVertices.size();
             island.faceCount = run.remeshedQuads.size();
+            island.inputTwiceHandles = islandContexes[i].inputTwiceHandles;
+            if (island.inputTwiceHandles >= 0)
+                island.outputTwiceHandles = twiceHandleCount(run.remeshedVertices.size(), run.remeshedQuads);
         }
         m_remeshedIslands.push_back(island);
     }
@@ -1623,6 +1663,8 @@ bool AutoRemesher::remeshIslands()
             run.set("input_fold_moved_vertices", (double)folds.movedVertices);
             run.set("input_fold_max_offset", folds.maximumOffset);
             run.set("input_fold_max_move", folds.maximumMove);
+            run.set("input_fold_spikes", (double)folds.flattenedSpikes);
+            run.set("input_fold_spike_drop_quads", spikeDropQuads);
             run.set("fold_repair_ms", folds.seconds * 1000.0);
         }
         {
@@ -1643,6 +1685,21 @@ bool AutoRemesher::remeshIslands()
             run.set("decimated_non_manifold_edges", (double)decimatedNonManifoldEdges);
             run.set("isotropic_non_manifold_edges", (double)isotropicNonManifoldEdges);
             run.set("isotropic_opened_closed_islands", (double)openedClosedIslands);
+        }
+        {
+            double area = 0.0, thinArea = 0.0;
+            size_t spots = 0;
+            std::vector<std::pair<double, double>> growth;
+            for (const auto& thin : thinParts) {
+                area += thin.area;
+                thinArea += thin.thinArea;
+                spots += thin.spots;
+                growth.insert(growth.end(), thin.growth.begin(), thin.growth.end());
+            }
+            run.set("thin_area_share", area > 0.0 ? thinArea / area : 0.0);
+            run.set("thin_spots", (double)spots);
+            run.set("thin_growth_p50", medianThinGrowth(std::move(growth)));
+            run.set("thin_parts_ms", milliseconds(std::chrono::duration_cast<std::chrono::microseconds>(t_thinPartsEnd - t_isotropicEnd).count()));
         }
         run.set("retried_islands", (double)islandsToRetry.size());
         run.set("repaired_islands", (double)islandsRepaired.load());
@@ -1687,6 +1744,8 @@ bool AutoRemesher::remeshIslands()
             record.set("retry_attempts", (double)islandRetryAttemptCounts[i]);
             record.set("output_faces", (double)islandRun.remeshedQuads.size());
             record.set("output_quads", (double)quads);
+            record.set("thin_area_share", thinParts[i].area > 0.0 ? thinParts[i].thinArea / thinParts[i].area : 0.0);
+            record.set("thin_spots", (double)thinParts[i].spots);
             m_diagnostics.push_back(std::move(record));
         }
         for (size_t i = 0; i < islandRuns.size(); ++i) {
