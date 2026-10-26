@@ -37,8 +37,69 @@ TIMING = ("seconds", "_ms", "wall", "accumulated", "rss", "cpu", "time")
 STG_KEEP = ("frame_field", "singularity_simplifier", "cover_input", "curl_correction", "cover_system", "cover_result", "map_check", "extractor")
 
 
-def build_tree(work, name, cmake_args, jobs, patch, generator_args=()):
-    """REF exported, research-hash.patch applied when asked, CMake Release build of the CLI."""
+MATH = ("sin", "cos", "acos", "atan2", "exp", "log10", "log", "pow", "hypot")
+# Sources that call them: the core, the isotropic remesher, libQEx and OpenMesh's core. Not Eigen
+# (the core instantiates none of its transcendental code) and not the OBJ reader (its pow calls
+# are correctly rounded everywhere, LIBM pow_parse).
+DM_GLOBS = ("src/AutoRemesher/*.cpp", "src/AutoRemesher/*.h", "include/AutoRemesher/*.h",
+            "thirdparty/isotropicremesher/*.cpp", "thirdparty/isotropicremesher/*.h",
+            "thirdparty/libQEx/src/*.cc", "thirdparty/libQEx/src/*.hh", "thirdparty/libQEx/interfaces/c/*.cc",
+            "thirdparty/OpenMesh/src/OpenMesh/Core/**/*.cc", "thirdparty/OpenMesh/src/OpenMesh/Core/**/*.hh",
+            "src/cli/main.cpp")  # only its --research-libm table: LIBM then measures ar_dm
+DM_CMAKE = """
+# research: same-bits math (tools/research-platform/dm)
+target_sources(autoremesher_core PRIVATE src/AutoRemesher/researchdm.cpp)
+foreach(t autoremesher_core autoremesher_qex autoremesher-cli)
+    if(MSVC)
+        target_compile_options(${t} PRIVATE "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/AutoRemesher/researchdm.h")
+    else()
+        target_compile_options(${t} PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/src/AutoRemesher/researchdm.h")
+    endif()
+endforeach()
+if(NOT MSVC)
+    set_source_files_properties(src/AutoRemesher/researchdm.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+endif()
+"""
+
+
+def apply_dm(src):
+    """Routes the nine math functions to ar_dm:: (dm/researchdm.cpp): std::f( and unqualified f( calls."""
+    import glob
+    import shutil
+    for f in ("researchdm.h", "researchdm.cpp"):
+        shutil.copy(os.path.join(HERE, "dm", f), os.path.join(src, "src", "AutoRemesher", f))
+    names = "|".join(MATH)
+    qualified = re.compile(r"(?<![\w:])(?:std)?::(" + names + r")\s*\(")
+    bare = re.compile(r"(?<![\w:.>])(" + names + r")\s*\(")
+    count = 0
+    for g in DM_GLOBS:
+        for path in glob.glob(os.path.join(src, g), recursive=True):
+            if path.endswith("researchdm.h") or path.endswith("researchdm.cpp"):
+                continue
+            text = open(path, encoding="latin-1").read()
+            new, n1 = qualified.subn(r"ar_dm::\1(", text)
+            new, n2 = bare.subn(r"ar_dm::\1(", new)
+            if n1 + n2:
+                count += n1 + n2
+                open(path, "w", encoding="latin-1", newline="").write(new)
+    with open(os.path.join(src, "CMakeLists.txt"), "a") as fp:
+        fp.write(DM_CMAKE)
+    return count
+
+
+def apply_tie(src):
+    """Singularity pairs sorted by (hops, a, b): no ties left to the library's sort."""
+    path = os.path.join(src, "src", "AutoRemesher", "singularitysimplifier.cpp")
+    text = open(path).read()
+    old = "[](const Candidate& x, const Candidate& y) { return x.hops < y.hops; }"
+    new = "[](const Candidate& x, const Candidate& y) { return std::tie(x.hops, x.a, x.b) < std::tie(y.hops, y.a, y.b); }"
+    assert text.count(old) == 1, "tie: sort not found"
+    text = text.replace(old, new).replace("#include <set>\n", "#include <set>\n#include <tuple>\n", 1)
+    open(path, "w", newline="").write(text)
+
+
+def build_tree(work, name, cmake_args, jobs, patch, generator_args=(), dm=False, tie=False):
+    """REF exported, research-hash.patch applied when asked (and dm/tie), CMake Release build of the CLI."""
     root = os.path.join(work, "rbuilds", name)
     cli = ab.built_cli(os.path.join(root, "build"))
     if cli:
@@ -51,6 +112,10 @@ def build_tree(work, name, cmake_args, jobs, patch, generator_args=()):
     archive.wait()
     if patch:
         subprocess.check_call(["git", "apply", os.path.join(HERE, "research-hash.patch")], cwd=src)
+    if dm:
+        print(f"DM {name} calls={apply_dm(src)}", flush=True)
+    if tie:
+        apply_tie(src)
     log = os.path.join(root, "build.log")
     with open(log, "w") as fp:
         for cmd in (["cmake", "-S", src, "-B", os.path.join(root, "build"), "-DCMAKE_BUILD_TYPE=Release"]
@@ -119,12 +184,15 @@ def main():
     p.add_argument("--platform", required=True)
     p.add_argument("--jobs", type=int, default=4)
     p.add_argument("--cmake-arg", action="append", default=[])
+    p.add_argument("--round", default="dm", help="lib (round 2: libm, FMA, compiler) or dm (round 3: same-bits math)")
     a = p.parse_args()
     work = os.environ["AR_WORK"]
     out = os.path.join(work, "research")
     cases = [c.strip() for c in open(os.path.join(HERE, "cases.txt")) if c.strip()]
     base_args = ["-DAUTOREMESHER_BUNDLED_TBB=ON"] + a.cmake_arg  # release-check's order, so the key matches run #5
 
+    if a.round == "dm":
+        return round_dm(a, work, out, cases, base_args)
     key, cli_a = ab.build(REF, work, a.jobs, base_args)
     print(f"BUILD A key={key} {compiler_line(os.path.join(work, 'builds', key, 'build.log'))}", flush=True)
     windows = a.platform.startswith("windows")
@@ -177,6 +245,41 @@ def main():
     for tag, cli, env in variants:
         if cli and tag.startswith("H") and tag != "H2":
             print("\n".join(libm_table.evaluate(cli, work, tag, env, a.platform)), flush=True)
+    print("EXPERIMENT-DONE", flush=True)
+
+
+def round_dm(a, work, out, cases, base_args):
+    """Round 3: what still differs once every platform computes the same math bits. H is the hash
+    build (control, as in round 2); D adds ar_dm (dm/), v scalar Eigen, F no fused multiply-add
+    (macOS: also no contraction, which fixes the OBJ parse), T the tie-broken pair sort."""
+    windows, mac = a.platform.startswith("windows"), a.platform.startswith("macos")
+    define = (lambda d: "/D" + d) if windows else (lambda d: "-D" + d)
+    if mac:
+        nofma = ["-DCMAKE_C_FLAGS_INIT=-ffp-contract=off",
+                 "-DCMAKE_CXX_FLAGS_INIT=-ffp-contract=off -DEIGEN_DONT_VECTORIZE -DEIGEN_SCALAR_MADD_USE_FMA=0"]
+        builds = [("H", [], False, False), ("DvF", nofma, True, False), ("DvFT", nofma, True, True)]
+    else:
+        novec = [f"-DCMAKE_CXX_FLAGS_INIT={define('EIGEN_DONT_VECTORIZE')}"]
+        builds = [("H", [], False, False), ("D", [], True, False), ("Dv", novec, True, False),
+                  ("DT", [], True, True), ("DvT", novec, True, True)]
+    variants = []
+    for tag, extra, dm, tie in builds:
+        cli = build_tree(work, tag, base_args + extra, a.jobs, patch=True, dm=dm, tie=tie)
+        print(f"BUILD {tag} ok={bool(cli)} {compiler_line(os.path.join(work, 'rbuilds', tag, 'build.log'))}", flush=True)
+        if cli:
+            variants.append((tag, cli, {}))
+    clis = dict((t, c) for t, c, _ in variants)
+    if "D" in clis and a.platform.startswith("linux"):
+        mask = "glibc.cpu.hwcaps=-AVX2,-FMA,-AVX512F,-AVX512DQ,-AVX512VL,-AVX512BW,-AVX,-FMA4"
+        variants.append(("D_nofma", clis["D"], {"GLIBC_TUNABLES": mask}))
+    if "D" in clis and windows:
+        variants.append(("D_nofma3", clis["D"], {"AR_RESEARCH_NO_FMA3": "1"}))
+    for tag, cli, env in variants:
+        with cf.ThreadPoolExecutor(a.jobs) as pool:
+            for lines in pool.map(lambda c: run_case(cli, tag, c, work, out, env, a.platform), cases):
+                print("\n".join(lines), flush=True)
+    for tag, cli, env in variants:
+        print("\n".join(libm_table.evaluate(cli, work, tag, env, a.platform)), flush=True)
     print("EXPERIMENT-DONE", flush=True)
 
 
