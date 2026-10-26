@@ -105,6 +105,17 @@ and tested by CI, but it is no longer packaged or supported as a product.
   pull request rules, how the add-on talks to the remesher).
 - [CHANGELOGS.md](CHANGELOGS.md): what changed.
 
+## Contact
+
+[GitHub Issues](https://github.com/KajetanMuczynski/quadami/issues/new/choose) is the place for
+everything: [bug reports](https://github.com/KajetanMuczynski/quadami/issues/new?template=bug-report.yml) (the form asks for the build line and the
+settings), feature requests, questions and [community results](docs/site/community.md). Issues are
+public: do not attach models you may not share. Security problems go to a private report instead,
+see [SECURITY.md](SECURITY.md).
+
+Without a GitHub account, or for something that should not be public (for example a model you can
+share only privately), write to [quadami.contact@gmail.com](mailto:quadami.contact@gmail.com).
+
 ## Build from source
 
 Short version for Linux (Ubuntu 24.04, needs CMake, a C++17 compiler and `libtbb-dev`; no Qt):

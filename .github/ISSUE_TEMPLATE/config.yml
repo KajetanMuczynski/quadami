@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Issue chooser: the forms in this folder, plus the links below. Blank issues are off so every
+# report arrives with the build line and the settings; maintainers can still open one.
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/KajetanMuczynski/quadami/security/advisories/new
+    about: Report a vulnerability privately, not in a public issue (see SECURITY.md).
+  - name: User guide and troubleshooting
+    url: https://kajetanmuczynski.github.io/quadami/guide/
+    about: Install steps, every setting and warning, and what to try first.

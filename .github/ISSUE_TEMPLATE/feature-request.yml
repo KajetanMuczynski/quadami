@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Feature request form.
+name: Feature request
+description: Suggest something Quadami should do, or do differently.
+title: "Feature: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Say what you are trying to get done; the problem matters more than the exact feature.
+        Check the [user guide](https://kajetanmuczynski.github.io/quadami/guide/) and the open issues first:
+        some things (mirror symmetry, guide curves, density painting) are already known to be missing.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The task and the kind of model, e.g. "retopologise character sculpts for animation; I need loops around the eyes and mouth".
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What happens today
+      description: What Quadami does now and why that is not enough. Screenshots help (only of models you may share publicly).
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: Optional. How you imagine it, or another tool that does it well.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: Nothing I attached is private or shows a real person.
+          required: true
