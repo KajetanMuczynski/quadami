@@ -121,6 +121,18 @@ namespace {
     const size_t maximumIslandRetries = 4;
     const double maximumRetriedIslandTriangleCount = 1024.0;
 
+    // An island's voxel size comes from its area, which is right while the
+    // area is about its extent squared.  A sliver island has almost no area
+    // for its length (a bmesh bisect at zero threshold, then Mirror: area
+    // 3e-7 diagonal^2), so its voxel came out thousands of times shorter
+    // than the island, and the isotropic remesh ran for minutes into
+    // gigabytes (research/input-sanitizer-2026-10-26.md).  Its area is taken
+    // as at least this share of its bounding diagonal squared.  The thinnest
+    // real islands of every test set are at 0.0086 (a single triangle of a
+    // scan) and 0.012 (the 0.002-radius capsule of the stress set), so the
+    // floor leaves them alone.
+    const double minimumAreaPerSquaredDiagonal = 1e-3;
+
     using SurfaceTopology = AutoRemesher::SurfaceTopology;
 
     // Faces is indexable, and so is each face; their corners index vertices
@@ -1036,6 +1048,8 @@ bool AutoRemesher::remeshIslands()
         long long inputTwiceHandles = -1;
         double voxelSize;
         double area;
+        // Of the island's bounding box.
+        double diagonal = 0.0;
         double targetQuadCount;
         double scaling;
         double adaptivity;
@@ -1064,6 +1078,7 @@ bool AutoRemesher::remeshIslands()
             context.triangles.push_back(std::move(triangle));
         }
         context.area = calculateMeshArea(context.vertices, context.triangles);
+        context.diagonal = usedBoundingDiagonal(context.vertices, context.triangles);
         context.inputTopology = surfaceTopology(context.triangles, context.vertices.size());
         context.inputTwiceHandles = 0 == context.inputTopology.nonManifoldEdges
             ? twiceHandleCount(context.vertices.size(), context.triangles)
@@ -1109,6 +1124,15 @@ bool AutoRemesher::remeshIslands()
         context.targetQuadCount = 0.5 * floorTriangleCount;
         context.voxelSize = std::sqrt(context.area
             / (context.targetQuadCount * m_trianglesPerQuad * triangleAreaPerSquaredEdge));
+    }
+    size_t sliverIslands = 0;
+    for (auto& context : islandContexes) {
+        const double extentArea = minimumAreaPerSquaredDiagonal * context.diagonal * context.diagonal;
+        if (!(context.area < extentArea) || !(context.targetQuadCount > 0.0))
+            continue;
+        context.voxelSize = std::sqrt(extentArea
+            / (context.targetQuadCount * m_trianglesPerQuad * triangleAreaPerSquaredEdge));
+        ++sliverIslands;
     }
     auto t_buildEnd = std::chrono::high_resolution_clock::now();
     throwIfCancelled();
@@ -1669,6 +1693,7 @@ bool AutoRemesher::remeshIslands()
         run.set("input_welded_vertices", (double)cleanup.weldedVertices);
         run.set("input_weld_kept_parts", (double)cleanup.weldKeptParts);
         run.set("input_duplicate_triangles", (double)cleanup.duplicateTriangles);
+        run.set("input_sliver_islands", (double)sliverIslands);
         {
             run.set("input_fold_repair", m_repairInputFolds ? 1.0 : 0.0);
             run.set("input_folded_triangles", (double)folds.foldedTriangles);

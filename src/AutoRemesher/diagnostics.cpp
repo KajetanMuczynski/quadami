@@ -177,7 +177,7 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
     double peakRss = 0, cpuSeconds = 0;
     double mergedVertices = 0, droppedTriangles = 0, cleanupKeptParts = 0, zeroAreaTriangles = 0;
     double flippedTriangles = 0, nonOrientablePieces = 0;
-    double weldedEdges = 0, weldedVertices = 0, weldKeptParts = 0, duplicateTriangles = 0;
+    double weldedEdges = 0, weldedVertices = 0, weldKeptParts = 0, duplicateTriangles = 0, sliverIslands = 0;
     double foldRepair = 0, foldedTriangles = 0, foldClusters = 0, foldPatches = 0, foldedAfter = 0, foldClustersAfter = 0;
     double foldMovedVertices = 0, foldMaxOffset = 0, foldMaxMove = 0, foldSpikes = 0, foldSpikeDrop = 0, foldMs = 0;
     double thinShare = 0, thinSpots = 0, thinGrowth = 0;
@@ -203,6 +203,7 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
             weldedVertices = valueOf(record, "input_welded_vertices", 0);
             weldKeptParts = valueOf(record, "input_weld_kept_parts", 0);
             duplicateTriangles = valueOf(record, "input_duplicate_triangles", 0);
+            sliverIslands = valueOf(record, "input_sliver_islands", 0);
             foldRepair = valueOf(record, "input_fold_repair", 0);
             foldedTriangles = valueOf(record, "input_folded_triangles", 0);
             foldClusters = valueOf(record, "input_fold_clusters", 0);
@@ -309,6 +310,7 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
         { "input_welded_vertices", weldedVertices },
         { "input_weld_kept_parts", weldKeptParts },
         { "input_duplicate_triangles", duplicateTriangles },
+        { "input_sliver_islands", sliverIslands },
         { "input_fold_repair", foldRepair },
         { "input_folded_triangles", foldedTriangles },
         { "input_fold_clusters", foldClusters },
