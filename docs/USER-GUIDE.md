@@ -225,7 +225,7 @@ another result object shows that object's own report.
 | **Non-manifold vertices** | Points where surfaces only touch. | 0. |
 | **Winding flips** | Neighbouring faces facing opposite ways. | 0. |
 | **Folded faces** | Quads bent over or twisted ([§1](#1-words-used-here)). | 0. A few on sculpts is a known weakness. |
-| **Input cleanup** | Only shown when the remesher fixed your *input* before starting: tiny broken triangles removed, triangles turned to face the same way as their neighbours. | Information, not a problem. |
+| **Input cleanup** | Only shown when the remesher fixed your *input* before starting: open seams welded (pieces that only touched, as after an import without merging or an Edge Split modifier), duplicate faces removed, pinched points (two parts of the surface sharing one vertex) split, paper-thin sliver pieces with no area left out, tiny broken triangles removed, triangles turned to face the same way as their neighbours. Your object itself is never changed. | Information, not a problem. |
 | **Empty islands** | `E of N`: separate pieces of your model that got no quads at all. | 0 of N. |
 | **Missing parts** | How far the farthest point of your model is from the result, counted in quad widths (the planned quad size). Red above 3: a part such as a vine, a limb or a spike did not come out. | none. |
 | **Time** | Seconds the remesher ran. | — |
@@ -279,8 +279,9 @@ From the project's measurements on real sculpts and on synthetic brush tests (Oc
 - Dyntopo sculpts with mixed triangle sizes.
 - Several pieces joined into one object, eyeballs sunk into a head, pieces that intersect each other.
 - Open models (with borders) keep their borders; separate pieces stay separate.
-- Small broken bits in the input (zero-size triangles, faces facing the wrong way next to each other) are
-  cleaned up automatically (the **Input cleanup** row).
+- Small broken bits in the input (zero-size triangles, faces facing the wrong way next to each other,
+  duplicate faces, pieces that only touch along a seam, as after an import without merging or an Edge Split
+  modifier) are cleaned up automatically (the **Input cleanup** row).
 
 **Struggles, and what helps**
 

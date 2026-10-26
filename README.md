@@ -87,8 +87,8 @@ whole numbers and turned into quads. Since then most stages have changed:
 - quad extraction by libQEx, with closed inputs kept closed and small pieces kept present;
 - a reworked rounding and untangling of the parameterization, a validity check of the map before
   extraction, and an output projected onto and relaxed along the input surface;
-- input cleanup (broken triangles, inconsistent winding) and detection and optional repair of
-  folded sculpt input;
+- input cleanup (broken triangles, inconsistent winding, unwelded seams, duplicate faces, pinched
+  vertices) and detection and optional repair of folded sculpt input;
 - a quality report with every run, and a test harness that measures every change on the same
   meshes before it is merged.
 
