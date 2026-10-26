@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later. Page template of tools/site/build.py. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{title}}</title>
+  <link rel="canonical" href="{{canonical}}">
+  <link rel="stylesheet" href="{{root}}style.css">
+</head>
+<body>
+  <header>
+    <a class="name" href="{{root}}">Quadami</a>
+    <nav>
+      {{nav}}
+    </nav>
+  </header>
+  <main>
+{{content}}
+  </main>
+  <footer>
+    <p>Quadami is free software under the GNU GPL, version 3 or later.
+      <a href="{{repo}}">Source on GitHub</a> · <a href="{{repo}}/issues">Report a problem</a> ·
+      <a href="{{source}}">This page's source</a> · built from <code>{{commit}}</code></p>
+  </footer>
+</body>
+</html>

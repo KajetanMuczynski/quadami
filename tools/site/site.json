@@ -1,0 +1,21 @@
+{
+  "_comment": "The website's whitelist: only the pages below are published (tools/site/README.md). Nothing else under docs/ is, and links to unlisted files go to GitHub instead. To move the site to its own domain, change 'url' (and set the domain in Settings > Pages).",
+  "name": "Quadami",
+  "url": "https://kajetanmuczynski.github.io/quadami/",
+  "repo": "KajetanMuczynski/quadami",
+  "branch": "master",
+  "pages": [
+    {"path": "", "nav": "Home", "source": "docs/site/home.md"},
+    {"path": "releases", "nav": "Releases", "source": "docs/site/releases.md"},
+    {"path": "install", "nav": "Install", "source": "docs/USER-GUIDE.md", "sections": ["2. Install and update"], "title": "Install"},
+    {"path": "guide", "nav": "User guide", "source": "docs/USER-GUIDE.md"},
+    {"path": "results", "nav": "Results", "source": "docs/gallery/README.md"},
+    {"path": "community", "nav": "Community", "source": "docs/site/community.md"},
+    {"path": "credits", "nav": "Credits & license", "source": "README.md", "sections": ["License", "Origin and credits"], "title": "Credits and license"},
+    {"path": "building", "source": "docs/BUILDING.md"}
+  ],
+  "links": {"test_builds": "/docs/USER-GUIDE.md#get-the-zip", "releases": "/docs/site/releases.md"},
+  "media": ["docs/gallery/img/", "docs/site/img/"],
+  "upstream_links_only_on": ["credits"],
+  "forbidden": ["private-sculpts", "/mnt/project-files"]
+}

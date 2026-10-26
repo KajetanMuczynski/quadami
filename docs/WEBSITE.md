@@ -1,6 +1,11 @@
-# Website and release downloads: design note (not built)
+# Website and release downloads: design note
 
-Status 2026-10-22: proposal for Kajetan to decide later. Nothing here is implemented. The release
+Status 2026-10-22: **the website is built** (Kajetan asked for it on 2026-10-22, before the first
+release): [tools/site/README.md](../tools/site/README.md) describes it, `pages.yml` deploys it. It
+follows the proposal below with three changes: our own small builder instead of Jekyll (the
+whitelist, link rewrite and section pages need it), a Releases page and a Community page, and a home
+page that says "no release yet" until there is one (decision 1 below, answered by making the empty
+state honest rather than waiting). The rest of this note is the original proposal. The release
 workflow itself is being built by the "Release workflow for 0.1" thread; this note covers the web
 page, how the gallery ([gallery/](gallery/README.md)) feeds both, and what to decide first.
 

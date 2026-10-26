@@ -1,0 +1,7 @@
+# Markdown renderer for the website (tools/site/build.py). Pinned with hashes, per the dependency
+# rule in CLAUDE.md (a release at least 7 days old). Install with:
+#   python -m pip install --require-hashes --no-deps -r tools/site/requirements.txt
+markdown-it-py==4.2.0 \
+    --hash=sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a
+mdurl==0.1.2 \
+    --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8

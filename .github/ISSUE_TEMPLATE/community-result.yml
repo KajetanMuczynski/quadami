@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Form behind the website's Community page (docs/site/community.md). The issue itself is the
+# written record of the author's permission; an entry on the site links back to it.
+name: Community result
+description: Share something you made with Quadami, to be shown on the website's Community page.
+title: "Community result: "
+labels: ["community"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing. Nothing is published unless every box under **Permission** is ticked.
+        Read the [Community page](https://kajetanmuczynski.github.io/quadami/community/) first.
+  - type: textarea
+    id: images
+    attributes:
+      label: Images
+      description: Drag images here (input and Quadami's result, ideally side by side).
+    validations:
+      required: true
+  - type: textarea
+    id: about
+    attributes:
+      label: What it is
+      description: The model, what you used the result for, Target Quads, anything notable.
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Build line
+      description: The grey line at the bottom of the Quadami panel, e.g. "Add-on build v0.1.0 abc1234 2026-11-02".
+  - type: input
+    id: credit
+    attributes:
+      label: Credit as
+      description: Your name or handle as it should appear, with an optional link.
+    validations:
+      required: true
+  - type: dropdown
+    id: license
+    attributes:
+      label: License for the images
+      options:
+        - CC BY 4.0 (credit me)
+        - CC0 (no conditions)
+    validations:
+      required: true
+  - type: checkboxes
+    id: permission
+    attributes:
+      label: Permission
+      options:
+        - label: I made this model, or I have the right to share it; it does not show a real person.
+          required: true
+        - label: I allow these images and text to be shown on the Quadami website and stored in its public Git repository, under the license above.
+          required: true
+        - label: I understand that withdrawing removes the entry from the site, but copies already in the Git history or elsewhere may stay.
+          required: true

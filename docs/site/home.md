@@ -1,0 +1,45 @@
+<!--
+SPDX-License-Identifier: GPL-3.0-or-later
+Copyright (C) 2026 Quadami contributors
+Home page of the website (tools/site/site.json). The marker below is replaced by the download
+link of the newest release when the site is built.
+-->
+
+# Quadami
+
+Quadami is an automatic quad remesher for Blender. Select a mesh (a sculpt, a scan, a dense
+triangle model), set how many quads you want, press **Remesh**, and you get a new object made of
+quads that follows the shape, with edge loops that run along it. It is free software
+(GPL-3.0-or-later) and runs on Linux, Windows and macOS, in Blender 4.2 or newer.
+
+<!-- site:latest-release -->
+
+![Koala sculpt: input left, Quadami output right](../gallery/img/koala.webp)
+
+## Status
+
+**Early test builds, version 0.1.0.** It works on the sculpts we test with, but expect rough edges.
+After every run the panel reports quads against the target, non-quads, holes, folded faces and the
+time, so a bad result shows itself. Put the panel's build line in every bug report.
+
+What it does not do well yet, measured on our test meshes ([results](../gallery/README.md)):
+
+- **Thin parts** (leaves, vines, cloth, blade edges) thinner than one quad lose their shape, and
+  the panel does not warn about it yet. Raise Target Quads, or give flat sheets a Solidify modifier.
+- **Folded sculpt input** (Twist, Rotate, Pinch brushes) causes nearly all folds, non-quads and
+  holes. **Repair Folds and Re-run** repairs some of these spots, not all.
+- **Hard-surface models**: a few triangles or pentagons along sharp rims are normal. No mirror
+  symmetry, guide curves or density painting yet.
+- Windows and macOS builds are checked only by automatic tests, not yet on a real desktop. The
+  programs are not code-signed.
+
+The full list, with what helps: [user guide §7](../USER-GUIDE.md#7-sculpts-what-works-and-what-struggles).
+
+## Where to go next
+
+- [Install](../USER-GUIDE.md#2-install-and-update): get the zip, install it in Blender, update or remove it.
+- [User guide](../USER-GUIDE.md): your first remesh, every setting, every warning.
+- [Results](../gallery/README.md): before and after on public meshes, with the numbers and the limits.
+- [Community](community.md): what other people made with it.
+- [Credits and license](../../README.md#origin-and-credits): Quadami started as a fork of
+  AutoRemesher by Jeremy Hu.
