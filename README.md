@@ -60,8 +60,8 @@ the install scripts and the snap version of Blender on Linux: [user guide §2](d
 ## Limits and warnings
 
 - **Thin parts** (leaves, vines, cloth, blade edges) thinner than one quad fold or lose their shape,
-  and the result's handles and holes can come out wrong there. **The panel does not warn about this
-  yet.** Raise Target Quads, or give flat sheets a Solidify modifier.
+  and the result's handles and holes can come out wrong there. The panel warns about thin parts,
+  missing parts and lost handles; raise Target Quads, or thicken the part.
 - **Folded sculpt input** causes nearly all folds, non-quads and holes on our test sculpts. Use
   **Repair Folds and Re-run**, or smooth those spots by hand; folds wider than about 1 % of the
   model are not detected.
