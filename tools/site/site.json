@@ -11,10 +11,21 @@
     {"path": "guide", "nav": "User guide", "source": "docs/USER-GUIDE.md"},
     {"path": "results", "nav": "Results", "source": "docs/gallery/README.md"},
     {"path": "community", "nav": "Community", "source": "docs/site/community.md"},
-    {"path": "credits", "nav": "Credits & license", "source": "README.md", "sections": ["License", "Origin and credits"], "title": "Credits and license"},
+    {"path": "contact", "nav": "Contact", "source": "README.md", "sections": ["Contact"], "title": "Contact"},
+    {"path": "credits", "nav": "Credits & license", "source": "README.md", "sections": ["How it differs from AutoRemesher", "License", "Origin and credits"], "title": "Credits and license"},
     {"path": "building", "source": "docs/BUILDING.md"}
   ],
   "links": {"test_builds": "/docs/USER-GUIDE.md#get-the-zip", "releases": "/docs/site/releases.md"},
+  "coverage": {
+    "README.md": {
+      "What it does": "the home page (docs/site/home.md) says it for the site",
+      "Install": "the Install page (user guide §2) is the full version",
+      "Limits and warnings": "the home page's Status and the user guide (§6, §7) cover it",
+      "Documentation": "an index of repository files, not of site pages",
+      "Build from source": "the Building page (docs/BUILDING.md) is the full version"
+    },
+    "docs/USER-GUIDE.md": {}
+  },
   "media": ["docs/gallery/img/", "docs/site/img/"],
   "upstream_links_only_on": ["credits"],
   "forbidden": ["private-sculpts", "/mnt/project-files"]
