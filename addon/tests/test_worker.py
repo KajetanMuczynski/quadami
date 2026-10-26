@@ -188,7 +188,7 @@ class ReportTest(unittest.TestCase):
             "status": "ok", "parameters": {"target_quads": 5000}, "output": {"quads": 4962},
             "diagnostics": {"input_welded_edges": 270, "input_duplicate_triangles": 12, "input_sliver_islands": 3}})
         self.assertIn(("Input cleanup", "270 seam edges welded, 12 duplicate faces removed, "
-                       "3 sliver islands sized by length", False), rows)
+                       "3 zero-width sliver islands left out", False), rows)
 
 
     def test_fold_rows(self):

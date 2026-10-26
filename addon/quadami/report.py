@@ -77,8 +77,8 @@ def summary_rows(report):
         count("Winding flips", output.get("orientation_flips", 0))
         count("Folded faces", output.get("folded_faces", 0))
         # The core's input cleanup: open seams it welded, duplicate triangles
-        # it removed, islands with almost no area for their length that it
-        # sized by length, triangles on a zero-length edge it dropped and
+        # it removed, islands with almost no area for their length (zero-width
+        # slivers) it left out, triangles on a zero-length edge it dropped and
         # triangles it turned to match their neighbours.  Not a problem, only
         # reported.
         diagnostics = report.get("diagnostics", {})
@@ -91,7 +91,7 @@ def summary_rows(report):
             fixes.append("%d duplicate faces removed" % duplicates)
         slivers = int(diagnostics.get("input_sliver_islands", 0))
         if slivers:
-            fixes.append("%d sliver islands sized by length" % slivers)
+            fixes.append("%d zero-width sliver islands left out" % slivers)
         dropped = int(diagnostics.get("input_dropped_triangles", 0))
         if dropped:
             fixes.append("%d degenerate triangles removed" % dropped)

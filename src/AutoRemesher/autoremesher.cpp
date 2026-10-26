@@ -121,16 +121,19 @@ namespace {
     const size_t maximumIslandRetries = 4;
     const double maximumRetriedIslandTriangleCount = 1024.0;
 
-    // An island's voxel size comes from its area, which is right while the
-    // area is about its extent squared.  A sliver island has almost no area
-    // for its length (a bmesh bisect at zero threshold, then Mirror: area
-    // 3e-7 diagonal^2), so its voxel came out thousands of times shorter
-    // than the island, and the isotropic remesh ran for minutes into
-    // gigabytes (research/input-sanitizer-2026-10-26.md).  Its area is taken
-    // as at least this share of its bounding diagonal squared.  The thinnest
-    // real islands of every test set are at 0.0086 (a single triangle of a
-    // scan) and 0.012 (the 0.002-radius capsule of the stress set), so the
-    // floor leaves them alone.
+    // An island with almost no area for its extent is a sliver: a strip of
+    // zero width that a bmesh bisect at zero threshold plus Mirror leaves
+    // (area 3e-7 of its bounding diagonal squared).  There is nothing to put
+    // quads on, and the isotropic remesh cannot shape a strip of zero width:
+    // sized by area its voxel came out thousands of times shorter than the
+    // island and the run took minutes and gigabytes; sized by extent it
+    // still grew T until the parametrization ran out of memory
+    // (research/input-sanitizer-2026-10-26.md).  Such an island is left out
+    // and counted.  The thinnest real islands of every test set are at
+    // 0.0086 (a single scan triangle) and 0.012 (the stress set's capsule of
+    // radius 0.002 and length 1), so the threshold leaves them alone; a part
+    // that thin is lost at any count anyway (thin parts vanish below about
+    // 0.8 quad widths).
     const double minimumAreaPerSquaredDiagonal = 1e-3;
 
     using SurfaceTopology = AutoRemesher::SurfaceTopology;
@@ -1050,6 +1053,8 @@ bool AutoRemesher::remeshIslands()
         double area;
         // Of the island's bounding box.
         double diagonal = 0.0;
+        // A sliver: not remeshed, comes out empty.
+        bool leftOut = false;
         double targetQuadCount;
         double scaling;
         double adaptivity;
@@ -1126,12 +1131,17 @@ bool AutoRemesher::remeshIslands()
             / (context.targetQuadCount * m_trianglesPerQuad * triangleAreaPerSquaredEdge));
     }
     size_t sliverIslands = 0;
-    for (auto& context : islandContexes) {
-        const double extentArea = minimumAreaPerSquaredDiagonal * context.diagonal * context.diagonal;
-        if (!(context.area < extentArea) || !(context.targetQuadCount > 0.0))
+    m_leftOutVertices.clear();
+    for (size_t i = 0; i < islandContexes.size(); ++i) {
+        auto& context = islandContexes[i];
+        if (!(context.area < minimumAreaPerSquaredDiagonal * context.diagonal * context.diagonal))
             continue;
-        context.voxelSize = std::sqrt(extentArea
-            / (context.targetQuadCount * m_trianglesPerQuad * triangleAreaPerSquaredEdge));
+        for (const auto& triangle : trianglesIslands[i])
+            m_leftOutVertices.insert(m_leftOutVertices.end(), triangle.begin(), triangle.end());
+        context.leftOut = true;
+        context.vertices.clear();
+        context.triangles.clear();
+        context.targetQuadCount = 0.0;
         ++sliverIslands;
     }
     auto t_buildEnd = std::chrono::high_resolution_clock::now();
@@ -1333,8 +1343,10 @@ bool AutoRemesher::remeshIslands()
 
     tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
         [&](const tbb::blocked_range<size_t>& range) {
-            for (size_t i = range.begin(); i != range.end(); ++i)
-                resampleIsland(i, islandContexes[i], islandRuns[i], &decimationStats);
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                if (!islandContexes[i].leftOut)
+                    resampleIsland(i, islandContexes[i], islandRuns[i], &decimationStats);
+            }
         });
     auto t_isotropicEnd = std::chrono::high_resolution_clock::now();
     throwIfCancelled();
@@ -1373,7 +1385,7 @@ bool AutoRemesher::remeshIslands()
     std::vector<size_t> islandsToRetry;
     for (size_t i = 0; i < islandContexes.size(); ++i) {
         const auto& ctx = islandContexes[i];
-        if ((double)trianglesIslands[i].size() < minimumIslandTriangleCount
+        if (ctx.leftOut || (double)trianglesIslands[i].size() < minimumIslandTriangleCount
             || 2.0 * ctx.targetQuadCount > maximumRetriedIslandTriangleCount)
             continue;
         if (!isHealthyIslandResult(ctx.inputTopology, islandRuns[i].remeshedVertices, islandRuns[i].remeshedQuads))
@@ -1426,8 +1438,8 @@ bool AutoRemesher::remeshIslands()
 
     m_islandCount = islandRuns.size();
     m_islandsWithoutOutput = 0;
-    for (const auto& run : islandRuns) {
-        if (run.remeshedQuads.empty())
+    for (size_t i = 0; i < islandRuns.size(); ++i) {
+        if (islandRuns[i].remeshedQuads.empty() && !islandContexes[i].leftOut)
             ++m_islandsWithoutOutput;
     }
 
