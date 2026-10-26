@@ -181,9 +181,16 @@ check)*. Target Quads 2000 is a good first try on it.
 
 **What the result keeps:** the original's parent, position, rotation, scale and collections, so it
 moves with the same parent (a rig or an empty). It is smooth shaded if the original mostly was, flat
-if the original was flat. No edges are marked sharp, so on a hard-surface model the creases look soft:
-right-click the result > **Shade Auto Smooth** *(from memory, check)*. It does **not** keep UVs,
-materials, vertex groups, sharp edges, creases or seams yet.
+if the original was flat. Under **Keep from Original** (a collapsed section of the panel):
+
+| Option | Default | What the result gets | Limits |
+|---|---|---|---|
+| **Materials, Groups, Marks** | on | The original's materials (each face takes the material of the original under it), vertex groups and colour attributes (blended from the original's surface), and its **sharp**, **crease** and **seam** marks. | The quads do not follow material borders or marked lines: a border zigzags along the quads, and a marked line becomes the connected run of quad edges nearest to it (straight where the quads run along it, a staircase where they cross it). Lines shorter than about one quad are dropped. Shape keys and face sets are not kept. |
+| **UV Maps** | off | The original's UV maps, with each face kept inside one UV island, so a texture still fits. | A face that crosses a UV seam reaches a little past its island's border in the texture (into the margin around the island); on test models with many small islands up to 6 % of the faces came out distorted. For a clean new map instead: keep this off, select the result, **Tab**, **A**, **U > Unwrap** *(from memory, check)*: the copied seams cut the same islands as on the original. |
+
+The panel line **"Copied from the original: …"** lists what came across. Copying takes a few seconds on
+large models, and Blender waits meanwhile: at 50,000 quads about 1.5 s from a 330,000-triangle
+original and 4 s from 1.3 million triangles, plus 3 s and 10 s with **UV Maps**.
 
 **Remesh again, other settings:** with the result selected, change the settings and press **Remesh**.
 It remeshes your **original** again (the panel's **Source** field under the button names it), never the
@@ -274,6 +281,7 @@ Warnings appear under the rows, with a red icon when they are a problem.
 | **"Parts of the model are missing in the result (up to N quad widths away). …"**, red **Missing parts** | A part thinner than about two quads (a vine, a strap, a finger, a spike) was smoothed away or cut off. The model is still one piece where it was, so no other row shows it. | Raise Target Quads until the warning goes away; each doubling halves the quad width. Or remesh the thin part on its own at a higher target ([§7](#7-sculpts-what-works-and-what-struggles)). |
 | **"P % of the surface (S spots) is thinner than one quad; expect folds or lost parts there. Try at least N target quads, or thicken those parts"** | Parts of your model are thinner than one quad is wide (leaves, vines, a blade edge). A risk, not a defect: about a third of the runs it fires on come out clean. When no count fits, it says to thicken those parts. | Raise Target Quads to the suggested number (a lower bound: on very thin parts it keeps growing), or thicken the part: Edit Mode, select it, **Alt+S** (Shrink/Fatten) and move the mouse outwards. |
 | **"K islands came out with far fewer quads than planned (smallest: F of P)"** | A separate piece came out as a lump of a few quads instead of its shape, usually because it is thin or small for the target. | Raise Target Quads, or remesh that piece on its own (as for empty islands). |
+| **"Could not copy data from the original: …"** | Copying materials, groups, marks or UVs failed; the result itself is fine. | Report it with the message. Untick the options under **Keep from Original** to remesh without copying. |
 | **"… is scaled unevenly (N : 1), so the quads come out stretched …"** | The object (or its parent) is scaled differently along its axes, and the quads stretch the same way. | Select the original, **Ctrl+A > Scale**, and remesh again ([§3](#3-your-first-remesh)). |
 | **"Blender's mesh validation changed the result"** | Blender had to repair the remesher's result when building the object. Should not happen. | Report it with the build line and the settings. |
 | Title **Invalid input** | The model cannot be remeshed as it is: no faces, broken coordinates, a target of 0 or above 2,000,000. The reason is shown under it. | Fix what it says. "The mesh has no faces" means you picked a mesh of only points or edges. |
