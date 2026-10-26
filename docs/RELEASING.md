@@ -58,7 +58,7 @@ Copy into the release PR's description and tick each line there.
    - [ ] master CI green on the commit to tag (Actions > ci, branch master).
    - [ ] TARGETS release check ([TARGETS.md](TARGETS.md) §2.5, §5 "Releases") on all three
          platforms: **Actions > release-check > Run workflow**, `ref` = the commit to tag, `baseline`
-         = the previous release's tag (for 0.1.0 master of 2026-10-22, `0e9bec8`, the default). Each
+         = the previous release's tag (for 0.1.0: `877891d`, the default, see below). Each
          platform builds both, runs corpus and closed sets with 5 replicates (about an hour; macOS
          longer) and `tools/bench/release_gate.py` decides: for 0.x no structural gate (H1–H6, H8)
          fails on every replicate of more cases (mesh, resolution, target) than in the baseline and no §3.2 validity number is worse (TARGETS §6,
@@ -92,6 +92,15 @@ Copy into the release PR's description and tick each line there.
   shipped binary (the same on Windows and macOS; on Linux the zip's CLI comes from AlmaLinux 8, so
   only the source is checked there); H7 (determinism); the sculpt and brush sets and Kajetan's
   private sculpts (Linux, by hand in the cloud); anything inside Blender (step 2).
+- **Baseline of the 0.1.0 check: `877891d`** (merge of #82), not the 2026-10-22 test build `0e9bec8`.
+  #82 keeps thin parts the cleanup used to delete, which adds about 5 % folded quads and 4 % flipped
+  faces on those parts while fewer runs miss the quad count; accepted as a trade by Kajetan on
+  2026-10-26 and listed in the 0.1.0 notes (bisection and numbers:
+  `docs/sessions/2026-10-26-fold-bisect.md`). Every core merge after it up to the 0.1.0 candidate
+  gives byte-identical output (`ab.py lane`), so the check passes only if nothing else moved. The
+  ratchet has no noise tolerance: a candidate whose output differs from the baseline at all, even
+  harmlessly, shows **worse** rows, so read a red check against its `ab.py compare` before calling
+  it a regression. From 0.1.0 on, the baseline is the previous release tag (`v0.1.0` for 0.2).
 - **Structural gates fail on master today** (cloud dry run 2026-10-22, Linux, master `ae27301`
   against `0e9bec8`, byte-identical outputs): corpus 21 of 432 runs (human_neutral islands merged
   and holes, sword at 2k quads 11-22 % under target, csg_bracket u2 one hole), closed 114 of 468
