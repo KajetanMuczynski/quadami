@@ -7,9 +7,9 @@ Builds de6ac3a (release-check #5's candidate) as release-check did, and once mor
 research-hash.patch (bit hashes of intermediate results as "rh" stage records, plus a Windows
 switch for the UCRT's FMA3 code paths), runs the cases in cases.txt and prints, for the job log:
 
-    RES <platform> <tag> <case> rc=.. sha=.. t=.. parsed=..
-    RH  <platform> <tag> <case> <island> <point> <hash>
-    STG <platform> <tag> <case> <stage record without timings>
+    RES  <platform> <tag> <case> rc=.. sha=.. t=.. parsed=..
+    RHC  <platform> <tag> <case> <point>=<island>:<hash>,... ...   (all hash points of the case)
+    STGC <platform> <tag> <case> <JSON list of stage records without timings>
     LIBM/LIBMX lines of libm_table.py for every hash build and intervention
 
 Tags: A1, A2 the plain build twice (determinism on one machine; A1 against run #5 across runners),
@@ -95,17 +95,22 @@ def run_case(cli, tag, case, work, out, env_extra, platform):
         t = None
     lines = [f"RES {platform} {tag} {case} rc={p.returncode} sha={sha} t={t} wall={wall:.3f} "
              f"parsed={parsed.group(1) if parsed else '-'} input_sha={ab.file_hash(inp)}"]
+    # One line per case: the job log API returns only the last 5,000 lines.
+    points, stages = {}, []
     try:
         for ln in open(os.path.join(d, "stages.jsonl")):
             s = json.loads(ln)
             if s.get("stage") == "rh":
-                lines.append(f"RH {platform} {tag} {case} {s.get('island', '-')} {s.get('point')} {s.get('h')}")
+                points.setdefault(s.get("point"), []).append(f"{s.get('island', '-')}:{s.get('h')}")
             elif tag == "H" and s.get("stage") in STG_KEEP:
-                keep = {k2: v for k2, v in s.items()
-                        if k2 not in ("schema", "version", "input", "target_quads") and not any(x in k2 for x in TIMING)}
-                lines.append(f"STG {platform} {tag} {case} {json.dumps(keep, separators=(',', ':'))}")
+                stages.append({k2: v for k2, v in s.items()
+                               if k2 not in ("schema", "version", "input", "target_quads") and not any(x in k2 for x in TIMING)})
     except (OSError, ValueError):
         pass
+    if points:
+        lines.append(f"RHC {platform} {tag} {case} " + " ".join(f"{k}={','.join(v)}" for k, v in points.items()))
+    if stages:
+        lines.append(f"STGC {platform} {tag} {case} {json.dumps(stages, separators=(',', ':'))}")
     return lines
 
 
@@ -128,9 +133,11 @@ def main():
     cli_h = build_tree(work, "H", base_args + (["-DCMAKE_CXX_FLAGS_INIT=/Qvec-report:1"] if windows else []), a.jobs, patch=True)
     print(f"BUILD H ok={bool(cli_h)}", flush=True)
     if windows:
-        for ln in open(os.path.join(work, "rbuilds", "H", "build.log"), errors="replace"):
-            if "C500" in ln and "AutoRemesher" in ln:
-                print("VEC " + ln.strip().split("AutoRemesher", 1)[1], flush=True)
+        vec = sorted({ln.strip().split("AutoRemesher", 1)[1] for ln in open(os.path.join(work, "rbuilds", "H", "build.log"), errors="replace")
+                      if "C500" in ln and "AutoRemesher" in ln})
+        print(f"VEC count={len(vec)}", flush=True)
+        for ln in vec[:400]:
+            print("VEC " + ln, flush=True)
     variants = [("A1", cli_a, {}), ("A2", cli_a, {}), ("H", cli_h, {}), ("H2", cli_h, {})]
     if a.platform.startswith("linux"):
         shim = os.path.join(work, "portm.so")
@@ -139,6 +146,11 @@ def main():
         variants += [("H_nofma", cli_h, {"GLIBC_TUNABLES": mask}),
                      ("H_shim", cli_h, {"LD_PRELOAD": shim}),
                      ("H_shim_nofma", cli_h, {"LD_PRELOAD": shim, "GLIBC_TUNABLES": mask})]
+        # Scalar Eigen, the x86 counterpart of macOS's H_novec_nofma.
+        cli_v = build_tree(work, "H_novec", base_args + ["-DCMAKE_CXX_FLAGS_INIT=-DEIGEN_DONT_VECTORIZE"], a.jobs, patch=True)
+        print(f"BUILD H_novec ok={bool(cli_v)}", flush=True)
+        if cli_v:
+            variants.append(("H_novec", cli_v, {}))
     if windows:
         variants.append(("H_nofma3", cli_h, {"AR_RESEARCH_NO_FMA3": "1"}))
         cli_c = build_tree(work, "H_clangcl", base_args, a.jobs, patch=True, generator_args=["-T", "ClangCL"])
@@ -146,10 +158,11 @@ def main():
         if cli_c:
             variants.append(("H_clangcl", cli_c, {}))
     if a.platform.startswith("macos"):
-        # No contraction by the compiler; H_nofma also keeps Eigen from its explicit fused
-        # multiply-adds (NEON vfmaq, scalar std::fma), so the arithmetic is the x86 build's.
+        # H_nocontract: no contraction by the compiler. H_novec_nofma: no fused multiply-add at
+        # all; Eigen uses them explicitly on arm64 (NEON vfmaq, scalar std::fma) whatever the
+        # contraction setting, so it runs scalar without them. Compare with Linux's H_novec.
         for tag, flags in (("H_nocontract", "-ffp-contract=off"),
-                           ("H_nofma", "-ffp-contract=off -U__ARM_FEATURE_FMA -DEIGEN_SCALAR_MADD_USE_FMA=0")):
+                           ("H_novec_nofma", "-ffp-contract=off -DEIGEN_DONT_VECTORIZE -DEIGEN_SCALAR_MADD_USE_FMA=0")):
             cli_n = build_tree(work, tag, base_args + ["-DCMAKE_C_FLAGS_INIT=-ffp-contract=off", f"-DCMAKE_CXX_FLAGS_INIT={flags}"],
                                a.jobs, patch=True)
             print(f"BUILD {tag} ok={bool(cli_n)}", flush=True)
