@@ -56,6 +56,23 @@ ThinParts measureThinParts(const std::vector<Vector3>& vertices,
 // `growth`.  0 when there is none.
 double medianThinGrowth(std::vector<std::pair<double, double>> growth);
 
+// How wide a part an island is, for the thin-island floor (TODO 4.1): the
+// area-weighted median over its vertices of max(t, 2 s), where t is the
+// distance to the nearest vertex whose normal faces it (dot < -0.5, the other
+// side) and s the distance to the nearest vertex whose normal has turned
+// sideways (-0.5 <= dot < 0.6, a rim).  On a tube of diameter d, t = d and
+// 2 s is a little under d, so the result is d.  On a plate t is small but s
+// is the distance to the rim, so a wide plate is not thin, and a ribbon of
+// width w comes out at about w / 2 (the median distance to its rims is
+// w / 4).  A vertex with no such neighbour within `radius` counts as
+// infinitely wide, so the result is infinity unless most of the island has
+// both within `radius`.  Measured on the input island, since a
+// resampled one has already lost parts thinner than its edges.  At most
+// `maximumSamples` vertices are measured (every k-th one); every vertex is a
+// candidate neighbour.
+double islandThinWidth(const std::vector<Vector3>& vertices,
+    const std::vector<std::vector<size_t>>& triangles, double radius, size_t maximumSamples);
+
 }
 
 #endif

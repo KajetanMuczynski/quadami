@@ -156,4 +156,94 @@ double medianThinGrowth(std::vector<std::pair<double, double>> growth)
     return growth.back().first;
 }
 
+double islandThinWidth(const std::vector<Vector3>& vertices,
+    const std::vector<std::vector<size_t>>& triangles, double radius, size_t maximumSamples)
+{
+    const double infinity = std::numeric_limits<double>::infinity();
+    const size_t vertexCount = vertices.size();
+    if (0 == vertexCount || !(radius > 0.0) || 0 == maximumSamples)
+        return infinity;
+
+    std::vector<Vector3> normals(vertexCount);
+    std::vector<double> areas(vertexCount, 0.0);
+    for (const auto& triangle : triangles) {
+        if (3 != triangle.size())
+            continue;
+        const Vector3 cross = Vector3::crossProduct(vertices[triangle[1]] - vertices[triangle[0]],
+            vertices[triangle[2]] - vertices[triangle[0]]);
+        for (size_t corner : triangle) {
+            normals[corner] += cross;
+            areas[corner] += cross.length() / 6.0;
+        }
+    }
+    for (auto& normal : normals)
+        normal.normalize();
+
+    // The same grid as measureThinParts, with cells `radius` wide.
+    Vector3 low = vertices[0];
+    for (const Vector3& v : vertices)
+        for (size_t i = 0; i < 3; ++i)
+            low[i] = std::min(low[i], v[i]);
+    const auto cellOf = [&](const Vector3& v, int64_t* cell) {
+        for (size_t i = 0; i < 3; ++i)
+            cell[i] = (int64_t)std::floor((v[i] - low[i]) / radius);
+    };
+    const auto keyOf = [](int64_t x, int64_t y, int64_t z) {
+        return ((uint64_t)(x & 0x1FFFFF) << 42) | ((uint64_t)(y & 0x1FFFFF) << 21) | (uint64_t)(z & 0x1FFFFF);
+    };
+    std::unordered_map<uint64_t, std::vector<size_t>> cells;
+    for (size_t v = 0; v < vertexCount; ++v) {
+        if (!(areas[v] > 0.0))
+            continue;
+        int64_t cell[3];
+        cellOf(vertices[v], cell);
+        cells[keyOf(cell[0], cell[1], cell[2])].push_back(v);
+    }
+
+    const double radiusSquared = radius * radius;
+    const size_t stride = (vertexCount + maximumSamples - 1) / maximumSamples;
+    // (width, area) of each measured vertex.
+    std::vector<std::pair<double, double>> widths;
+    widths.reserve(vertexCount / stride + 1);
+    double totalArea = 0.0;
+    for (size_t v = 0; v < vertexCount; v += stride) {
+        if (!(areas[v] > 0.0) || !(normals[v].lengthSquared() > 0.0))
+            continue;
+        totalArea += areas[v];
+        int64_t cell[3];
+        cellOf(vertices[v], cell);
+        double across = infinity, side = infinity;
+        for (int64_t dx = -1; dx <= 1; ++dx)
+            for (int64_t dy = -1; dy <= 1; ++dy)
+                for (int64_t dz = -1; dz <= 1; ++dz) {
+                    const auto found = cells.find(keyOf(cell[0] + dx, cell[1] + dy, cell[2] + dz));
+                    if (found == cells.end())
+                        continue;
+                    for (size_t other : found->second) {
+                        const double distanceSquared = (vertices[other] - vertices[v]).lengthSquared();
+                        if (distanceSquared > radiusSquared || other == v)
+                            continue;
+                        const double dot = Vector3::dotProduct(normals[other], normals[v]);
+                        if (dot < -0.5)
+                            across = std::min(across, distanceSquared);
+                        else if (dot < 0.6)
+                            side = std::min(side, distanceSquared);
+                    }
+                }
+        const double width = std::max(std::sqrt(across), 2.0 * std::sqrt(side));
+        if (width < infinity)
+            widths.push_back({ width, areas[v] });
+    }
+    if (!(totalArea > 0.0))
+        return infinity;
+    std::sort(widths.begin(), widths.end());
+    double sum = 0.0;
+    for (const auto& w : widths) {
+        sum += w.second;
+        if (sum >= 0.5 * totalArea)
+            return w.first;
+    }
+    return infinity;
+}
+
 }

@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 8;
+const int InterfaceVersionMinor = 9;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -92,6 +92,11 @@ struct RemeshParameters {
     // lower the tips of needle spikes near it (a shape change, so off by
     // default; diagnostics input_fold_spikes and input_fold_spike_drop_quads).
     bool flattenSpikes = false;
+    // Since 1.9.  Thin-island floor (TODO 4.1): an island most of which is
+    // narrower than this many quads (a vine, a strap, an eyelash card) gets
+    // quads enough for that, taken from the other islands, which give up at
+    // most a quarter of theirs; the total stays at targetQuadCount.  0 = off.
+    double thinIslandQuadsAcross = 2.0;
 };
 
 struct RemeshRequest {

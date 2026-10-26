@@ -141,6 +141,12 @@ public:
         m_flattenSpikes = flatten;
     }
 
+    // Thin-island floor (RemeshParameters::thinIslandQuadsAcross); 0 = off.
+    void setThinIslandQuadsAcross(double quadsAcross)
+    {
+        m_thinIslandQuadsAcross = quadsAcross;
+    }
+
     // Asked at every progress point and at island and stage boundaries; once it
     // returns true the run stops and remesh() returns false with cancelled()
     // set.  Called from the island worker threads, so it must be thread-safe.
@@ -405,6 +411,7 @@ private:
     bool m_useQex = true;
     bool m_repairInputFolds = false;
     bool m_flattenSpikes = false;
+    double m_thinIslandQuadsAcross = 0.0;
     ModelType m_modelType = ModelType::Organic;
     AutoRemesherProgressHandler m_progressHandler = nullptr;
     void* m_tag = nullptr;

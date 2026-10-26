@@ -108,6 +108,13 @@ namespace {
     // scan noise do not each grow to this size.
     const double minimumIslandTriangleCount = 64.0;
 
+    // Thin-island floor (TODO 4.1, research/thin-part-sizing-note-2026-10-23.md):
+    // the other islands give up at most this share of their quads to thin
+    // ones, so their quad edges grow by at most 1/sqrt(0.75), 15 %.  The
+    // width of an island is measured on at most this many of its vertices.
+    const double thinIslandBudgetShare = 0.25;
+    const size_t thinIslandWidthSamples = 4096;
+
     // An island that still fails is run again with its triangle and quad
     // targets raised by this factor, up to this many times, if it asked for at
     // most this many triangles. The factor is small because a repaired island
@@ -1084,17 +1091,106 @@ bool AutoRemesher::remeshIslands()
     double totalIslandArea = 0.0;
     for (const auto& context : islandContexes)
         totalIslandArea += context.area;
-    for (auto& context : islandContexes) {
-        const double shareTriangleCount = totalIslandArea > 0.0
-            ? m_targetTriangleCount * context.area / totalIslandArea
-            : 0.0;
-        const double floorTriangleCount = std::min(minimumIslandTriangleCount, (double)context.triangles.size());
-        if (shareTriangleCount >= floorTriangleCount || context.area <= 0.0) {
-            context.targetQuadCount = 0.5 * shareTriangleCount;
+    std::vector<double> shareTriangleCounts(islandContexes.size(), 0.0);
+    if (totalIslandArea > 0.0) {
+        for (size_t i = 0; i < islandContexes.size(); ++i)
+            shareTriangleCounts[i] = m_targetTriangleCount * islandContexes[i].area / totalIslandArea;
+    }
+    // A small island is raised to minimumIslandTriangleCount, but never
+    // above what its input has, so that specks of scan noise do not grow.
+    const auto floorTriangleCountOf = [&](size_t i) {
+        return std::min(minimumIslandTriangleCount, (double)islandContexes[i].triangles.size());
+    };
+    std::vector<double> islandTriangleCounts = shareTriangleCounts;
+
+    // Thin-island floor.  A part narrower than about one quad is lost or
+    // folds (ENVELOPE row 17), and a whole island of it, a vine or a strap
+    // joined to a body, can only be kept by more quads on it.  An island
+    // whose width (islandThinWidth, on the input) is under
+    // m_thinIslandQuadsAcross quad edges asks for the edge width / quads
+    // across.  The other islands pay for it, but give up at most
+    // thinIslandBudgetShare of their quads, and islands at or near the
+    // small-island minimum pay nothing.  When the budget is short, the extra
+    // is shared by water filling: an island that asks for less than an
+    // equal part gets all it asks for, so one very thin island (or a doubled
+    // shell measuring zero width) cannot take everything.  The total stays
+    // at the target, and a single island is never changed.
+    auto t_thinFloorStart = std::chrono::high_resolution_clock::now();
+    std::vector<double> islandThinWidths(islandContexes.size(), std::numeric_limits<double>::infinity());
+    double thinFloorWantedTriangles = 0.0;
+    double thinFloorGivenTriangles = 0.0;
+    size_t thinFloorIslands = 0;
+    if (m_thinIslandQuadsAcross > 0.0 && std::isfinite(m_thinIslandQuadsAcross) && islandContexes.size() > 1) {
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t i = range.begin(); i != range.end(); ++i) {
+                    const auto& context = islandContexes[i];
+                    const double triangleCount = std::max(shareTriangleCounts[i], floorTriangleCountOf(i));
+                    if (!(triangleCount > 0.0) || !(context.area > 0.0))
+                        continue;
+                    const double quadEdge = std::sqrt(context.area / (0.5 * triangleCount));
+                    islandThinWidths[i] = islandThinWidth(context.vertices, context.triangles,
+                        m_thinIslandQuadsAcross * quadEdge, thinIslandWidthSamples);
+                }
+            });
+        std::vector<double> wantedTriangleCounts(islandContexes.size(), 0.0);
+        std::vector<bool> pays(islandContexes.size(), false);
+        double payingTriangles = 0.0;
+        for (size_t i = 0; i < islandContexes.size(); ++i) {
+            const double triangleCount = std::max(shareTriangleCounts[i], floorTriangleCountOf(i));
+            const double quadEdge = islandThinWidths[i] / m_thinIslandQuadsAcross;
+            const double wanted = quadEdge > 0.0 && std::isfinite(quadEdge)
+                ? 2.0 * islandContexes[i].area / (quadEdge * quadEdge)
+                : 0.0;
+            if (wanted > triangleCount) {
+                wantedTriangleCounts[i] = wanted - triangleCount;
+                thinFloorWantedTriangles += wantedTriangleCounts[i];
+                ++thinFloorIslands;
+            } else if (shareTriangleCounts[i] >= minimumIslandTriangleCount) {
+                pays[i] = true;
+                payingTriangles += shareTriangleCounts[i];
+            }
+        }
+        if (thinFloorWantedTriangles > 0.0 && payingTriangles > 0.0) {
+            thinFloorGivenTriangles = std::min(thinFloorWantedTriangles, thinIslandBudgetShare * payingTriangles);
+            std::vector<double> asks;
+            for (double wanted : wantedTriangleCounts)
+                if (wanted > 0.0)
+                    asks.push_back(wanted);
+            std::sort(asks.begin(), asks.end());
+            double level = std::numeric_limits<double>::infinity();
+            double left = thinFloorGivenTriangles;
+            for (size_t k = 0; k < asks.size(); ++k) {
+                if (asks[k] * (double)(asks.size() - k) > left) {
+                    level = left / (double)(asks.size() - k);
+                    break;
+                }
+                left -= asks[k];
+            }
+            // A paying island keeps at least its minimum, which can leave the
+            // total a fraction of a quad above the target.
+            const double kept = 1.0 - thinFloorGivenTriangles / payingTriangles;
+            for (size_t i = 0; i < islandContexes.size(); ++i) {
+                if (wantedTriangleCounts[i] > 0.0)
+                    islandTriangleCounts[i] = std::max(shareTriangleCounts[i], floorTriangleCountOf(i))
+                        + std::min(wantedTriangleCounts[i], level);
+                else if (pays[i])
+                    islandTriangleCounts[i] = std::max(kept * shareTriangleCounts[i], floorTriangleCountOf(i));
+            }
+        }
+    }
+    auto t_thinFloorEnd = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < islandContexes.size(); ++i) {
+        auto& context = islandContexes[i];
+        const double triangleCount = islandTriangleCounts[i];
+        const double floorTriangleCount = floorTriangleCountOf(i);
+        if (context.area <= 0.0 || (triangleCount >= floorTriangleCount && triangleCount == shareTriangleCounts[i])) {
+            context.targetQuadCount = 0.5 * triangleCount;
             continue;
         }
         // T keeps the resolution's triangles per quad, as on every other island.
-        context.targetQuadCount = 0.5 * floorTriangleCount;
+        context.targetQuadCount = 0.5 * std::max(triangleCount, floorTriangleCount);
         context.voxelSize = std::sqrt(context.area
             / (context.targetQuadCount * m_trianglesPerQuad * triangleAreaPerSquaredEdge));
     }
@@ -1701,6 +1797,10 @@ bool AutoRemesher::remeshIslands()
             run.set("thin_growth_p50", medianThinGrowth(std::move(growth)));
             run.set("thin_parts_ms", milliseconds(std::chrono::duration_cast<std::chrono::microseconds>(t_thinPartsEnd - t_isotropicEnd).count()));
         }
+        run.set("thin_floor_islands", (double)thinFloorIslands);
+        run.set("thin_floor_wanted_quads", 0.5 * thinFloorWantedTriangles);
+        run.set("thin_floor_given_quads", 0.5 * thinFloorGivenTriangles);
+        run.set("thin_floor_ms", milliseconds(std::chrono::duration_cast<std::chrono::microseconds>(t_thinFloorEnd - t_thinFloorStart).count()));
         run.set("retried_islands", (double)islandsToRetry.size());
         run.set("repaired_islands", (double)islandsRepaired.load());
         m_diagnostics.push_back(std::move(run));
@@ -1728,6 +1828,9 @@ bool AutoRemesher::remeshIslands()
             DiagnosticRecord record("island", i);
             record.set("input_triangles", (double)trianglesIslands[i].size());
             record.set("target_quads", islandContexes[i].targetQuadCount);
+            record.set("share_quads", 0.5 * shareTriangleCounts[i]);
+            if (std::isfinite(islandThinWidths[i]) && shareTriangleCounts[i] > 0.0)
+                record.set("thin_width_quads", islandThinWidths[i] / std::sqrt(islandContexes[i].area / (0.5 * shareTriangleCounts[i])));
             record.set("isotropic_triangles", (double)islandContexes[i].triangles.size());
             record.set("input_boundary_edges", (double)islandContexes[i].inputTopology.boundaryEdges);
             record.set("input_non_manifold_edges", (double)islandContexes[i].inputTopology.nonManifoldEdges);

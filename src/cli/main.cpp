@@ -67,6 +67,10 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "  --flatten-spikes on|off     with --fold-repair on: where a fold cannot be\n"
                           "                              untangled, also lower needle spikes near it\n"
                           "                              (changes the shape; default off)\n"
+                          "  --thin-island-floor <quads> give an island that is mostly narrower than\n"
+                          "                              this many quads enough of them, taken from the\n"
+                          "                              other islands (at most a quarter of theirs;\n"
+                          "                              default 2, 0 = off)\n"
                           "  --stdin-control             cancel when stdin receives the line \"cancel\"\n"
                           "                              or is closed; the report then says \"cancelled\"\n"
                           "  -h, --help                  show this text\n"
@@ -168,6 +172,8 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
             valid = parseDouble(value, &parameters.sharpEdgeDegrees);
         else if ("--smooth-normal" == name)
             valid = parseDouble(value, &parameters.smoothNormalDegrees);
+        else if ("--thin-island-floor" == name)
+            valid = parseDouble(value, &parameters.thinIslandQuadsAcross) && parameters.thinIslandQuadsAcross >= 0.0;
         else if ("--extractor" == name) {
             if (!parseExtractor(value, &parameters.extractor)) {
                 std::fprintf(stderr, "Error: --extractor must be qex or trace, not %s\n", value.c_str());

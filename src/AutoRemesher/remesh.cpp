@@ -531,6 +531,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     engine.setUseQex(Extractor::Qex == parameters.extractor);
     engine.setRepairInputFolds(parameters.repairFolds);
     engine.setFlattenSpikes(parameters.flattenSpikes);
+    engine.setThinIslandQuadsAcross(parameters.thinIslandQuadsAcross);
     engine.setTrianglesPerQuad(MeshResolution::Fast == parameters.resolution
             ? ::AutoRemesher::FastTrianglesPerQuad
             : ::AutoRemesher::QualityTrianglesPerQuad);
@@ -704,6 +705,7 @@ std::string toJson(const RemeshResult& result)
         << ", \"resolution\": " << jsonString(toString(parameters.resolution))
         << ", \"repair_folds\": " << (parameters.repairFolds ? "true" : "false")
         << ", \"flatten_spikes\": " << (parameters.flattenSpikes ? "true" : "false")
+        << ", \"thin_island_quads_across\": " << jsonNumber(parameters.thinIslandQuadsAcross)
         << ", \"extractor\": " << jsonString(toString(parameters.extractor))
         << "},\n";
     out << "  \"input\": {"
