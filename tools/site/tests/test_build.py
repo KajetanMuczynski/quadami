@@ -131,6 +131,20 @@ class TestBuild(Fixture):
         write(self.root, "docs/home.md", "# Home\n\nsee private-sculpts/x\n")
         self.assertEqual(self.run_build()[0], 1)
 
+    def test_coverage(self):
+        self.config["pages"] = [p for p in self.config["pages"] if p["path"] != "guide"]
+        self.config["coverage"] = {"docs/GUIDE.md": {"First part": "not for the site"}}
+        code, err = self.run_build()
+        self.assertEqual(code, 1)
+        self.assertIn("'Third' is on no page", err)
+        self.assertNotIn("'First part'", err)
+        self.config["coverage"]["docs/GUIDE.md"]["Third"] = "internal"
+        code, err = self.run_build()
+        self.assertEqual(code, 0, err)
+        self.config["coverage"]["docs/GUIDE.md"]["Gone"] = "stale"
+        code, err = self.run_build()
+        self.assertIn("'Gone' does not exist", err)
+
     def test_no_release(self):
         code, err = self.run_build(releases=[RELEASES[0]])
         self.assertEqual(code, 0, err)

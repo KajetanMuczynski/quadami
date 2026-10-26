@@ -84,6 +84,8 @@ CI (`.github/workflows/`):
     `addon-<platform>`. One macOS job per PR, since macOS runners are the scarce ones.
   - `site`: tests and builds the website (`tools/site/`, whitelist in `site.json`); fails on broken links,
     upstream links outside the credits page, images outside the media folders, private paths. Artifact `site-preview`.
+    User-facing doc changes must reach the site: every `##` section of `README.md` and `docs/USER-GUIDE.md`
+    is on a page or excluded with a reason in `site.json` `coverage`, else `site` fails.
   - `release (draft)`: only on a `v*` tag, after **CI passed**: `ci/release.py` checks the tag
     against the manifest version and the zips, and makes a **draft** GitHub release with the three
     zips, `SHA256SUMS.txt` and notes from `docs/releases/`. Publishing is Kajetan's click.
@@ -135,6 +137,8 @@ Running the binary with no args opens the GUI. The core needs `setTargetTriangle
   Types: fix, perf, feat, ci, docs, refactor. Areas: islands, extraction, sizing, cross-field,
   rounding, addon, ci, docs, bench. Omit `[TODO x.y]` only when no TODO item applies.
 - Body starts with `Merge order / depends on: ...` (`none` if independent).
+- Body holds only what this change does, possible conflicts and dependencies (Kajetan, 2026-10-26).
+  No clutter: no background, no replay of the work, no to-dos for Kajetan.
 - If the PR touches a conflict-prone file (`tests/CMakeLists.txt`, `src/AutoRemesher/remesh.cpp`,
   `src/AutoRemesher/quadextractor.cpp`), say so in the body so parallel PRs can be ordered.
 - A PR stays **draft** until its thread has verified everything: **CI passed** green on the current

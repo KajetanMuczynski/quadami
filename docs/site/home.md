@@ -18,14 +18,14 @@ quads that follows the shape, with edge loops that run along it. It is free soft
 
 ## Status
 
-**Early test builds, version 0.1.0.** It works on the sculpts we test with, but expect rough edges.
+**Version 0.1.0, the first public release, with known limits.** It works on the sculpts we test with, but expect rough edges.
 After every run the panel reports quads against the target, non-quads, holes, folded faces and the
 time, so a bad result shows itself. Put the panel's build line in every bug report.
 
 What it does not do well yet, measured on our test meshes ([results](../gallery/README.md)):
 
-- **Thin parts** (leaves, vines, cloth, blade edges) thinner than one quad lose their shape, and
-  the panel does not warn about it yet. Raise Target Quads, or give flat sheets a Solidify modifier.
+- **Thin parts** (leaves, vines, cloth, blade edges) thinner than one quad can lose their shape or
+  pieces. The panel warns about thin and missing parts; raise Target Quads, or thicken the part.
 - **Folded sculpt input** (Twist, Rotate, Pinch brushes) causes nearly all folds, non-quads and
   holes. **Repair Folds and Re-run** repairs some of these spots, not all.
 - **Hard-surface models**: a few triangles or pentagons along sharp rims are normal. No mirror
