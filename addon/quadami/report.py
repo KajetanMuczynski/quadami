@@ -118,13 +118,18 @@ def summary_rows(report):
     return rows
 
 
+def wrap(text, width=WARNING_WIDTH):
+    """A panel text wrapped to the panel's width."""
+    return textwrap.wrap(text, width)
+
+
 def warning_lines(report, width=WARNING_WIDTH):
     """(text, first, is_problem) lines for the report's warnings, wrapped to
     the panel's width; first marks the line that starts a warning or a hint."""
     lines = []
 
     def add(text, problem):
-        for i, line in enumerate(textwrap.wrap(text, width)):
+        for i, line in enumerate(wrap(text, width)):
             lines.append((line, i == 0, problem))
 
     for warning in report.get("warnings", []):

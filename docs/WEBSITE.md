@@ -4,8 +4,10 @@ Status 2026-10-22: **the website is built** (Kajetan asked for it on 2026-10-22,
 release): [tools/site/README.md](../tools/site/README.md) describes it, `pages.yml` deploys it. It
 follows the proposal below with three changes: our own small builder instead of Jekyll (the
 whitelist, link rewrite and section pages need it), a Releases page and a Community page, and a home
-page that says "no release yet" until there is one (decision 1 below, answered by making the empty
-state honest rather than waiting). The rest of this note is the original proposal. The release
+page that showed "no release yet" until 0.1.0 (decision 1 below, answered by making the empty
+state honest rather than waiting). The rest of this note is the original proposal; the release
+questions at the end are settled in [RELEASING.md](RELEASING.md) (version check against the manifest,
+draft-only releases, `SHA256SUMS.txt`, build attestations, a portable Linux zip). The release
 workflow itself is being built by the "Release workflow for 0.1" thread; this note covers the web
 page, how the gallery ([gallery/](gallery/README.md)) feeds both, and what to decide first.
 
@@ -63,8 +65,8 @@ For completeness, the questions Kajetan should see answered there, with what I w
   free. Neither helps a user who doesn't check, so the guide should show the one command.
 - **Who runs it:** only Kajetan pushes release tags; the workflow should create a draft release that
   he publishes by hand, so a mistaken tag publishes nothing.
-- **Linux zip:** CLAUDE.md notes the CI Linux zip links the runner's libtbb and glibc; until a
-  portable build exists, a Linux download would fail on older distributions.
+- **Linux zip:** at the time, the CI Linux zip linked the runner's libtbb and glibc. Settled: it is
+  now built in AlmaLinux 8 with static oneTBB and needs glibc 2.28 (RELEASING.md).
 
 ## Privacy guard
 

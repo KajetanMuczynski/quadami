@@ -10,7 +10,7 @@ link of the newest release when the site is built.
 Quadami is an automatic quad remesher for Blender. Select a mesh (a sculpt, a scan, a dense
 triangle model), set how many quads you want, press **Remesh**, and you get a new object made of
 quads that follows the shape, with edge loops that run along it. It is free software
-(GPL-3.0-or-later) and runs on Linux, Windows and macOS, in Blender 4.2 or newer.
+(GPL-3.0-or-later) and runs on Linux, Windows and macOS (Apple silicon; experimental and untested), in Blender 4.2 or newer.
 
 <!-- site:latest-release -->
 
