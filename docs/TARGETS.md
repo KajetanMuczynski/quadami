@@ -108,9 +108,19 @@ sizing (more clean runs, fidelity ×2 worse) and throw away the lead.
 - A **replicate** moves every input coordinate by one float32 ulp (random sign), 5 per run. Double-ulp
   moves can vanish inside the pipeline (the review saw identical output in 16 of 16 such runs), so a
   replicate that reproduces the plain run bit for bit does not count.
-- **Determinism** is per build: same binary, same input, same output across repeats and thread counts.
-  Linux and Windows and macOS builds differ (TODO 2.9: container iteration order), so release checks run
-  on all three platforms.
+- **Determinism** is per build: same binary, same input, same output across repeats, thread counts and
+  machines of one OS (Linux, Windows and macOS runners, Intel and AMD; 2026-10-26) [M]. Builds for
+  different platforms differ: no run of release-check #5 gave the same output on two platforms [M]. In
+  pipeline order the causes are the OBJ reader on arm64 (fused multiply-adds), the math library
+  (glibc, the Windows UCRT and Apple's libm round sin, cos, acos, atan2, exp, pow and hypot
+  differently, and glibc and the UCRT pick FMA code paths by CPU), Eigen's vector code on arm64, and
+  the C++ library's ordering (sort ties in the singularity simplifier, unordered containers in
+  extraction: TODO 2.9) [C]. The simplifier's sort ties are the part that moves a case the same way in
+  every replicate (tie-broken, libstdc++ and libc++ agree within replicate noise on Linux); the rest acts
+  like another replicate [C]. On Linux the output can also depend on the glibc version
+  (classes up to 2.34, 2.35-2.38, 2.39 and later) and on whether the CPU has FMA [I]. So release checks
+  run on all three platforms and compare candidate and baseline on the same platform only
+  (research/platform-divergence-2026-10-26.md).
 - A release check is the corpus × 6 (plain + 5 replicates) on each platform, corpus and closed sets:
   the manual workflow `release-check.yml` (RELEASING.md), not a per-PR job. Both sides on Linux,
   4 cores: 54 min [M] (2026-10-22).
@@ -130,7 +140,7 @@ marked), and a release needs them on every corpus run and replicate.
 | H4 | Islands kept: one output component per input island, none dropped (under half its area within one output edge), split or merged | 54/54; QuadriFlow 50/54. **2026-10-22**, per island (`metrics.py` `validity`): corpus 72/72, sculpt 41/42, private 22/22; **closed 72.7/78**: thin ellipsoids at 150 quads shrink to a blob (up to 86 % of the input area farther than one quad from the output) and torus_0.03 at Quality 150 came out as 3 quads in 2 of 6 replicates, while their topology reads "same as input" [M] | add (`gates.py` computes it) |
 | H5 | Boundaries kept: input boundary loops stay open; closed inputs get no hole | 54/54; csg_bracket fails at adaptivity 1 (2.13). **2026-10-22** per island: corpus 70.5/72 (human_neutral mouth 2 holes in 8 replicate-runs, csg_bracket 1), joined private sword 14/16 (a loop closed) [M] | after 2.13 |
 | H6 | Count within ±10 % of the target, first try | 54/54; QuadriFlow 34/54. **2026-10-22**: corpus 70.7/72, closed 59.8/78 (thin shapes at 150 quads) [M] | yes at 0.6–1.5; tighten to 0.9–1.1 |
-| H7 | Deterministic per build (§2.5) | Linux yes (REFERENCE P8) | later (8.6) |
+| H7 | Deterministic per build (§2.5) | Linux yes (REFERENCE P8). **2026-10-26**: Linux, Windows and macOS yes, the same binary twice on one runner 65/65 byte-identical each [M] | later (8.6) |
 
 ### 3.2 Validity (malformations): a ratchet toward zero
 Zero in every run is the goal, but no method here guarantees it yet: the map still folds before any
