@@ -88,6 +88,14 @@ public:
         m_targetQuadCount = targetQuadCount;
     }
 
+    // Smooth the extracted quads only along the surface (each Laplace step
+    // without its part along the vertex normal) instead of in 3D, so ridges and
+    // creases are not rounded off before the projection onto T.  Off by default.
+    void setTangentialSmoothing(bool tangential)
+    {
+        m_tangentialSmoothing = tangential;
+    }
+
     // Whether libQEx extracted this island, and if not, why.
     const QexOutcome& qexOutcome() const
     {
@@ -161,6 +169,7 @@ private:
     const Boundary* m_inputBoundary = nullptr;
     ProgressHandler m_progressHandler;
     bool m_useQex = true;
+    bool m_tangentialSmoothing = false;
     size_t m_targetQuadCount = 0;
     QexOutcome m_qexOutcome;
     std::map<std::pair<size_t, size_t>, ConnectionInfo> m_connectionInfos;

@@ -67,6 +67,10 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "  --flatten-spikes on|off     with --fold-repair on: where a fold cannot be\n"
                           "                              untangled, also lower needle spikes near it\n"
                           "                              (changes the shape; default off)\n"
+                          "  --quad-smoothing laplacian|tangential\n"
+                          "                              how the extracted quads are smoothed: tangential\n"
+                          "                              slides them along the surface and keeps ridges\n"
+                          "                              and creases (default laplacian)\n"
                           "  --stdin-control             cancel when stdin receives the line \"cancel\"\n"
                           "                              or is closed; the report then says \"cancelled\"\n"
                           "  -h, --help                  show this text\n"
@@ -171,6 +175,11 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
         else if ("--extractor" == name) {
             if (!parseExtractor(value, &parameters.extractor)) {
                 std::fprintf(stderr, "Error: --extractor must be qex or trace, not %s\n", value.c_str());
+                return 1;
+            }
+        } else if ("--quad-smoothing" == name) {
+            if (!parseQuadSmoothing(value, &parameters.quadSmoothing)) {
+                std::fprintf(stderr, "Error: --quad-smoothing must be laplacian or tangential, not %s\n", value.c_str());
                 return 1;
             }
         } else if ("--resolution" == name) {

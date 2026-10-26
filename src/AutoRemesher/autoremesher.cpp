@@ -1236,6 +1236,7 @@ bool AutoRemesher::remeshIslands()
             extractor.setSingularVertices(&run.capturedSingularVertexIndices);
             extractor.setInputBoundary(&ctx.inputBoundary);
             extractor.setUseQex(m_useQex);
+            extractor.setTangentialSmoothing(m_tangentialQuadSmoothing);
             extractor.setTargetQuadCount((size_t)std::max(0.0, ctx.targetQuadCount));
             extractor.setProgressHandler(
                 makeStageProgress(islandIndex, islandParameterizeEnd, 1.0f, 1.0f));
