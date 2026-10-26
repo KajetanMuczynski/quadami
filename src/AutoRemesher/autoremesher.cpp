@@ -20,6 +20,7 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *  SOFTWARE.
  */
+#include "inputsanitizer.h"
 #include "qexextraction.h"
 #include <AutoRemesher/AutoRemesher>
 #include <AutoRemesher/FoldRepair>
@@ -958,7 +959,15 @@ bool AutoRemesher::remeshIslands()
     auto t_start = std::chrono::high_resolution_clock::now();
     const double cpuStart = processCpuSeconds();
 
+    // Open seams first: welding can leave zero-length edges and duplicate
+    // triangles, which the next two steps remove.
+    const SeamWeldStats seams = weldSeams(m_vertices, m_triangles,
+        seamWeldRelativeTolerance * usedBoundingDiagonal(m_vertices, m_triangles));
     InputCleanupStats cleanup = cleanInput(m_vertices, m_triangles, inputCleanupTolerance(m_vertices));
+    cleanup.weldedEdges = seams.weldedEdges;
+    cleanup.weldedVertices = seams.weldedVertices;
+    cleanup.weldKeptParts = seams.keptParts;
+    cleanup.duplicateTriangles = removeDuplicateTriangles(m_triangles);
     orientInput(m_vertices, m_triangles, &cleanup);
     if (m_triangles.empty()) {
         std::cerr << "Input mesh has only degenerate triangles" << std::endl;
@@ -1653,6 +1662,10 @@ bool AutoRemesher::remeshIslands()
         run.set("input_zero_area_triangles", (double)cleanup.zeroAreaTriangles);
         run.set("input_flipped_triangles", (double)cleanup.flippedTriangles);
         run.set("input_non_orientable_pieces", (double)cleanup.nonOrientablePieces);
+        run.set("input_welded_edges", (double)cleanup.weldedEdges);
+        run.set("input_welded_vertices", (double)cleanup.weldedVertices);
+        run.set("input_weld_kept_parts", (double)cleanup.weldKeptParts);
+        run.set("input_duplicate_triangles", (double)cleanup.duplicateTriangles);
         {
             run.set("input_fold_repair", m_repairInputFolds ? 1.0 : 0.0);
             run.set("input_folded_triangles", (double)folds.foldedTriangles);

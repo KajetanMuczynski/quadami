@@ -80,6 +80,7 @@ add_library(autoremesher_core STATIC
     src/AutoRemesher/surfacemesh.cpp
     src/AutoRemesher/surfaceprojector.cpp
     src/AutoRemesher/thinparts.cpp
+    src/AutoRemesher/inputsanitizer.cpp
     src/AutoRemesher/untangler.cpp
     "${THIRDPARTY}/isotropicremesher/isotropicremesher.cpp"
     "${THIRDPARTY}/isotropicremesher/isotropichalfedgemesh.cpp"

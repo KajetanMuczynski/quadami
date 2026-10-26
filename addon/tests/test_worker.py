@@ -184,6 +184,10 @@ class ReportTest(unittest.TestCase):
             "status": "ok", "parameters": {"target_quads": 5000}, "output": {"quads": 4962},
             "diagnostics": {"input_dropped_triangles": 2, "input_flipped_triangles": 240}})
         self.assertIn(("Input cleanup", "2 degenerate triangles removed, 240 triangles turned", False), rows)
+        rows = report.summary_rows({
+            "status": "ok", "parameters": {"target_quads": 5000}, "output": {"quads": 4962},
+            "diagnostics": {"input_welded_edges": 270, "input_duplicate_triangles": 12}})
+        self.assertIn(("Input cleanup", "270 seam edges welded, 12 duplicate faces removed", False), rows)
 
 
     def test_fold_rows(self):

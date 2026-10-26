@@ -35,6 +35,9 @@ measured in quad edges. Families (set name stress_<family>):
   folds      spot with 5 local twists of 90-720 degrees (brush-like folded input, 2.20).
   coarse     icosphere of 80 and 320 triangles and a 12-triangle cube at 500-8000 quads (E3).
   selfint    sphere with a dent pushed to depth 1.0 (touching) and 2.2 R (through the far wall) (E4).
+  sanitize   input defects of TODO 2.7: unwelded seams (exact and with a gap), Edge Split on a CAD part,
+             duplicate faces, a double-sided shell, pinched (non-manifold) vertices, T-junctions sealed by
+             zero-area triangles, a far loose vertex. Needs synthetic/csg_bracket.obj next to downloads/.
 """
 import argparse
 import json
@@ -409,13 +412,137 @@ def fam_selfint(ctx):
         yield f"selfint_dent{depth:g}", (V, F), {"depth": depth}, None
 
 
-FAMILIES = {"thin": (fam_thin, [500, 2000, 8000, 32000]), "attached": (fam_attached, [500, 2000, 8000, 32000]),
+def split_vertices_along(V, F, cut):
+    """Unweld the edges where cut[f] is True on one face and False on the other: each vertex gets one copy
+    per side, at the same position (what Edge Split or an export without merge leaves)."""
+    F = F.copy()
+    copy = {}
+    for fi in np.nonzero(cut)[0]:
+        for k in range(3):
+            v = F[fi, k]
+            if v not in copy:
+                copy[v] = len(V) + len(copy)
+            F[fi, k] = copy[v]
+    used_uncut = np.zeros(len(V), bool)
+    used_uncut[F[~cut].ravel()] = True
+    order = sorted(copy, key=copy.get)
+    V2 = np.concatenate([V, V[order]])
+    # Vertices that only cut faces use become unused; drop them so the mesh has no loose vertices.
+    keep = np.ones(len(V2), bool)
+    keep[:len(V)] = used_uncut
+    remap = np.cumsum(keep) - 1
+    return V2[keep], remap[F]
+
+
+def fam_sanitize(ctx):
+    """Input defects TODO 2.7 is about, each on spot (genus 0, 23k triangles) unless named."""
+    V, F = read_obj(os.path.join(ctx.downloads, "spot.obj"))
+    rng = np.random.default_rng(27)
+    C = V[F].mean(1)
+    # Unwelded along a closed seam (a plane cut): two open pieces whose boundaries coincide.
+    Vs, Fs = split_vertices_along(V, F, C[:, 0] > 0.05)
+    yield "san_seam", (Vs, Fs), {"kind": "spot unwelded along one plane cut (two coincident boundaries)"}, None
+    # Unwelded along a seam with a gap of 1e-5 of the diagonal, as a float32 round trip or a sloppy merge leaves.
+    diag = float(np.linalg.norm(V.max(0) - V.min(0)))
+    Vg = Vs.copy()
+    Vg[len(V):] += rng.normal(size=(len(Vs) - len(V), 3)) * 1e-5 * diag
+    yield "san_seam_gap", (Vg, Fs), {"kind": "spot unwelded along one plane cut, 1e-5 diagonal gap"}, None
+    # Edge Split by angle on a CAD part: every flat region its own island.
+    Vb, Fb = read_obj(os.path.join(os.path.dirname(ctx.downloads.rstrip("/")), "synthetic", "csg_bracket.obj"))
+    Vb, Fb = edge_split(Vb, Fb, 30.0)
+    yield "san_edgesplit_bracket", (Vb, Fb), {"kind": "csg_bracket after Edge Split at 30 degrees"}, None
+    # Duplicate faces sharing the vertices: same winding, opposite winding, and the whole shell twice.
+    sel = rng.random(len(F)) < 0.05
+    yield "san_dupfaces", (V, np.concatenate([F, F[sel]])), {"kind": "5 % of faces twice, same winding"}, None
+    yield "san_dupfaces_flipped", (V, np.concatenate([F, F[sel][:, ::-1]])), \
+        {"kind": "5 % of faces twice, opposite winding"}, None
+    yield "san_double_sided", (V, np.concatenate([F, F[:, ::-1]])), \
+        {"kind": "every face twice, opposite winding (zero-thickness Solidify, double-sided export)"}, None
+    # Non-manifold vertices inside one surface: 3 pairs of far-apart vertices welded (pinches).
+    Vp, Fp = V.copy(), F.copy()
+    pairs = []
+    for _ in range(3):
+        a = int(rng.integers(len(V)))
+        b = int(np.argmax(np.linalg.norm(V - V[a], axis=1) * (np.abs(V[:, 0] - V[a, 0]) < 0.3)))
+        pairs.append((a, b))
+        Vp[a] = Vp[b] = 0.5 * (V[a] + V[b])
+    yield "san_pinch_moved", (Vp, Fp), {"kind": "3 pairs of vertices moved to one point, not welded"}, None
+    for a, b in pairs:
+        Fp[Fp == b] = a
+    yield "san_pinch", (Vp, Fp), {"kind": "3 pairs of far-apart vertices welded (non-manifold vertices)"}, None
+    # T-junctions sealed by zero-area triangles (exact booleans, CAD stitching).
+    yield "san_tcaps", sealed_t_junctions(V, F, 0.02, rng), \
+        {"kind": "2 % of edges split on one side, sealed by a zero-area triangle"}, None
+    # Loose vertices far away inflate the bounding box.
+    for far in (1e3, 1e5):
+        yield f"san_loose_vertex_{far:g}", (np.concatenate([V, [[far, 0.0, 0.0]]]), F), \
+            {"kind": f"one loose vertex at {far:g}"}, None
+
+
+def edge_split(V, F, degrees):
+    """Blender's Edge Split modifier by angle: unweld every edge whose faces meet at more than `degrees`."""
+    N = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])
+    N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-300)
+    E = {}
+    for fi, f in enumerate(F):
+        for k in range(3):
+            E.setdefault(tuple(sorted((int(f[k]), int(f[(k + 1) % 3])))), []).append(fi)
+    # Faces joined across smooth edges stay together; each corner is copied per smooth fan around its vertex.
+    parent = {}
+
+    def root(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    cos = math.cos(math.radians(degrees))
+    for (a, b), fs in E.items():
+        if len(fs) == 2 and float(N[fs[0]] @ N[fs[1]]) >= cos:
+            for v in (a, b):
+                ra, rb = root((fs[0], v)), root((fs[1], v))
+                if ra != rb:
+                    parent[ra] = rb
+    newV, index, F2 = [], {}, F.copy()
+    for fi, f in enumerate(F):
+        for k in range(3):
+            r = root((fi, int(f[k])))
+            if r not in index:
+                index[r] = len(newV)
+                newV.append(V[f[k]])
+            F2[fi, k] = index[r]
+    return np.array(newV), F2
+
+
+def sealed_t_junctions(V, F, share, rng):
+    """Split a share of edges at their midpoint on one side only and seal the slit with a zero-area triangle."""
+    E = {}
+    for fi, f in enumerate(F):
+        for k in range(3):
+            E.setdefault((int(f[k]), int(f[(k + 1) % 3])), fi)
+    Vl, Fl = list(V), [list(f) for f in F]
+    touched = np.zeros(len(F), bool)
+    for (a, b), fi in sorted(E.items()):
+        if rng.random() >= share or (b, a) not in E or touched[fi] or touched[E[(b, a)]]:
+            continue
+        touched[fi] = touched[E[(b, a)]] = True
+        f = Fl[fi]
+        c = [x for x in f if x not in (a, b)][0]
+        m = len(Vl)
+        Vl.append(0.5 * (V[a] + V[b]))
+        Fl[fi] = [a, m, c]       # f walks a -> b -> c
+        Fl.append([m, b, c])
+        Fl.append([a, b, m])     # zero area: walks m -> a and b -> m against the two halves, a -> b against b -> a
+    return np.array(Vl), np.array(Fl, np.int64)
+
+
+FAMILIES = {"thin":(fam_thin, [500, 2000, 8000, 32000]), "attached": (fam_attached, [500, 2000, 8000, 32000]),
             "ribbon": (fam_ribbon, [500, 2000, 8000, 32000]), "islands": (fam_islands, [2000, 8000]),
             "contact": (fam_contact, [2000, 8000]), "degenerate": (fam_degenerate, [2000, 8000]),
             "topology": (fam_topology, [2000, 8000]), "scale": (fam_scale, [2000]),
             "highpoly": (fam_highpoly, [5000, 50000]), "spikes": (fam_spikes, [2000, 8000]),
             "jitter": (fam_jitter, [2000, 10000]), "folds": (fam_folds, [2000, 10000]),
-            "coarse": (fam_coarse, [500, 2000, 8000]), "selfint": (fam_selfint, [2000, 8000])}
+            "coarse": (fam_coarse, [500, 2000, 8000]), "selfint": (fam_selfint, [2000, 8000]),
+            "sanitize": (fam_sanitize, [2000, 8000])}
 
 
 class Ctx:

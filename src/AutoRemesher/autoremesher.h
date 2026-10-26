@@ -315,6 +315,13 @@ public:
         // them (a Moebius strip).
         size_t flippedTriangles = 0;
         size_t nonOrientablePieces = 0;
+        // Open seams joined by weldSeams() (inputsanitizer.h): boundary edge
+        // pairs, vertices merged, and parts left unwelded.
+        size_t weldedEdges = 0;
+        size_t weldedVertices = 0;
+        size_t weldKeptParts = 0;
+        // Triangles removed because an earlier one has the same corners.
+        size_t duplicateTriangles = 0;
     };
 
     // Edges up to this long are rounding noise of the float32 positions
