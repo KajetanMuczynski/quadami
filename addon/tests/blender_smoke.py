@@ -88,17 +88,17 @@ try:
     for polygon in mesh.polygons:
         polygon.material_index = int(polygon.center.z < 0)
     weights = source.vertex_groups.new(name="Weights")
-    density = mesh.color_attributes.new("Density", "FLOAT_COLOR", "POINT")
     for vertex in mesh.vertices:
         weights.add([vertex.index], max(vertex.co.x, 0.0), "REPLACE")
+    density = mesh.color_attributes.new("Density", "FLOAT_COLOR", "POINT")
+    for vertex in mesh.vertices:
         density.data[vertex.index].color = (max(vertex.co.x, 0.0), 0.0, 0.0, 1.0)
-    sharp = mesh.attributes.new("sharp_edge", "BOOLEAN", "EDGE")
-    crease = mesh.attributes.new("crease_edge", "FLOAT", "EDGE")
-    for edge in mesh.edges:
-        if all(abs(mesh.vertices[v].co.z) < 1e-4 for v in edge.vertices):
-            sharp.data[edge.index].value = True
-            crease.data[edge.index].value = 0.5
-            edge.use_seam = True
+    # Each layer written right after it is looked up: adding a layer (the
+    # first use_seam adds one) can move the others in Blender 4.2.
+    equator = [all(abs(mesh.vertices[v].co.z) < 1e-4 for v in edge.vertices) for edge in mesh.edges]
+    mesh.edges.foreach_set("use_seam", equator)
+    mesh.attributes.new("sharp_edge", "BOOLEAN", "EDGE").data.foreach_set("value", equator)
+    mesh.attributes.new("crease_edge", "FLOAT", "EDGE").data.foreach_set("value", [0.5 * e for e in equator])
     bpy.context.view_layer.update()
 
     positions, triangles, smooth = addon._mesh_arrays(bpy.context, source)
