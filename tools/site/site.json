@@ -11,6 +11,7 @@
     {"path": "guide", "nav": "User guide", "source": "docs/USER-GUIDE.md"},
     {"path": "results", "nav": "Results", "source": "docs/gallery/README.md"},
     {"path": "community", "nav": "Community", "source": "docs/site/community.md"},
+    {"path": "contact", "nav": "Contact", "source": "README.md", "sections": ["Contact"], "title": "Contact"},
     {"path": "credits", "nav": "Credits & license", "source": "README.md", "sections": ["License", "Origin and credits"], "title": "Credits and license"},
     {"path": "building", "source": "docs/BUILDING.md"}
   ],

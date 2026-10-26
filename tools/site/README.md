@@ -30,6 +30,7 @@ Only the pages in [site.json](site.json), each one Markdown file or some of its 
 | User guide | `docs/USER-GUIDE.md` |
 | Results | `docs/gallery/README.md` and its images |
 | Community | `docs/site/community.md` |
+| Contact | `README.md`, section "Contact" |
 | Credits & license | `README.md`, sections "License" and "Origin and credits" |
 | Building (not in the menu) | `docs/BUILDING.md` |
 
