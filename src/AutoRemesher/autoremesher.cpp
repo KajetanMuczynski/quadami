@@ -110,10 +110,15 @@ namespace {
 
     // Thin-island floor (TODO 4.1, research/thin-part-sizing-note-2026-10-23.md):
     // the other islands give up at most this share of their quads to thin
-    // ones, so their quad edges grow by at most 1/sqrt(0.75), 15 %.  The
+    // ones, so their quad edges grow by at most 1/sqrt(0.75), 15 %, and none
+    // goes below the payer minimum (triangles).  A thin island asks for at
+    // most this growth of its count: a plate or strap of a hard-surface prop
+    // reads thin and would otherwise ask for 10-75 times the budget.  The
     // width of an island is measured on at most this many of its vertices.
     const double thinIslandBudgetShare = 0.25;
-    const size_t thinIslandWidthSamples = 4096;
+    const double thinIslandPayerMinimumTriangleCount = 256.0;
+    const double thinIslandMaximumGrowth = 4.0;
+    const size_t thinIslandWidthSamples = 1024;
 
     // An island whose count is raised (small-island minimum, thin-island
     // floor, retries) gets its T resolution from area / count.  On a sliver
@@ -1141,9 +1146,10 @@ bool AutoRemesher::remeshIslands()
     // joined to a body, can only be kept by more quads on it.  An island
     // whose width (islandThinWidth, on the input) is under
     // m_thinIslandQuadsAcross quad edges asks for the edge width / quads
-    // across.  The other islands pay for it, but give up at most
-    // thinIslandBudgetShare of their quads, and islands at or near the
-    // small-island minimum pay nothing.  When the budget is short, the extra
+    // across, up to thinIslandMaximumGrowth times its count.  The other
+    // islands pay for it, each giving up at most thinIslandBudgetShare of its
+    // quads and keeping at least thinIslandPayerMinimumTriangleCount, so
+    // that small parts, barely resolved themselves, pay nothing.  When the budget is short, the extra
     // is shared by water filling: an island that asks for less than an
     // equal part gets all it asks for, so one very thin island (or a doubled
     // shell measuring zero width) cannot take everything.  The total stays
@@ -1167,25 +1173,28 @@ bool AutoRemesher::remeshIslands()
                 }
             });
         std::vector<double> wantedTriangleCounts(islandContexes.size(), 0.0);
-        std::vector<bool> pays(islandContexes.size(), false);
-        double payingTriangles = 0.0;
+        // What each paying island can give up.
+        std::vector<double> payableTriangleCounts(islandContexes.size(), 0.0);
+        double payableTriangles = 0.0;
         for (size_t i = 0; i < islandContexes.size(); ++i) {
             const double triangleCount = std::max(shareTriangleCounts[i], floorTriangleCountOf(i));
+            if (!(islandThinWidths[i] < m_thinIslandQuadsAcross * std::sqrt(islandContexes[i].area / (0.5 * triangleCount)))) {
+                payableTriangleCounts[i] = std::max(0.0, std::min(thinIslandBudgetShare * shareTriangleCounts[i], shareTriangleCounts[i] - thinIslandPayerMinimumTriangleCount));
+                payableTriangles += payableTriangleCounts[i];
+                continue;
+            }
             const double quadEdge = islandThinWidths[i] / m_thinIslandQuadsAcross;
-            const double wanted = quadEdge > 0.0 && std::isfinite(quadEdge)
-                ? 2.0 * islandContexes[i].area / (quadEdge * quadEdge)
-                : 0.0;
+            const double wanted = quadEdge > 0.0
+                ? std::min(2.0 * islandContexes[i].area / (quadEdge * quadEdge), thinIslandMaximumGrowth * triangleCount)
+                : thinIslandMaximumGrowth * triangleCount;
             if (wanted > triangleCount) {
                 wantedTriangleCounts[i] = wanted - triangleCount;
                 thinFloorWantedTriangles += wantedTriangleCounts[i];
                 ++thinFloorIslands;
-            } else if (shareTriangleCounts[i] >= minimumIslandTriangleCount) {
-                pays[i] = true;
-                payingTriangles += shareTriangleCounts[i];
             }
         }
-        if (thinFloorWantedTriangles > 0.0 && payingTriangles > 0.0) {
-            thinFloorGivenTriangles = std::min(thinFloorWantedTriangles, thinIslandBudgetShare * payingTriangles);
+        if (thinFloorWantedTriangles > 0.0 && payableTriangles > 0.0) {
+            thinFloorGivenTriangles = std::min(thinFloorWantedTriangles, payableTriangles);
             std::vector<double> asks;
             for (double wanted : wantedTriangleCounts)
                 if (wanted > 0.0)
@@ -1200,15 +1209,13 @@ bool AutoRemesher::remeshIslands()
                 }
                 left -= asks[k];
             }
-            // A paying island keeps at least its minimum, which can leave the
-            // total a fraction of a quad above the target.
-            const double kept = 1.0 - thinFloorGivenTriangles / payingTriangles;
+            const double paid = thinFloorGivenTriangles / payableTriangles;
             for (size_t i = 0; i < islandContexes.size(); ++i) {
                 if (wantedTriangleCounts[i] > 0.0)
                     islandTriangleCounts[i] = std::max(shareTriangleCounts[i], floorTriangleCountOf(i))
                         + std::min(wantedTriangleCounts[i], level);
-                else if (pays[i])
-                    islandTriangleCounts[i] = std::max(kept * shareTriangleCounts[i], floorTriangleCountOf(i));
+                else if (payableTriangleCounts[i] > 0.0)
+                    islandTriangleCounts[i] = shareTriangleCounts[i] - paid * payableTriangleCounts[i];
             }
         }
     }
