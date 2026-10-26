@@ -156,7 +156,8 @@ build/cli-install/bin/autoremesher-cli -i in.obj -o out.obj --target-quads 5000 
 ```
 
 `--help` lists every option (the panel's settings, plus `--fold-repair on` for the panel's Repair
-Folds button and `--extractor qex|trace` to compare libQEx with the older extractor); `--version` prints the
-build id. Exit status 0 means success, 2 a rejected, cancelled or empty result. The report's format is
+Folds button, `--flatten-spikes on` for its Also Flatten Needle Spikes box, and `--extractor qex|trace`
+to compare libQEx with the older extractor); `--version` prints the build id. Exit status 0 means
+success, 1 a wrong command line, 2 a rejected, cancelled or empty result. The report's format is
 the `autoremesher.remesh-result` schema, written in `src/AutoRemesher/remesh.cpp`; `addon/quadami/worker.py` shows how the add-on
 reads it.

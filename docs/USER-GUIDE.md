@@ -8,7 +8,7 @@ Copyright (C) 2026 Quadami contributors
 For people who sculpt or model in Blender and want a clean quad mesh, and who are not programmers.
 Written for **Blender 4.5 LTS**; Blender 4.2 and newer work the same way.
 
-What the add-on does is checked against its code (`addon/quadami/`, master of 2026-10-22). Blender's
+What the add-on does is checked against its code (`addon/quadami/`, master of 2026-10-26). Blender's
 own menus are described from memory where marked *(from memory, check)*: if a menu looks different on
 your screen, trust your screen and tell us.
 
@@ -175,8 +175,25 @@ check)*. Target Quads 2000 is a good first try on it.
 5. The bottom status bar shows `Quadami: 42% <step> (Esc to cancel)`. Blender stays usable meanwhile.
    **Esc** or the panel's **Cancel** stops it; nothing is added then.
 6. When done, a new object **<name>_remesh** appears and is selected, and your original is **hidden, not
-   deleted** (Outliner, top right: click its closed eye icon to show it again). The panel shows the
-   result rows ([§5](#5-reading-the-result)).
+   deleted**, in the viewport and in renders (Outliner, top right: click its closed eye icon to show it
+   again; to render it again, also click its camera icon, which the Outliner's **Filter** menu can show).
+   The panel shows the result rows ([§5](#5-reading-the-result)).
+
+**What the result keeps:** the original's parent, position, rotation, scale and collections, so it
+moves with the same parent (a rig or an empty). It is smooth shaded if the original mostly was, flat
+if the original was flat. No edges are marked sharp, so on a hard-surface model the creases look soft:
+right-click the result > **Shade Auto Smooth** *(from memory, check)*. It does **not** keep UVs,
+materials, vertex groups, sharp edges, creases or seams yet.
+
+**Remesh again, other settings:** with the result selected, change the settings and press **Remesh**.
+It remeshes your **original** again (the panel's **Source** field under the button names it), never the
+quad result, and the new result replaces the old one (the old one is hidden). To remesh the result
+itself instead, clear **Source** with its **X**.
+
+**Scale evenly, or apply the scale.** The remesher works on the object as if its scale were 1, so an
+object scaled unevenly (say 3 along X, 1 along Y and Z) comes out with quads stretched 3 : 1. The panel
+warns in red under **Remesh** when the scale differs by more than 5 % between axes. Fix: select the
+object, **Ctrl+A > Scale**, then remesh.
 
 To see the new wireframe: **Tab** into Edit Mode (Tab again to leave), or the **Overlays** drop-down in
 the viewport header > tick **Wireframe** *(from memory, check)*.
@@ -255,15 +272,16 @@ Warnings appear under the rows, with a red icon when they are a problem.
 | Red **Non-manifold vertices** or **edges** | Points or edges that are not a clean surface. | Same as holes: another Target Quads, or clean the input at that spot. Report it with the build line if it stays. |
 | **"N of M islands produced no faces"**, red **Empty islands** | A small separate piece (an eyeball, a tiny flower) got nothing. | Raise Target Quads, or remesh that piece on its own: Edit Mode, select it, **P > Selection** to make it its own object *(from memory, check)*, and remesh both. |
 | **"Parts of the model are missing in the result (up to N quad widths away). …"**, red **Missing parts** | A part thinner than about two quads (a vine, a strap, a finger, a spike) was smoothed away or cut off. The model is still one piece where it was, so no other row shows it. | Raise Target Quads until the warning goes away; each doubling halves the quad width. Or remesh the thin part on its own at a higher target ([§7](#7-sculpts-what-works-and-what-struggles)). |
-| **"P % of the surface (S spots) is thinner than one quad; expect folds or lost parts there. Try at least N target quads, or thicken those parts"** | Parts of your model are thinner than one quad is wide (leaves, vines, a blade edge). A risk, not a defect: about a third of the runs it fires on come out clean. When no count fits, it says to thicken those parts. | Raise Target Quads to the suggested number (a lower bound: on very thin parts it keeps growing), or thicken the part: Edit Mode, select it, **Alt+S** (Shrink/Fatten) and move the mouse outwards. |
+| **"P % of the surface (S spots) is thinner than one quad; expect folds or lost parts there. At least N target quads (an estimate) would fit a quad across about half of it, but each raise also reveals thinner parts, so it can take several raises; thickening those parts is usually the better fix"** | Parts of your model are thinner than one quad is wide (leaves, vines, a blade edge). A risk, not a defect: most runs it fires on have folds or lost parts there, but some come out clean. N is a first step, not the count that clears the warning: a higher count measures the parts more finely and finds thinner ones (on a vine-covered test sword the estimate was 1.6 to 2.1 times the count asked for at every count from 3,000 to 75,000). When no count fits, it says to thicken those parts. | Raise Target Quads to about N: the thin share shrinks (on that sword from 19 % at 3,000 to 3 % at 35,000), but it can take several raises, each costing more quads. Thickening the part is usually cheaper: Edit Mode, select it, **Alt+S** (Shrink/Fatten) and move the mouse outwards. |
 | **"K islands came out with far fewer quads than planned (smallest: F of P)"** | A separate piece came out as a lump of a few quads instead of its shape, usually because it is thin or small for the target. | Raise Target Quads, or remesh that piece on its own (as for empty islands). |
+| **"… is scaled unevenly (N : 1), so the quads come out stretched …"** | The object (or its parent) is scaled differently along its axes, and the quads stretch the same way. | Select the original, **Ctrl+A > Scale**, and remesh again ([§3](#3-your-first-remesh)). |
 | **"Blender's mesh validation changed the result"** | Blender had to repair the remesher's result when building the object. Should not happen. | Report it with the build line and the settings. |
 | Title **Invalid input** | The model cannot be remeshed as it is: no faces, broken coordinates, a target of 0 or above 2,000,000. The reason is shown under it. | Fix what it says. "The mesh has no faces" means you picked a mesh of only points or edges. |
 | Title **Failed** | The remesher stopped (e.g. "remeshing produced no faces"). | Try another Target Quads or Fast/Quality, then report it ([§9](#9-troubleshooting)). |
 | Title **Cancelled** | You pressed Esc or Cancel, or Blender stopped it (loading another file). If the remesher does not stop within 5 seconds, the add-on kills it. | Nothing to do. |
 
-*Planned, not yet in the add-on:* a warning before remeshing when the input has thin parts or
-self-intersections.
+*Planned, not yet in the add-on:* a check *before* remeshing for self-intersections and thin
+parts (today thin and missing parts are reported after the run, as above).
 
 ---
 
@@ -288,8 +306,8 @@ From the project's measurements on real sculpts and on synthetic brush tests (Oc
 | Situation | What happens | What helps |
 |---|---|---|
 | **Thin parts** (vines, leaves, cloth, thin blades) thinner than one quad | Quads fold over the thin edge, and the count of handles and holes can come out wrong. Every remesher we compared folds there. | Raise Target Quads until the thin part is at least one or two quads across: on a ribbony test object, 12,000+ instead of 3,000 cut the "too thin" area from 46 % to 17 %. Adaptivity does not help. For flat sheets with no thickness (a leaf plane, cloth), add a **Solidify** modifier first (wrench tab > **Add Modifier > Generate > Solidify** *(from memory, check)*); the add-on uses it without applying. The panel warns when parts are thinner than one quad or missing from the result ([§6](#6-warnings-and-what-to-do)). |
-| **Pleats from the Twist/Rotate brush**, creases pinched past themselves | The original surface is folded there. On one of our test sculpts, 94–100 % of all folds, non-quads and holes sat within two quads of such spots. | In Sculpt Mode, smooth the spot (**Smooth** brush, or hold **Shift** while sculpting *(from memory, check)*) or voxel-remesh the sculpt (**Remesh** in the Sculpt Mode header, or **Ctrl+R** *(from memory, check)*) and remesh again. Or press **Repair Folds and Re-run** after the remesh ([§8](#8-folded-input-and-repair-folds)). |
-| **Holes in a closed sculpt** at higher counts | On that test sculpt, holes appeared from 6,000 quads up in most runs, all at the pleats above. | As above; and the **Holes** row now shows them. |
+| **Pleats from the Twist/Rotate brush**, creases pinched past themselves | The original surface is folded there. On our two test sculpts, about three quarters of the remaining defects sit within two quads of such spots; most of the rest are on thin parts. | In Sculpt Mode, smooth the spot (**Smooth** brush, or hold **Shift** while sculpting *(from memory, check)*) or voxel-remesh the sculpt (**Remesh** in the Sculpt Mode header, or **Ctrl+R** *(from memory, check)*) and remesh again. Or press **Repair Folds and Re-run** after the remesh ([§8](#8-folded-input-and-repair-folds)). |
+| **Holes in a closed sculpt** at higher counts | On the head test sculpt, before libQEx became the extractor, holes appeared from 6,000 quads up in most runs, all at the pleats above. | As above; and the **Holes** row now shows them. |
 | **Crevices narrower than a quad** (deep pinched grooves, eyelid lines) | Folded quads in the groove; at high counts sometimes an extra tunnel across the groove. | More quads, or soften the groove. |
 | **Sharp tips and spikes** | A non-quad or a crowded pole at the tip. | Usually acceptable; more quads. |
 | **Small tunnels** (a gap thinner than about 3 quads, e.g. between an arm and the body) | It may close. | Raise Target Quads until the tunnel is several quads wide. |
@@ -349,6 +367,7 @@ What it does and does not do:
 | **Build line is red** | Add-on and remesher are from different builds: reinstall the zip. |
 | **macOS refuses to start the remesher** | The program is not notarized by Apple. Untested on a real Mac: in the Terminal, `xattr -dr com.apple.quarantine <add-on folder>` (the folder that holds the `bin/autoremesher-cli` shown after *Using:* in the add-on preferences). |
 | **The result is missing / my model vanished** | The original is hidden, not deleted: Outliner, click its eye icon. The result is `<name>_remesh`. |
+| **"Cannot remesh the original: …"** | Remesh on a result runs on its original, which must be in the scene: not deleted, not disabled in viewports (the monitor icon in the Outliner), not in an excluded collection. Show it, or clear **Source** in the panel to remesh the selected result itself. |
 | **Too few or too many quads** | Within 60–150 % of the target is normal. Thin parts and many small pieces push it around. Adjust Target Quads. |
 | **Folded faces / non-quads in one area** | Look at the input there ([§7](#7-sculpts-what-works-and-what-struggles)): a pleat, a thin part, a narrow groove. Try ±10 % Target Quads; small changes in the count move defects around. |
 | **It takes very long or the computer slows down** | Press Esc. Lower Target Quads or use Fast. Memory is about 2 GB per 100,000 quads. |

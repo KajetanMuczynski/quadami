@@ -33,7 +33,8 @@ Each statement is tagged:
 
 A PR's own run also has an `addon-windows-x64` artifact; its build line then reads
 `pr<N> <sha>+master`. Artifacts expire after GitHub's retention period (90 days unless the repo
-says otherwise, *(memory)*); a tagged release has no Windows zip yet.
+says otherwise, *(memory)*). A published release has its own `quadami-<version>-windows-x64.zip`
+under **Assets** on the Releases page, with no outer wrapper.
 
 Every zip carries `build-id.txt` (commit and date), e.g. `bfa0397 2026-10-21` *(CI)*. The version
 in Blender's list stays 0.1.0 for every build, so the build line is the only way to tell builds apart.

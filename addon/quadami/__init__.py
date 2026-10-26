@@ -33,8 +33,12 @@ from . import worker
 from .names import ID, NAME
 
 REPORT_PROPERTY = ID + "_report"
-# Name of the object a result was made from, for "Repair Folds and Re-run".
+# Object property (a pointer, so it survives renames): the object a result was
+# made from. Remesh and "Repair Folds and Re-run" on a result run on it.
 SOURCE_PROPERTY = ID + "_source"
+# Above this ratio of the largest to the smallest scale axis the panel and the
+# report warn that the quads come out stretched (the core works in object space).
+UNEVEN_SCALE_RATIO = 1.05
 
 # The one running job and the last result, shared by the operator and the panel.
 _job = None
@@ -155,7 +159,8 @@ ADVANCED_PARAMETERS = ("resolution", "anisotropy", "edge_scaling", "smooth_norma
 
 
 def _mesh_arrays(context, obj):
-    """Vertex positions and triangles of the evaluated mesh, in object space."""
+    """Vertex positions and triangles of the evaluated mesh, in object space,
+    and whether most of its faces are smooth shaded."""
     depsgraph = context.evaluated_depsgraph_get()
     evaluated = obj.evaluated_get(depsgraph)
     mesh = evaluated.to_mesh()
@@ -165,31 +170,101 @@ def _mesh_arrays(context, obj):
         mesh.vertices.foreach_get("co", positions)
         triangles = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int32)
         mesh.loop_triangles.foreach_get("vertices", triangles)
+        smooth_faces = np.empty(len(mesh.polygons), dtype=bool)
+        mesh.polygons.foreach_get("use_smooth", smooth_faces)
     finally:
         evaluated.to_mesh_clear()
-    return positions.reshape(-1, 3), triangles.reshape(-1, 3)
+    smooth = bool(smooth_faces.size) and 2 * np.count_nonzero(smooth_faces) >= smooth_faces.size
+    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth
 
 
-def _build_object(context, source_name, matrix, collection_names, outcome):
-    mesh = bpy.data.meshes.new(source_name + "_remesh")
+def _source(obj):
+    """The object a result was made from, or None if obj is not a result or
+    its source was deleted."""
+    source = getattr(obj, SOURCE_PROPERTY, None) if obj is not None else None
+    return source if source is not obj else None
+
+
+def _source_problem(context, source):
+    """Why the source object cannot be remeshed now, or None. Only an object
+    the depsgraph evaluates can be read: hidden with H is fine, disabled in
+    viewports or outside the view layer is not."""
+    if source.type != "MESH":
+        return "\"%s\" is not a mesh" % source.name
+    if source.name not in context.view_layer.objects:
+        return "\"%s\" is not in this view layer" % source.name
+    if source.hide_viewport:
+        return "\"%s\" is disabled in viewports (Outliner: monitor icon)" % source.name
+    return None
+
+
+def _scale_ratio(obj):
+    """Largest over smallest stretch of the object's world matrix (singular
+    values, so shear from a rotated parent counts too); 0 if degenerate."""
+    stretch = np.linalg.svd(np.array(obj.matrix_world.to_3x3()), compute_uv=False)
+    return float(stretch[0] / stretch[-1]) if stretch[-1] > 0 else 0.0
+
+
+def _uneven_scale_warning(obj):
+    ratio = _scale_ratio(obj)
+    if ratio != 0.0 and ratio <= UNEVEN_SCALE_RATIO:
+        return None
+    return ("\"%s\" is scaled unevenly (%s), so the quads come out stretched. Apply the "
+            "scale first: select it, Ctrl+A > Scale, then remesh."
+            % (obj.name, "%.2f : 1" % ratio if ratio else "flattened to zero"))
+
+
+def _place_like(obj, source):
+    """Give obj the source's parent, local transform and collections, so it
+    sits where the source is and moves with the source's parent."""
+    obj.parent = source.parent
+    if source.parent is not None:
+        obj.parent_type = source.parent_type
+        obj.parent_bone = source.parent_bone
+        obj.parent_vertices = source.parent_vertices
+        obj.matrix_parent_inverse = source.matrix_parent_inverse.copy()
+    obj.rotation_mode = source.rotation_mode
+    for name in ("location", "rotation_euler", "rotation_quaternion", "rotation_axis_angle", "scale",
+                 "delta_location", "delta_rotation_euler", "delta_rotation_quaternion", "delta_scale"):
+        setattr(obj, name, getattr(source, name))
+
+
+def _build_object(context, source, outcome, smooth, warnings=()):
+    """The result object, linked next to the source and placed like it,
+    smooth shaded if the source mostly was. No edges are marked sharp: no
+    angle threshold suits both sculpts and hard surfaces (at 30 degrees 7-21 %
+    of the edges of 5k-quad sculpts, at 90 a few stray edges of a cube)."""
+    mesh = bpy.data.meshes.new(source.name + "_remesh")
     offsets = np.concatenate(([0], np.cumsum(outcome.face_sizes, dtype=np.int64)))
     indices = outcome.face_indices.tolist()
     faces = [indices[offsets[i]:offsets[i + 1]] for i in range(len(outcome.face_sizes))]
-    mesh.from_pydata(outcome.positions.tolist(), [], faces)
+    mesh.from_pydata(outcome.positions.tolist(), [], faces, shade_flat=not smooth)
     changed = mesh.validate()
     mesh.update()
-    obj = bpy.data.objects.new(source_name + "_remesh", mesh)
-    obj.matrix_world = matrix
-    collections = [bpy.data.collections.get(name) for name in collection_names]
-    collections = [c for c in collections if c is not None] or [context.scene.collection]
-    for collection in collections:
+    obj = bpy.data.objects.new(source.name + "_remesh", mesh)
+    _place_like(obj, source)
+    for collection in source.users_collection or [context.scene.collection]:
         collection.objects.link(obj)
     report = dict(outcome.report)
+    report["warnings"] = list(report.get("warnings", [])) + list(warnings)
     if changed:
-        report.setdefault("warnings", []).append("Blender's mesh validation changed the result")
+        report["warnings"].append("Blender's mesh validation changed the result")
     obj[REPORT_PROPERTY] = json.dumps(report)
-    obj[SOURCE_PROPERTY] = source_name
+    setattr(obj, SOURCE_PROPERTY, source)
     return obj, report
+
+
+def _show_result(context, result, hidden):
+    """Select the result and hide the objects it replaces, in the viewport
+    and in renders (F12 would otherwise draw them on top of each other)."""
+    for selected in list(context.view_layer.objects.selected):
+        selected.select_set(False)
+    for obj in hidden:
+        if obj is not None and obj.name in context.view_layer.objects:
+            obj.hide_set(True)
+            obj.hide_render = True
+    result.select_set(True)
+    context.view_layer.objects.active = result
 
 
 def _redraw(context):
@@ -202,15 +277,13 @@ def _redraw(context):
 
 
 class OBJECT_OT_remesh_quads(bpy.types.Operator):
-    """Remesh the active mesh into quads in a separate process (Esc cancels)"""
+    """Remesh the active mesh into quads in a separate process (Esc cancels). On a result, remesh its source again"""
     bl_idname = "object." + ID + "_remesh"
     bl_label = "Remesh"
     bl_options = {"REGISTER", "UNDO"}
 
-    # Set by the "Repair Folds and Re-run" button: remesh this object (the
-    # one the shown result was made from) instead of the active one, with
-    # the fold repair on, and hide the old result.
-    source: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})
+    # Set by the "Repair Folds and Re-run" button: the fold repair on, which
+    # needs a source to run on.
     repair_folds: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})
     flatten_spikes: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})
 
@@ -240,14 +313,21 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             return {"CANCELLED"}
         obj = context.active_object
         self._replaced = None
-        if self.source:
-            self._replaced = obj.name
-            obj = bpy.data.objects.get(self.source)
-            if obj is None or obj.type != "MESH":
-                self.report({"ERROR"}, "The original object \"%s\" is gone; select it and remesh again" % self.source)
+        # On a result, remesh its unchanged source and hide this result,
+        # never the result itself (that would remesh a remesh).
+        source = _source(obj)
+        if source is not None:
+            problem = _source_problem(context, source)
+            if problem:
+                self.report({"ERROR"}, "Cannot remesh the original: %s. Show it, or clear "
+                            "Source in the %s panel to remesh this result itself" % (problem, NAME))
                 return {"CANCELLED"}
-        # A hidden object (the source of a shown result) still evaluates.
-        positions, triangles = _mesh_arrays(context, obj)
+            self._replaced = obj.name
+            obj = source
+        elif self.repair_folds:
+            self.report({"ERROR"}, "The original object is gone; select it and remesh again")
+            return {"CANCELLED"}
+        positions, triangles, self._smooth = _mesh_arrays(context, obj)
         if len(triangles) == 0:
             self.report({"ERROR"}, "The mesh has no faces")
             return {"CANCELLED"}
@@ -267,8 +347,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         _cancel_from_panel = False
         _last_status, _last_message, _last_report = "running", "", None
         self._source_name = obj.name
-        self._matrix = obj.matrix_world.copy()
-        self._collections = [c.name for c in obj.users_collection]
+        self._warnings = [w for w in (_uneven_scale_warning(obj),) if w]
         self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
         self._status_text(context)
@@ -309,16 +388,15 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             self.report(level, "%s %s: %s" % (
                 NAME, report_rows.STATUS_TEXT.get(outcome.status, outcome.status), outcome.message))
             return {"CANCELLED"}
-        new_obj, _last_report = _build_object(
-            context, self._source_name, self._matrix, self._collections, outcome)
         source = bpy.data.objects.get(self._source_name)
-        for selected in list(context.view_layer.objects.selected):
-            selected.select_set(False)
-        for hidden in (source, bpy.data.objects.get(self._replaced) if self._replaced else None):
-            if hidden is not None and hidden.name in context.view_layer.objects:
-                hidden.hide_set(True)
-        new_obj.select_set(True)
-        context.view_layer.objects.active = new_obj
+        if source is None:
+            # Deleted while the remesher ran.
+            _last_status, _last_report = "failed", None
+            _last_message = "\"%s\" was deleted during the remesh" % self._source_name
+            self.report({"ERROR"}, "%s: %s" % (NAME, _last_message))
+            return {"CANCELLED"}
+        new_obj, _last_report = _build_object(context, source, outcome, self._smooth, self._warnings)
+        _show_result(context, new_obj, (source, bpy.data.objects.get(self._replaced) if self._replaced else None))
         output = outcome.report.get("output", {})
         self.report({"INFO"}, "%s: %d quads, %d non-quads" % (
             NAME, output.get("quads", 0), output.get("non_quads", 0)))
@@ -355,13 +433,12 @@ class OBJECT_OT_remesh_quads_cancel(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _draw_fold_offer(box, settings, source_name):
+def _draw_fold_offer(box, settings):
     column = box.column(align=True)
     for line in report_rows.fold_offer_lines():
         column.label(text=line)
     box.prop(settings, "flatten_spikes")
     operator = box.operator(OBJECT_OT_remesh_quads.bl_idname, text="Repair Folds and Re-run", icon="MOD_SMOOTH")
-    operator.source = source_name
     operator.repair_folds = True
     operator.flatten_spikes = settings.flatten_spikes
 
@@ -394,10 +471,24 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         else:
             layout.operator(OBJECT_OT_remesh_quads.bl_idname, icon="MOD_REMESH")
 
+        obj = context.active_object
+        if obj is not None and obj.type == "MESH":
+            # What Remesh will run on: a result shows its source, which the
+            # user can clear to remesh the result itself. A result's own
+            # report already carries the scale warning.
+            is_result = _source(obj) is not None or REPORT_PROPERTY in obj
+            if is_result:
+                layout.prop(obj, SOURCE_PROPERTY, text="Source")
+            warning = None if is_result else _uneven_scale_warning(obj)
+            if warning:
+                column = layout.column(align=True)
+                column.alert = True
+                for i, line in enumerate(report_rows.wrap(warning)):
+                    column.label(text=line, icon="ERROR" if i == 0 else "BLANK1")
+
         # A failed or cancelled last run stays on show until the next run;
         # otherwise the active object's own report, if it is a result.
         status, message, report = _last_status, _last_message, _last_report
-        obj = context.active_object
         if status in ("", "ok") and obj is not None and REPORT_PROPERTY in obj:
             try:
                 report = json.loads(obj[REPORT_PROPERTY])
@@ -423,9 +514,8 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
                     row.alert = problem
                     icon = ("ERROR" if problem else "INFO") if first else "BLANK1"
                     row.label(text=text, icon=icon)
-                source_name = obj.get(SOURCE_PROPERTY, "") if obj is not None else ""
-                if report_rows.offers_fold_repair(report) and source_name:
-                    _draw_fold_offer(box, settings, source_name)
+                if report_rows.offers_fold_repair(report) and _source(obj) is not None:
+                    _draw_fold_offer(box, settings)
 
         preferences = _preferences(context)
         _draw_build(layout, worker.find_executable(bpy.path.abspath(preferences.executable) if preferences else ""))
@@ -444,11 +534,16 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     setattr(bpy.types.Scene, ID, PointerProperty(type=RemeshSettings))
+    setattr(bpy.types.Object, SOURCE_PROPERTY, PointerProperty(
+        type=bpy.types.Object, name="Source",
+        description="The object this result was made from. Remesh and Repair Folds run on it "
+                    "and replace this result. Clear it to remesh this result itself"))
 
 
 def unregister():
     if _job is not None:
         _job.cleanup()
+    delattr(bpy.types.Object, SOURCE_PROPERTY)
     delattr(bpy.types.Scene, ID)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

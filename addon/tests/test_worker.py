@@ -231,10 +231,12 @@ class ReportTest(unittest.TestCase):
         thin = {"status": "ok", "parameters": {"target_quads": 2000}, "output": {"quads": 1980},
                 "diagnostics": {"thin_parts_warned": 1},
                 "warnings": ["18 % of the surface (12 spots) is thinner than one quad; expect folds or "
-                             "lost parts there. Try at least 3300 target quads, or thicken those parts"]}
+                             "lost parts there. At least 3300 target quads (an estimate) would fit a quad "
+                             "across about half of it, but each raise also reveals thinner parts, so it can "
+                             "take several raises; thickening those parts is usually the better fix"]}
         lines = report.warning_lines(thin)
         self.assertTrue(all(len(text) <= report.WARNING_WIDTH for text, _, _ in lines))
-        self.assertIn("Try at least 3300", " ".join(text for text, _, problem in lines if problem))
+        self.assertIn("At least 3300 target quads", " ".join(text for text, _, problem in lines if problem))
         self.assertIn("Alt+S", " ".join(text for text, _, problem in lines if not problem))
         clean = dict(thin, diagnostics={"thin_parts_warned": 0}, warnings=[])
         self.assertEqual(report.warning_lines(clean), [])
