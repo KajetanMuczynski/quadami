@@ -4,7 +4,9 @@
   from secondary sources), measured what survives a run in Blender, audited the plan, research notes, stress and
   speed notes and every session's Next line for dropped items, and brought docs/TODO.md up to date: stale Parked rows,
   today's findings from other threads (crease design, map untangling stopped, fold bisect on #82, thin parts), new
-  Track G items G9–G13, 1.15. Note: research/gap-analysis-zremesher-2026-10-26.md (scripts, repro meshes alongside).
+  Track G items G9–G13, 1.15; later the platform study (1.7, 2.9a, 8.6, two decisions for Kajetan), the hand-downloaded
+  models (crumb floor B1, bench traps F1–F3, open parts, thin advice) and the sanitizer's final sliver rule (2.7, #112).
+  Note: research/gap-analysis-zremesher-2026-10-26.md (scripts, repro meshes alongside).
 - Found: the add-on result keeps none of the source's data (UVs, materials, vertex groups, colours, face sets,
   sharp/crease/seam marks, parent) and comes out flat-shaded, where Blender's QuadriFlow keeps nearly all of it;
   Remesh on a result remeshes the result; non-uniform object scale stretches quads; the source still renders.
