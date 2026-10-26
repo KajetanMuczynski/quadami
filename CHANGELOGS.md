@@ -1,9 +1,10 @@
 # Changelog
 
-## Quadami (unreleased, add-on 0.1.0 test builds)
+## Quadami 0.1.0
 
-Changes since the fork from AutoRemesher 1.2.0 (`4a49f82`), up to master `0e9bec8` (2026-10-22).
-Builds are told apart by the build line in the panel, not by the version number.
+First public release, with known limits (release notes: [docs/releases/0.1.0.md](docs/releases/0.1.0.md)).
+Changes since the fork from AutoRemesher 1.2.0 (`4a49f82`). macOS is experimental and untested.
+Test builds between releases keep the last version number; the build line in the panel tells them apart.
 
 Blender add-on
 - New Blender 4.2+ extension "Quadami": panel in the 3D Viewport sidebar, remesher in its own
@@ -13,10 +14,13 @@ Blender add-on
 - Repair Folds and Re-run: detects folded sculpt input and, on request, repairs it before remeshing
 - Build line in the panel and preferences; red when add-on and remesher come from different builds
 - Confirmation above 200,000 target quads, with the memory estimate; Target Quads capped at 2,000,000
-- Zips with the remesher inside for Linux x64, Windows x64 and macOS Apple silicon (no release yet)
+- Zips with the remesher inside for Linux x64 (glibc 2.28+), Windows x64 and macOS Apple silicon
+- Warnings for parts thinner than one quad, missing parts and collapsed islands, and handles lost or
+  added against the input
+- Opt-in flattening of needle spikes that Repair Folds cannot untangle
 
 Remeshing
-- libQEx is the default quad extractor, with a per-island fallback to the previous one
+- Quad extraction by libQEx, with a built-in fallback extractor for pieces libQEx cannot handle
 - Closed inputs stay closed and small islands stay present; holes left in closed islands are reported
 - Input cleanup: zero-length edges and inconsistently wound patches are fixed before remeshing
 - Quad cover rounded greedily on one factorisation, then untangled with its integers held
@@ -24,11 +28,18 @@ Remeshing
 - Output projected onto the input surface and relaxed along it
 - Default adaptivity 0.5 with a chord-error size law; Fast/Quality resolution setting
 - Cones kept off needle tips; exact crossing keys far from the origin
+- Clean-up passes no longer delete strips about two quads wide; pieces glued along an edge go
+  through libQEx too
+- Fixed a libQEx crash on some inputs (Happy Buddha)
+- Folded-input detector counts a fold only where the surface turns over
 
 Project
 - License GPL-3.0-or-later (upstream MIT notices kept); renamed to Quadami
 - CI on every pull request for Linux, Windows and macOS, with an output quality gate
 - A/B benchmark harness (`tools/bench/ab.py`) that every quality claim must come from
+- Release check on Linux, Windows and macOS against the previous release (`release-check.yml`)
+- Tagged releases: draft GitHub release with the three zips, `SHA256SUMS.txt` and build attestations
+- Documentation website built from the docs (GitHub Pages)
 
 ## AutoRemesher (upstream history, by Jeremy Hu and contributors)
 

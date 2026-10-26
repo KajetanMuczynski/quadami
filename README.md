@@ -8,7 +8,7 @@ It is made for people who sculpt or model in Blender and need clean, even topolo
 (to animate, UV-unwrap, keep sculpting at a lower resolution, or hand over). You do not need to be
 a programmer to use it: the [user guide](docs/USER-GUIDE.md) is written for Blender beginners.
 
-> **Status: early test builds, version 0.1.0, no release yet.** It works on the sculpts we test
+> **Status: 0.1.0, the first public release, with known limits.** It works on the sculpts we test
 > with, but expect rough edges. Read [Limits and warnings](#limits-and-warnings) before you rely
 > on it, and send the panel's build line with every bug report.
 
@@ -38,17 +38,19 @@ More before/after examples, with their numbers and limits: [docs/gallery](docs/g
 
 ## Install
 
-There is no release download yet. What is available today:
+Download the zip for your system from the
+[Releases page](https://github.com/KajetanMuczynski/quadami/releases/latest) (under **Assets**;
+no GitHub account needed). Do not unpack it: Blender installs the zip itself.
 
-| System | Where the zip comes from | Tested |
+| System | Zip | Tested |
 |---|---|---|
-| **Linux** (x64, any distribution with glibc 2.28 or newer, e.g. Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL 8+) | GitHub: **Actions > ci**, a green run on `master`, **Artifacts > `addon-linux-x64`** (built in AlmaLinux 8, so it does not need a new distribution). Works with Blender from blender.org and the snap (`/snap/bin/blender`). Or build it yourself ([addon/BEGINNERS.md](addon/BEGINNERS.md)). | CI (Ubuntu 24.04, Blender 4.2, headless) and the maintainer's laptop (Ubuntu, Blender 4.5 snap) |
-| **Windows** 10/11 (x64) | GitHub: **Actions > ci**, a green run on `master`, **Artifacts > `addon-windows-x64`** (you must be signed in to GitHub). | In CI only (Blender 5.2, headless); not yet on a real Windows desktop |
-| **macOS** (Apple silicon, macOS 11.2+): **experimental, untested** | GitHub: **Actions > ci**, a green run on `master`, **Artifacts > `addon-macos-arm64`**. | In CI only; **never tried on a real Mac**, and the program is not notarized, so Gatekeeper may block it |
+| **Linux** (x64, any distribution with glibc 2.28 or newer, e.g. Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL 8+) | `quadami-<version>-linux-x64.zip` (built in AlmaLinux 8, so it does not need a new distribution). Works with Blender from blender.org and the snap (`/snap/bin/blender`). Or build it yourself ([addon/BEGINNERS.md](addon/BEGINNERS.md)). | CI (Ubuntu 24.04, Blender 4.2, headless) and the maintainer's laptop (Ubuntu, Blender 4.5 snap) |
+| **Windows** 10/11 (x64) | `quadami-<version>-windows-x64.zip` | In CI only (Blender 5.2, headless); not yet on a real Windows desktop. The program is not signed. |
+| **macOS** (Apple silicon, macOS 11.2+): **experimental, untested** | `quadami-<version>-macos-arm64.zip` | In CI only; **never tried on a real Mac**, and the program is not notarized, so Gatekeeper may block it |
 | macOS on Intel | Build it yourself ([docs/BUILDING.md](docs/BUILDING.md)). | No |
 
-GitHub wraps each artifact in a zip of its own: unpack that one once; the `quadami-...zip` inside
-is the add-on. Do not unpack the add-on zip itself.
+`SHA256SUMS.txt` next to the zips lets you check a download. Test builds between releases (newer,
+less checked) are CI artifacts; how to get them: [user guide §2](docs/USER-GUIDE.md#test-builds-between-releases).
 
 Then, in **Blender 4.2 or newer**: **Edit > Preferences > Get Extensions**, the small **⌄** arrow
 at the top right, **Install from Disk...**, pick the zip, and restart Blender. The panel is in the
