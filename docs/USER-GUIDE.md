@@ -220,6 +220,7 @@ defaults and change one thing at a time.
 | Advanced > **Anisotropy** | 1 | Lets quads stretch along the direction the surface curves least, like long quads on a cylinder (up to about 2.3 : 1). | 0 for square quads everywhere; the result then follows the shape 25–35 % less closely. Hardly changes anything else. |
 | Advanced > **Edge Scaling** | 1 | Multiplies the quad size; 2 gives about a quarter of the quads. | Leave at 1 and use Target Quads instead; it is the same thing, less clearly. |
 | Advanced > **Smooth Normal** | 0° | 0: follow the model's own flat triangles. Above 0: follow a smooth surface through them, keeping edges sharper than this angle. | Only for low-poly input (big flat facets). Sculpts are already dense: leave 0. |
+| Advanced > **Quad Smoothing** | Standard | How the quads are evened out after they are found. Standard moves them in 3D, which rounds off ridges, swirls and sharp edges. Keep Ridges slides them along the surface instead. | Experimental. Try Keep Ridges when ridges, swirls or vines come out softer than in the sculpt: on the test sculpts it lost about half as much shape, with about as many folded quads. |
 
 Settings other than these defaults work, but the project's quality targets are checked at the defaults,
 so expect a bit more variation.
