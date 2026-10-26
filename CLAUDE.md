@@ -135,6 +135,8 @@ Running the binary with no args opens the GUI. The core needs `setTargetTriangle
   Types: fix, perf, feat, ci, docs, refactor. Areas: islands, extraction, sizing, cross-field,
   rounding, addon, ci, docs, bench. Omit `[TODO x.y]` only when no TODO item applies.
 - Body starts with `Merge order / depends on: ...` (`none` if independent).
+- Body holds only what this change does, possible conflicts and dependencies (Kajetan, 2026-10-26).
+  No clutter: no background, no replay of the work, no to-dos for Kajetan.
 - If the PR touches a conflict-prone file (`tests/CMakeLists.txt`, `src/AutoRemesher/remesh.cpp`,
   `src/AutoRemesher/quadextractor.cpp`), say so in the body so parallel PRs can be ordered.
 - A PR stays **draft** until its thread has verified everything: **CI passed** green on the current

@@ -80,10 +80,9 @@ so nothing is lost on the way back.
 CI builds the Windows package; nothing has to be compiled or installed
 besides Blender.
 
-1. **Get the zip.** On GitHub: *Actions > ci*, the latest green run of
-   the branch, *Artifacts > addon-windows-x64*. GitHub wraps artifacts in
-   a zip of their own: unpack that once; inside is
-   `quadami-<version>-windows-x64.zip`. Do not unpack that inner zip.
+1. **Get the zip.** `quadami-<version>-windows-x64.zip` from the
+   [Releases page](https://github.com/KajetanMuczynski/quadami/releases/latest)
+   (test builds between releases: user guide §2). Do not unpack it.
 2. **Install it.** Blender: *Edit > Preferences > Get Extensions*, the small
    down-arrow at the top right, *Install from Disk...*, pick
    `quadami-<version>-windows-x64.zip`.
@@ -111,9 +110,10 @@ The first configure downloads oneTBB from GitHub (pinned commit).
 
 ## macOS (Apple silicon, macOS 11.2 or newer, Blender 4.2 or newer)
 
-CI builds the macOS package the same way: *Actions > ci*, the latest green
-run, *Artifacts > addon-macos-arm64*, unpack GitHub's outer zip once, then
-*Install from Disk...* with `quadami-<version>-macos-arm64.zip` and check
+Experimental and untested on a real Mac. CI builds the macOS package the same
+way: `quadami-<version>-macos-arm64.zip` from the
+[Releases page](https://github.com/KajetanMuczynski/quadami/releases/latest),
+then *Install from Disk...* with that zip and check
 *Using: .../bin/autoremesher-cli* in the add-on preferences as above.
 
 `autoremesher-cli` links oneTBB statically and needs only macOS's own

@@ -51,16 +51,23 @@ automatic tests, *(from memory, check)* not checked on a real screen.
 
 ### Get the zip
 
-There is **no release download yet**: every zip is a test build. What exists today:
+Download it from the [Releases page](https://github.com/KajetanMuczynski/quadami/releases/latest):
+under **Assets**, click the zip for your system. No GitHub account is needed.
 
-| System | Where to get it | Tested on a real computer? |
+| System | Zip on the Releases page | Tested on a real computer? |
 |---|---|---|
-| **Linux** (64-bit Intel/AMD, any distribution with glibc 2.28 or newer: Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL 8+) | GitHub, see below: artifact `addon-linux-x64`. Blender from blender.org or the snap (`/snap/bin/blender`). Or build it yourself ([addon/BEGINNERS.md](../addon/BEGINNERS.md)). | Yes (Ubuntu, Blender 4.5 snap) |
-| **Windows** 10 or 11 (64-bit) | GitHub, see below: artifact `addon-windows-x64` | No, only in CI (Blender 5.2, no window) |
-| **macOS**, Apple silicon (M1 or newer), macOS 11.2 or newer: **experimental, untested** | GitHub, see below: artifact `addon-macos-arm64` | No, only in CI |
+| **Linux** (64-bit Intel/AMD, any distribution with glibc 2.28 or newer: Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL 8+) | `quadami-<version>-linux-x64.zip`. Blender from blender.org or the snap (`/snap/bin/blender`). Or build it yourself ([addon/BEGINNERS.md](../addon/BEGINNERS.md)). | Yes (Ubuntu, Blender 4.5 snap) |
+| **Windows** 10 or 11 (64-bit) | `quadami-<version>-windows-x64.zip` (the program is not signed) | No, only in CI (Blender 5.2, no window) |
+| **macOS**, Apple silicon (M1 or newer), macOS 11.2 or newer: **experimental, untested** | `quadami-<version>-macos-arm64.zip` (not notarized, so macOS may block it) | No, only in CI |
 | macOS on Intel, Linux on ARM, Windows on ARM | Not built. Intel Macs: build it yourself ([BUILDING.md](BUILDING.md)). | No |
 
-**Zips from GitHub (Linux, Windows, macOS):**
+`SHA256SUMS.txt` next to the zips lets you check a download; the release notes say how.
+
+### Test builds between releases
+
+Every change merged after a release is built as a test build: newer, but checked less than a
+release. Use one only when asked to try a fix, and send its [build line](#which-version-do-i-have-the-build-line) with any report.
+
 1. Sign in to GitHub (downloads of these files need an account).
 2. Open <https://github.com/KajetanMuczynski/quadami/actions/workflows/ci.yml?query=branch%3Amaster>
    and click the newest run where the job for your system (**addon (linux-x64)**,
