@@ -1,0 +1,348 @@
+diff --git a/src/AutoRemesher/autoremesher.cpp b/src/AutoRemesher/autoremesher.cpp
+index 0d879a4..477fffc 100644
+--- a/src/AutoRemesher/autoremesher.cpp
++++ b/src/AutoRemesher/autoremesher.cpp
+@@ -21,6 +21,7 @@
+  *  SOFTWARE.
+  */
+ #include "qexextraction.h"
++#include "researchhash.h"
+ #include <AutoRemesher/AutoRemesher>
+ #include <AutoRemesher/FoldRepair>
+ #include <AutoRemesher/IsotropicRemesher>
+@@ -957,9 +958,11 @@ bool AutoRemesher::remeshIslands()
+     throwIfCancelled();
+     auto t_start = std::chrono::high_resolution_clock::now();
+     const double cpuStart = processCpuSeconds();
++    m_diagnostics.push_back(ResearchHash::record("a_input", ResearchHash::nested(m_triangles, ResearchHash::flat(m_vertices))));
+ 
+     InputCleanupStats cleanup = cleanInput(m_vertices, m_triangles, inputCleanupTolerance(m_vertices));
+     orientInput(m_vertices, m_triangles, &cleanup);
++    m_diagnostics.push_back(ResearchHash::record("a_cleaned", ResearchHash::nested(m_triangles, ResearchHash::flat(m_vertices))));
+     if (m_triangles.empty()) {
+         std::cerr << "Input mesh has only degenerate triangles" << std::endl;
+         if (nullptr != m_progressHandler)
+@@ -1002,6 +1005,12 @@ bool AutoRemesher::remeshIslands()
+     std::vector<std::vector<std::vector<size_t>>> trianglesIslands;
+     auto t_splitStart = std::chrono::high_resolution_clock::now();
+     MeshSeparator::splitToIslands(m_triangles, trianglesIslands);
++    {
++        uint64_t h = ResearchHash::flat(m_vertices);
++        for (const auto& island : trianglesIslands)
++            h = ResearchHash::nested(island, h);
++        m_diagnostics.push_back(ResearchHash::record("a_islands", h));
++    }
+     auto t_afterSplit = std::chrono::high_resolution_clock::now();
+ 
+     if (trianglesIslands.empty()) {
+@@ -1218,6 +1227,8 @@ bool AutoRemesher::remeshIslands()
+         parameterizeTimeAccumulated += run.parameterizeUs;
+         run.parameterized = parameterizeSucceeded;
+         run.diagnostics = parameterizer.takeDiagnostics();
++        run.diagnostics.push_back(ResearchHash::record("a_decimated", ResearchHash::nested(run.decimatedTriangles, ResearchHash::flat(run.decimatedVertices))));
++        run.diagnostics.push_back(ResearchHash::record("a_isotropic", ResearchHash::nested(run.isotropicTriangles, ResearchHash::flat(run.isotropicVertices))));
+ 
+         if (parameterizeSucceeded) {
+             throwIfCancelled();
+@@ -1259,11 +1270,13 @@ bool AutoRemesher::remeshIslands()
+                 run.capturedExtractedConnectionMoved = extractor.extractedConnectionMoved();
+                 run.remeshedVertices = extractor.remeshedVertices();
+                 run.remeshedQuads = extractor.remeshedQuads();
++                run.diagnostics.push_back(ResearchHash::record("a_extracted", ResearchHash::nested(run.remeshedQuads, ResearchHash::flat(run.remeshedVertices))));
+                 // The extractor leaves the output on T; this puts it on the
+                 // island's own input faces (TODO 2.8).
+                 const auto projectStart = std::chrono::high_resolution_clock::now();
+                 SurfaceProjector projector(&m_vertices, &trianglesIslands[islandIndex], ctx.sharpEdgeDegrees);
+                 const auto projection = projector.project(&run.remeshedVertices, run.remeshedQuads);
++                run.diagnostics.push_back(ResearchHash::record("a_projected", ResearchHash::flat(run.remeshedVertices)));
+                 DiagnosticRecord record("surface_projection");
+                 record.set("vertices", (double)projection.vertices);
+                 record.set("projected", (double)projection.projected);
+@@ -1279,6 +1292,7 @@ bool AutoRemesher::remeshIslands()
+                 // vertices next to creases put onto them.
+                 const auto relaxStart = std::chrono::high_resolution_clock::now();
+                 const auto relaxation = projector.relax(&run.remeshedVertices, run.remeshedQuads, surfaceRelaxIterations);
++                run.diagnostics.push_back(ResearchHash::record("a_relaxed", ResearchHash::nested(run.remeshedQuads, ResearchHash::flat(run.remeshedVertices))));
+                 DiagnosticRecord relaxRecord("surface_relax");
+                 relaxRecord.set("snapped", (double)relaxation.snapped);
+                 relaxRecord.set("snap_folding", (double)relaxation.snapFolding);
+diff --git a/src/AutoRemesher/parameterizer.cpp b/src/AutoRemesher/parameterizer.cpp
+index dca995b..dee808b 100644
+--- a/src/AutoRemesher/parameterizer.cpp
++++ b/src/AutoRemesher/parameterizer.cpp
+@@ -20,6 +20,7 @@
+  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  *  SOFTWARE.
+  */
++#include "researchhash.h"
+ #include <AutoRemesher/FrameField>
+ #include <AutoRemesher/MapCheck>
+ #include <AutoRemesher/Parameterizer>
+@@ -266,6 +267,7 @@ bool Parameterizer::parameterize()
+             });
+     }
+ 
++    m_diagnostics.push_back(ResearchHash::record("p_normals", ResearchHash::flat(faceAreas, ResearchHash::flat(vertexNormals))));
+     report(0.01f, "Computing scaling field");
+     std::vector<std::vector<size_t>> faceAroundVertexMap(m_vertices->size());
+     for (size_t i = 0; i < m_triangles->size(); ++i) {
+@@ -278,6 +280,7 @@ bool Parameterizer::parameterize()
+     std::vector<double> faceScalingField = computeFaceScalingField(*m_vertices,
+         *m_triangles, faceAreas, vertexNormals, faceAroundVertexMap);
+ 
++    m_diagnostics.push_back(ResearchHash::record("p_scaling", ResearchHash::flat(faceScalingField)));
+     report(0.02f, "Building surface topology");
+     // The parameterization pipeline uses the triangle/corner mesh;
+     // no attribute-backed interchange mesh is constructed.
+@@ -302,6 +305,7 @@ bool Parameterizer::parameterize()
+         return false;
+     }
+ 
++    m_diagnostics.push_back(ResearchHash::record("p_field", ResearchHash::flat(field)));
+     SingularitySimplifier simplifier(topology, &field);
+     if (m_singularitySimplification) {
+         report(0.17f, "Simplifying singularities");
+@@ -317,6 +321,7 @@ bool Parameterizer::parameterize()
+         }
+     }
+ 
++    m_diagnostics.push_back(ResearchHash::record("p_simplified", ResearchHash::flat(field)));
+     std::vector<double> faceScalingU(m_triangles->size(), 1.0);
+     std::vector<double> faceScalingV(m_triangles->size(), 1.0);
+     if (m_anisotropy > 0.0) {
+@@ -324,6 +329,7 @@ bool Parameterizer::parameterize()
+         computeFaceAnisotropyField(topology, field,
+             m_anisotropy, m_maxAspectRatio, &faceScalingU, &faceScalingV);
+     }
++    m_diagnostics.push_back(ResearchHash::record("p_anisotropy", ResearchHash::flat(faceScalingV, ResearchHash::flat(faceScalingU))));
+     // The cover solve is the longest single step here, so it reports its own
+     // sub-steps from 0.28 onwards rather than going quiet until it finishes.
+     ProgressHandler coverProgress;
+diff --git a/src/AutoRemesher/quadparameterizer.cpp b/src/AutoRemesher/quadparameterizer.cpp
+index dbc0888..6a533c9 100644
+--- a/src/AutoRemesher/quadparameterizer.cpp
++++ b/src/AutoRemesher/quadparameterizer.cpp
+@@ -20,6 +20,7 @@
+  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  *  SOFTWARE.
+  */
++#include "researchhash.h"
+ #include <AutoRemesher/ConstrainedLeastSquares>
+ #include <AutoRemesher/FrameField>
+ #include <AutoRemesher/MixedIntegerLeastSquares>
+@@ -1468,6 +1469,7 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
+             result->diagnostics.push_back(std::move(record));
+         }
+     }
++    result->diagnostics.push_back(ResearchHash::record("q_init", ResearchHash::flat(normals, ResearchHash::flat(result->field))));
+     const std::vector<Vector3> fieldBeforeBrush = result->field;
+ 
+     std::vector<double> activeScalingU(mesh.faceCount(), 1.0), activeScalingV(mesh.faceCount(), 1.0);
+@@ -1483,6 +1485,7 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
+         smoothCrossField(mesh, normals, hardEdgeDegrees, &result->field);
+     brushFieldAlongSpanningTree(mesh, normals, &result->field);
+ 
++    result->diagnostics.push_back(ResearchHash::record("q_smoothed", ResearchHash::flat(result->field)));
+     report(0.14f, "Computing corner rotations");
+     std::vector<int> rotation = computeCornerRotations(mesh, result->field, normals);
+     std::vector<signed char> cornerConstraints = computeCornerConstraints(mesh, result->field,
+@@ -1500,6 +1503,8 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
+     if (trackDirectionalScale)
+         applyDirectionalSwaps(mesh, fieldBeforeBrush, result->field, normals,
+             &activeScalingU, &activeScalingV);
++    result->diagnostics.push_back(ResearchHash::record("q_rotations", ResearchHash::flat(cornerConstraints, ResearchHash::flat(rotation))));
++    result->diagnostics.push_back(ResearchHash::record("q_swapped", ResearchHash::flat(activeScalingV, ResearchHash::flat(activeScalingU, ResearchHash::flat(result->field)))));
+     report(0.20f, "Correcting field curl");
+     DiagnosticRecord curlDiagnostics("curl_correction");
+     curlDiagnostics.set("rerounded_edges", (double)reroundedEdges);
+@@ -1508,6 +1513,8 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
+         &curlDiagnostics);
+     result->diagnostics.push_back(std::move(curlDiagnostics));
+     const std::vector<char> seam = computeSeam(mesh, rotation);
++    result->diagnostics.push_back(ResearchHash::record("q_curl", ResearchHash::flat(activeScalingV, ResearchHash::flat(activeScalingU, ResearchHash::flat(result->field)))));
++    result->diagnostics.push_back(ResearchHash::record("q_seam", ResearchHash::flat(seam)));
+ 
+     const CoverContext ctx { mesh, result->field, normals, rotation, seam, cornerConstraints,
+         activeScalingU, activeScalingV, faceScaling, scale };
+@@ -1529,10 +1536,12 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
+         return false;
+     }
+ 
++    result->diagnostics.push_back(ResearchHash::record("q_values", ResearchHash::flat(allValues)));
+     report(0.99f, "Building cover uvs");
+     buildResultUv(mesh, rotation, allValues, uvVariables, result, &coverResult);
+     coverResult.set("ok", 1.0);
+     result->diagnostics.push_back(std::move(coverResult));
++    result->diagnostics.push_back(ResearchHash::record("q_uvs", ResearchHash::nested(result->triangleUvs)));
+     return true;
+ }
+ }
+diff --git a/src/AutoRemesher/researchhash.h b/src/AutoRemesher/researchhash.h
+new file mode 100644
+index 0000000..e0d568a
+--- /dev/null
++++ b/src/AutoRemesher/researchhash.h
+@@ -0,0 +1,68 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Copyright (C) 2026 Quadami contributors
++// Research only (platform divergence study, 2026-10-26), never merged: FNV-1a hashes of the
++// bits of intermediate results, written as stage diagnostics "rh" so that runs on different
++// platforms can be compared stage by stage. Reads only; changes no result.
++#ifndef AUTO_REMESHER_RESEARCH_HASH_H
++#define AUTO_REMESHER_RESEARCH_HASH_H
++
++#include "diagnostics.h"
++#include <cstdint>
++#include <cstdio>
++#include <string>
++#include <vector>
++
++namespace AutoRemesher {
++namespace ResearchHash {
++
++    inline uint64_t mix(uint64_t h, const void* data, size_t bytes)
++    {
++        const unsigned char* c = static_cast<const unsigned char*>(data);
++        for (size_t i = 0; i < bytes; ++i) {
++            h ^= c[i];
++            h *= 1099511628211ULL;
++        }
++        return h;
++    }
++
++    inline uint64_t seed() { return 1469598103934665603ULL; }
++
++    template <class T>
++    uint64_t flat(const std::vector<T>& v, uint64_t h = seed())
++    {
++        const uint64_t n = v.size();
++        h = mix(h, &n, sizeof n);
++        if (!v.empty())
++            h = mix(h, v.data(), v.size() * sizeof(T));
++        return h;
++    }
++
++    template <class T>
++    uint64_t nested(const std::vector<std::vector<T>>& v, uint64_t h = seed())
++    {
++        const uint64_t n = v.size();
++        h = mix(h, &n, sizeof n);
++        for (const auto& x : v)
++            h = flat(x, h);
++        return h;
++    }
++
++    inline std::string hex(uint64_t h)
++    {
++        char buffer[17];
++        std::snprintf(buffer, sizeof buffer, "%016llx", (unsigned long long)h);
++        return buffer;
++    }
++
++    inline DiagnosticRecord record(const char* point, uint64_t h, size_t island = DiagnosticRecord::noIsland)
++    {
++        DiagnosticRecord r("rh", island);
++        r.label("point", point);
++        r.label("h", hex(h));
++        return r;
++    }
++
++}
++}
++
++#endif
+diff --git a/src/cli/main.cpp b/src/cli/main.cpp
+index f16a2ec..5dd0c64 100644
+--- a/src/cli/main.cpp
++++ b/src/cli/main.cpp
+@@ -22,6 +22,7 @@
+ #include "objfile.h"
+ #include "stdincontrol.h"
+ #include <AutoRemesher/Remesh>
++#include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -234,8 +235,44 @@ void printProgress(float fraction, const char* step)
+     std::fflush(stdout);
+ }
+ 
++// Research only: evaluates the math functions the core calls on the arguments in IN (records of
++// a uint32 function id and two doubles) and writes one double per record to OUT, so the C library
++// the CLI links can be compared across platforms argument by argument.
++static int researchLibm(const char* inPath, const char* outPath)
++{
++    FILE* in = std::fopen(inPath, "rb");
++    FILE* out = std::fopen(outPath, "wb");
++    if (!in || !out)
++        return 2;
++    uint32_t id;
++    double a, b;
++    while (std::fread(&id, sizeof id, 1, in) == 1 && std::fread(&a, sizeof a, 1, in) == 1 && std::fread(&b, sizeof b, 1, in) == 1) {
++        volatile double x = a, y = b; // no folding, no vectorized math library
++        double r = 0.0;
++        switch (id) {
++        case 0: r = std::sin(x); break;
++        case 1: r = std::cos(x); break;
++        case 2: r = std::atan2(x, y); break;
++        case 3: r = std::acos(x); break;
++        case 4: r = std::exp(x); break;
++        case 5: r = std::log(x); break;
++        case 6: r = std::log10(x); break;
++        case 7: r = std::pow(x, y); break;
++        case 8: r = std::hypot(x, y); break;
++        }
++        volatile double v = r;
++        const double w = v;
++        std::fwrite(&w, sizeof w, 1, out);
++    }
++    std::fclose(in);
++    std::fclose(out);
++    return 0;
++}
++
+ int run(const std::vector<std::string>& arguments)
+ {
++    if (arguments.size() == 4 && arguments[1] == "--research-libm")
++        return researchLibm(arguments[2].c_str(), arguments[3].c_str());
+     Options options;
+     const int parsed = parseArguments(arguments, &options);
+     if (0 != parsed)
+@@ -249,6 +286,16 @@ int run(const std::vector<std::string>& arguments)
+     request.parameters = options.parameters;
+     std::string error;
+     if (Cli::readObj(options.inputPath, &request.positions, &request.triangles, &error)) {
++        {
++            // Research only: hash of the parsed input, printed for the platform study.
++            unsigned long long h = 1469598103934665603ULL;
++            const unsigned char* c = reinterpret_cast<const unsigned char*>(request.positions.data());
++            for (size_t i = 0; i < request.positions.size() * sizeof(double); ++i) {
++                h ^= c[i];
++                h *= 1099511628211ULL;
++            }
++            std::printf("RH parsed %016llx\n", h);
++        }
+         RemeshCallbacks callbacks;
+         callbacks.progress = printProgress;
+         if (options.stdinControl)
+@@ -292,11 +339,20 @@ int run(const std::vector<std::string>& arguments)
+ 
+ }
+ 
++#if defined(_WIN32) && defined(_M_X64)
++#include <math.h>
++#endif
++
+ #ifdef _WIN32
+ // The wide entry point gets the arguments in UTF-16, so paths with characters
+ // outside the ANSI code page (a user name like "Łucja") survive.
+ int wmain(int argc, wchar_t** argv)
+ {
++#if defined(_M_X64)
++    // Research only: the UCRT's math functions without their FMA3 code paths.
++    if (std::getenv("AR_RESEARCH_NO_FMA3"))
++        _set_FMA3_enable(0);
++#endif
+     std::vector<std::string> arguments;
+     for (int i = 0; i < argc; ++i) {
+         const int size = WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, nullptr, 0, nullptr, nullptr);
