@@ -120,16 +120,6 @@ namespace {
     const double thinIslandMaximumGrowth = 4.0;
     const size_t thinIslandWidthSamples = 1024;
 
-    // An island whose count is raised (small-island minimum, thin-island
-    // floor, retries) gets its T resolution from area / count.  On a sliver
-    // of almost no area that is far below its length, and the isotropic
-    // remesher splits its edges into millions of pieces (gap analysis
-    // 2026-10-26: slivers of 28 triangles, area 1e-8 and 0.2 long, raised
-    // to the minimum ran out of memory).  T's edges are kept at least the
-    // island's extent / (this * quads): a real part has fewer quads than
-    // that along its length.  An island at its own share is left alone.
-    const double raisedIslandEdgesPerQuad = 4.0;
-
     // An island that still fails is run again with its triangle and quad
     // targets raised by this factor, up to this many times, if it asked for at
     // most this many triangles. The factor is small because a repaired island
@@ -1046,8 +1036,6 @@ bool AutoRemesher::remeshIslands()
         long long inputTwiceHandles = -1;
         double voxelSize;
         double area;
-        // Diagonal of the input island's bounding box.
-        double extent;
         double targetQuadCount;
         double scaling;
         double adaptivity;
@@ -1076,17 +1064,6 @@ bool AutoRemesher::remeshIslands()
             context.triangles.push_back(std::move(triangle));
         }
         context.area = calculateMeshArea(context.vertices, context.triangles);
-        {
-            Vector3 low = context.vertices.empty() ? Vector3() : context.vertices[0];
-            Vector3 high = low;
-            for (const Vector3& v : context.vertices) {
-                for (size_t i = 0; i < 3; ++i) {
-                    low[i] = std::min(low[i], v[i]);
-                    high[i] = std::max(high[i], v[i]);
-                }
-            }
-            context.extent = (high - low).length();
-        }
         context.inputTopology = surfaceTopology(context.triangles, context.vertices.size());
         context.inputTwiceHandles = 0 == context.inputTopology.nonManifoldEdges
             ? twiceHandleCount(context.vertices.size(), context.triangles)
@@ -1130,16 +1107,6 @@ bool AutoRemesher::remeshIslands()
         return std::min(minimumIslandTriangleCount, (double)islandContexes[i].triangles.size());
     };
     std::vector<double> islandTriangleCounts = shareTriangleCounts;
-    std::atomic<size_t> voxelClampedIslands(0);
-    const auto raisedIslandVoxelSize = [&](const IslandContext& context) {
-        const double voxelSize = std::sqrt(context.area
-            / (context.targetQuadCount * m_trianglesPerQuad * triangleAreaPerSquaredEdge));
-        const double smallest = context.extent / (raisedIslandEdgesPerQuad * context.targetQuadCount);
-        if (voxelSize >= smallest)
-            return voxelSize;
-        ++voxelClampedIslands;
-        return smallest;
-    };
 
     // Thin-island floor.  A part narrower than about one quad is lost or
     // folds (ENVELOPE row 17), and a whole island of it, a vine or a strap
@@ -1231,7 +1198,8 @@ bool AutoRemesher::remeshIslands()
         }
         // T keeps the resolution's triangles per quad, as on every other island.
         context.targetQuadCount = 0.5 * std::max(triangleCount, floorTriangleCount);
-        context.voxelSize = raisedIslandVoxelSize(context);
+        context.voxelSize = std::sqrt(context.area
+            / (context.targetQuadCount * m_trianglesPerQuad * triangleAreaPerSquaredEdge));
     }
     auto t_buildEnd = std::chrono::high_resolution_clock::now();
     throwIfCancelled();
@@ -1494,9 +1462,8 @@ bool AutoRemesher::remeshIslands()
                     targetQuadCount *= islandRetryGrowth;
                     IslandContext ctx;
                     buildIslandContext(i, ctx);
+                    ctx.voxelSize = voxelSize;
                     ctx.targetQuadCount = targetQuadCount;
-                    ctx.voxelSize = std::max(voxelSize,
-                        ctx.extent / (raisedIslandEdgesPerQuad * targetQuadCount));
                     IslandRun run;
                     resampleIsland(i, ctx, run, &retryDecimationStats);
                     parameterizeIsland(i, ctx, run);
@@ -1841,7 +1808,6 @@ bool AutoRemesher::remeshIslands()
         run.set("thin_floor_wanted_quads", 0.5 * thinFloorWantedTriangles);
         run.set("thin_floor_given_quads", 0.5 * thinFloorGivenTriangles);
         run.set("thin_floor_ms", milliseconds(std::chrono::duration_cast<std::chrono::microseconds>(t_thinFloorEnd - t_thinFloorStart).count()));
-        run.set("voxel_clamped_islands", (double)voxelClampedIslands.load());
         run.set("retried_islands", (double)islandsToRetry.size());
         run.set("repaired_islands", (double)islandsRepaired.load());
         m_diagnostics.push_back(std::move(run));
