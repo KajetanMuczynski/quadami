@@ -55,6 +55,33 @@ use, no commercial use without permission), and most of alecjacobson/common-3d-t
 license). pyvista documents the Nefertiti scan it ships as CC BY-NC-SA 4.0 ("The Other Nefertiti"),
 which supports keeping our corpus `nefertiti` out of public material (docs/gallery/README.md).
 
+## Hand-downloaded meshes
+
+Seven more meshes come from sites the cloud cannot reach (Sketchfab needs a login; Blender Studio and
+Zenodo are blocked by its network policy), so they are not in `external.json`: anyone can download
+them by hand from the links below. Their licenses allow public use with credit. Kajetan downloaded
+them on 2026-10-23; the converted OBJs, the downloads, their SHA-256 (`hand-manifest.json`) and an
+`AR_CORPUS` file (set `external_hand`) live in the project files, not in the repo.
+
+| id | What it tests | Triangles | Islands (closed) | Source | License |
+|---|---|---:|---|---|---|
+| ext_knight | real speed sculpt: armor, cloth folds, ~4,800 small closed pieces (rings, rivets) | 330,779 | 4,882 (4,142) | [Old knight speedsculpt](https://sketchfab.com/3d-models/old-knight-speedsculpt-ded9aed552c444ef91ab0a5bed65c463) by mrrobot, Sketchfab | CC BY 4.0 |
+| ext_tentacle | creature sculpt with tentacles, one closed piece of genus 1 | 393,624 | 1 (1) | [Tentacle Eye Monster](https://sketchfab.com/3d-models/tentacle-eye-monster-e6279ed4b504415d92c18f6ba4994b53) by Scrubmuffin, Sketchfab | CC BY 4.0 |
+| ext_phenebub | creature, open pieces | 191,296 | 7 (0) | [Phenebub](https://sketchfab.com/3d-models/phenebub-free-horror-creature-e18dbcb6300b4421aac2bb51cc060aed) by Jorma Rysky, Sketchfab | CC BY 4.0 |
+| ext_cosmicbuddha | scan with relief carving | 150,000 | 1 (1) | [Cosmic Buddha](https://zenodo.org/records/10285204), Smithsonian, via Zenodo | CC0 1.0 |
+| ext_rain | full character: body, clothes, hair cards, eyes, teeth (18 objects joined) | 79,594 | 98 (16) | [Rain](https://studio.blender.org/characters/rain/v3/), Blender Studio | CC BY |
+| ext_rain_hair | Rain's hair cards and hair band only | 6,817 | 18 (1) | as Rain | CC BY |
+| ext_sprite | stylized character (14 objects joined) | 35,366 | 33 (10) | [Sprite](https://studio.blender.org/characters/sprite/v1/), Blender Studio | CC BY |
+
+Conversion: `.blend` and `.fbx` with `tools/bench/blender_to_obj.py` (evaluated meshes, viewport
+modifiers, world transform, visible objects joined, as the add-on sees them); the glb with
+`fetch_external.py`'s reader, which welds UV seams (Blender's own glTF import left the Buddha in 892
+open pieces); Phenebub's Collada file with trimesh, welded the same way (Blender 5 has no Collada import).
+
+Credits: Old knight speedsculpt by mrrobot, Tentacle Eye Monster by Scrubmuffin, Phenebub by Jorma
+Rysky, all CC BY 4.0 on Sketchfab; Rain and Sprite by Blender Studio, CC BY; Cosmic Buddha by the
+Smithsonian Institution, CC0.
+
 ## Credits
 
 Scorpion, skull: YahooJAPAN, CC BY 3.0. Goat head: hugoelec, CC BY 3.0. Tree: warmarine759, CC BY 4.0.
