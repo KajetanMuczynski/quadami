@@ -73,7 +73,7 @@ QtWaitingSpinner     not stated       MIT                  thirdparty/QtWaitingS
     Attribution as given there: "Font Awesome by Dave Gandy - http://fortawesome.github.com/Font-Awesome".
 
 Not bundled in the Qt app (linked from the system at build time): Qt 5.15 / Qt 6, oneTBB,
-zlib, OpenGL. The Blender add-on zips for Windows and macOS link oneTBB statically; its
+zlib, OpenGL. The Blender add-on zips (Linux, Windows and macOS) link oneTBB statically; its
 LICENSE.txt and third-party-programs.txt go into the zip's licenses/ (CMakeLists.txt).
 
 Note: ACKNOWLEDGEMENTS.html (shown in the app's About box) is inherited from upstream and
