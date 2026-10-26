@@ -372,6 +372,88 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
     return stats;
 }
 
+size_t splitPinchedVertices(std::vector<Vector3>& vertices,
+    std::vector<std::vector<size_t>>& triangles)
+{
+    // Corners packed as vertex << 32 | triangle << 2 | corner, sorted, so
+    // each vertex's corners are together and in triangle order.
+    if (vertices.size() > 0xffffffffu || triangles.size() >= ((size_t)1 << 30))
+        return 0;
+    std::vector<uint64_t> corners;
+    corners.reserve(triangles.size() * 3);
+    for (size_t t = 0; t < triangles.size(); ++t) {
+        if (isDegenerate(triangles[t]))
+            continue;
+        for (size_t k = 0; k < 3; ++k)
+            corners.push_back(((uint64_t)triangles[t][k] << 32) | ((uint64_t)t << 2) | (uint64_t)k);
+    }
+    tbb::parallel_sort(corners.begin(), corners.end());
+    const auto vertexOf = [&](size_t c) { return (size_t)(corners[c] >> 32); };
+    const auto triangleOf = [&](size_t c) { return (size_t)((corners[c] & 0xffffffffu) >> 2); };
+    const auto cornerOf = [&](size_t c) { return (size_t)(corners[c] & 3u); };
+
+    size_t added = 0;
+    std::vector<size_t> parent;
+    std::vector<std::pair<size_t, size_t>> across;
+    for (size_t i = 0; i < corners.size();) {
+        size_t j = i + 1;
+        while (j < corners.size() && vertexOf(j) == vertexOf(i))
+            ++j;
+        const size_t count = j - i;
+        if (count < 2) {
+            i = j;
+            continue;
+        }
+        // Two corners of the vertex are in one fan if their triangles share
+        // an edge from it: the same far end.
+        across.clear();
+        for (size_t c = i; c < j; ++c) {
+            const auto& t = triangles[triangleOf(c)];
+            const size_t k = cornerOf(c);
+            across.push_back({ t[(k + 1) % 3], c - i });
+            across.push_back({ t[(k + 2) % 3], c - i });
+        }
+        std::sort(across.begin(), across.end());
+        parent.resize(count);
+        std::iota(parent.begin(), parent.end(), (size_t)0);
+        const auto root = [&](size_t x) {
+            while (parent[x] != x)
+                x = parent[x] = parent[parent[x]];
+            return x;
+        };
+        size_t fans = count;
+        for (size_t a = 1; a < across.size(); ++a) {
+            if (across[a].first != across[a - 1].first)
+                continue;
+            const size_t ra = root(across[a].second), rb = root(across[a - 1].second);
+            if (ra != rb) {
+                parent[std::max(ra, rb)] = std::min(ra, rb);
+                --fans;
+            }
+        }
+        if (fans > 1) {
+            // Corners are sorted by triangle, so root 0 is the fan with the
+            // lowest triangle; it keeps the vertex.
+            std::vector<size_t> copyOf(count, none);
+            const size_t vertex = vertexOf(i);
+            const Vector3 position = vertices[vertex];
+            for (size_t c = 0; c < count; ++c) {
+                const size_t r = root(c);
+                if (0 == r)
+                    continue;
+                if (none == copyOf[r]) {
+                    copyOf[r] = vertices.size();
+                    vertices.push_back(position);
+                    ++added;
+                }
+                triangles[triangleOf(i + c)][cornerOf(i + c)] = copyOf[r];
+            }
+        }
+        i = j;
+    }
+    return added;
+}
+
 size_t removeDuplicateTriangles(std::vector<std::vector<size_t>>& triangles)
 {
     std::vector<std::array<size_t, 4>> keys(triangles.size());

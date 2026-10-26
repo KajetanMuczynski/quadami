@@ -66,6 +66,15 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
     std::vector<std::vector<size_t>>& triangles,
     double tolerance);
 
+// Gives each fan of triangles around a vertex its own copy of the vertex
+// when the fans meet only there (a pinch: two parts of the surface welded at
+// one point).  Fans joined across any shared edge, even a non-manifold one,
+// stay one; the fan with the lowest triangle keeps the index, the others get
+// new vertices appended at the same position.  Returns how many vertices
+// were added.
+size_t splitPinchedVertices(std::vector<Vector3>& vertices,
+    std::vector<std::vector<size_t>>& triangles);
+
 // Removes every triangle whose three corners an earlier triangle already
 // has, in either winding: duplicated faces, and the second side of a
 // double-sided (zero-thickness) shell.  The first one is kept, in place.

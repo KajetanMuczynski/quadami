@@ -164,6 +164,39 @@ int main()
             "duplicates in either winding removed, first kept in place");
     }
     {
+        // Two grids sharing one corner: the shared vertex is split, and only
+        // the second grid's corners move to the new vertex.
+        Mesh a = grid(2), b = grid(2);
+        Mesh mesh = a;
+        const size_t offset = mesh.vertices.size();
+        for (auto v : b.vertices)
+            mesh.vertices.push_back(Vector3(-v.x(), -v.y(), v.z()));
+        for (auto t : b.triangles) {
+            for (auto& c : t)
+                c = 0 == c ? 0 : c + offset;
+            mesh.triangles.push_back({ t[0], t[2], t[1] });
+        }
+        const auto before = mesh.triangles;
+        const size_t vertexCount = mesh.vertices.size();
+        check(1 == AutoRemesher::splitPinchedVertices(mesh.vertices, mesh.triangles), "pinch: one vertex added");
+        bool firstKept = true, secondMoved = true;
+        for (size_t t = 0; t < before.size(); ++t) {
+            for (size_t k = 0; k < 3; ++k) {
+                if (0 != before[t][k])
+                    continue;
+                if (t < a.triangles.size())
+                    firstKept = firstKept && 0 == mesh.triangles[t][k];
+                else
+                    secondMoved = secondMoved && vertexCount == mesh.triangles[t][k];
+            }
+        }
+        check(firstKept && secondMoved, "pinch: first fan keeps the vertex, second gets the copy");
+        Mesh clean = grid(4);
+        const auto cleanBefore = clean.triangles;
+        check(0 == AutoRemesher::splitPinchedVertices(clean.vertices, clean.triangles) && cleanBefore == clean.triangles,
+            "clean grid: no vertex split");
+    }
+    {
         // Through remesh(): a soup of a closed box comes back closed.
         Mesh box;
         box.vertices = { { 0, 0, 0 }, { 1, 0, 0 }, { 1, 1, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 0, 1 }, { 1, 1, 1 }, { 0, 1, 1 } };

@@ -975,7 +975,8 @@ bool AutoRemesher::remeshIslands()
     const double cpuStart = processCpuSeconds();
 
     // Open seams first: welding can leave zero-length edges and duplicate
-    // triangles, which the next two steps remove.
+    // triangles, which the next two steps remove.  Pinched vertices are split
+    // last, once no merge can make new ones.
     const SeamWeldStats seams = weldSeams(m_vertices, m_triangles,
         seamWeldRelativeTolerance * usedBoundingDiagonal(m_vertices, m_triangles));
     InputCleanupStats cleanup = cleanInput(m_vertices, m_triangles, inputCleanupTolerance(m_vertices));
@@ -986,6 +987,7 @@ bool AutoRemesher::remeshIslands()
     // such an edge skips the sort.
     if (0 != seams.nonManifoldEdges)
         cleanup.duplicateTriangles = removeDuplicateTriangles(m_triangles);
+    cleanup.splitVertices = splitPinchedVertices(m_vertices, m_triangles);
     orientInput(m_vertices, m_triangles, &cleanup);
     if (m_triangles.empty()) {
         std::cerr << "Input mesh has only degenerate triangles" << std::endl;
@@ -1705,6 +1707,7 @@ bool AutoRemesher::remeshIslands()
         run.set("input_welded_vertices", (double)cleanup.weldedVertices);
         run.set("input_weld_kept_parts", (double)cleanup.weldKeptParts);
         run.set("input_duplicate_triangles", (double)cleanup.duplicateTriangles);
+        run.set("input_split_vertices", (double)cleanup.splitVertices);
         run.set("input_sliver_islands", (double)sliverIslands);
         {
             run.set("input_fold_repair", m_repairInputFolds ? 1.0 : 0.0);

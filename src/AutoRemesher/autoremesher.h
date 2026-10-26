@@ -330,6 +330,8 @@ public:
         size_t weldKeptParts = 0;
         // Triangles removed because an earlier one has the same corners.
         size_t duplicateTriangles = 0;
+        // Vertices added by splitPinchedVertices(): one per extra fan.
+        size_t splitVertices = 0;
     };
 
     // Edges up to this long are rounding noise of the float32 positions
