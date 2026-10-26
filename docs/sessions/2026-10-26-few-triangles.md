@@ -10,5 +10,7 @@
   quads keep it. Triangles are not the lever (best diagonal split ≤ 9 %; isotropic triangles lose more
   than our quads); vertex placement is. The sword's thin vines at 3k also need smaller quads there.
 - Measured: research/few-triangles-2026-10-26.md (private sculpts, 6 replicates per side) and the PR.
-- Next: finish the public guard of the switch on the PR build; after the v0.1.0 tag, make it the
-  default (full lane); local sizing for thin parts (2.21, 2.22 a).
+- Checked: a second worker with its own distance code confirmed the loss drop in every replicate pair
+  and found the cost: more faces folded over in the swirled cube's grooves (flips +40 % at 3k).
+- Next: finish the public guard of the switch on the PR build; after the v0.1.0 tag, a fold guard for
+  the groove flips, then decide the default (full lane); local sizing for thin parts (2.21, 2.22 a).

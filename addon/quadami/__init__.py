@@ -146,8 +146,9 @@ class RemeshSettings(bpy.types.PropertyGroup):
             ("laplacian", "Standard", "Evens out the quads by moving them in 3D, which rounds off "
                                       "ridges, swirls and sharp edges"),
             ("tangential", "Keep Ridges", "Evens out the quads by sliding them along the surface: "
-                                          "on test sculpts about half as much shape lost, with about "
-                                          "as many folded quads (experimental)"),
+                                          "on test sculpts a third to a half less of the shape lost, "
+                                          "but sometimes a few more flipped quads in deep grooves "
+                                          "(experimental)"),
         ),
         default="laplacian",
         description="How the quads are evened out after they are found")
