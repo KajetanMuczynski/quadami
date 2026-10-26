@@ -186,9 +186,17 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
     if (boundary.empty() || !(tolerance > 0.0) || !std::isfinite(tolerance))
         return stats;
 
-    // Boundary vertices on a grid of the tolerance, and the boundary sides
-    // by their (from, to) for lookup.
+    // Boundary vertices on a grid of the tolerance.  A position that is not
+    // finite, or too far out for a cell index, is never near anything.
     std::unordered_map<Cell, std::vector<size_t>, CellHash> grid;
+    const double farthestCell = 1e15;
+    const auto onGrid = [&](const Vector3& p) {
+        for (size_t i = 0; i < 3; ++i) {
+            if (!(std::abs(p[i] / tolerance) < farthestCell))
+                return false;
+        }
+        return true;
+    };
     const auto cellOf = [&](const Vector3& p) {
         return Cell { (long long)std::floor(p.x() / tolerance), (long long)std::floor(p.y() / tolerance),
             (long long)std::floor(p.z() / tolerance) };
@@ -202,8 +210,10 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
         }
         std::sort(ends.begin(), ends.end());
         ends.erase(std::unique(ends.begin(), ends.end()), ends.end());
-        for (const size_t v : ends)
-            grid[cellOf(vertices[v])].push_back(v);
+        for (const size_t v : ends) {
+            if (onGrid(vertices[v]))
+                grid[cellOf(vertices[v])].push_back(v);
+        }
     }
     // The boundary sides leaving and entering each boundary vertex.
     std::unordered_map<size_t, std::vector<size_t>> leaving, entering;
@@ -218,6 +228,8 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
     };
     const auto near = [&](size_t v, std::vector<size_t>& out) {
         out.clear();
+        if (!onGrid(vertices[v]))
+            return;
         const Cell c = cellOf(vertices[v]);
         for (long long dx = -1; dx <= 1; ++dx) {
             for (long long dy = -1; dy <= 1; ++dy) {

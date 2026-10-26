@@ -37,7 +37,8 @@ measured in quad edges. Families (set name stress_<family>):
   selfint    sphere with a dent pushed to depth 1.0 (touching) and 2.2 R (through the far wall) (E4).
   sanitize   input defects of TODO 2.7: unwelded seams (exact and with a gap), Edge Split on a CAD part,
              duplicate faces, a double-sided shell, pinched (non-manifold) vertices, T-junctions sealed by
-             zero-area triangles, a far loose vertex. Needs synthetic/csg_bracket.obj next to downloads/.
+             zero-area triangles, sliver islands (0.2 x 1e-7 strips), a far loose vertex. Needs
+             synthetic/csg_bracket.obj next to downloads/.
 """
 import argparse
 import json
@@ -473,6 +474,18 @@ def fam_sanitize(ctx):
     # T-junctions sealed by zero-area triangles (exact booleans, CAD stitching).
     yield "san_tcaps", sealed_t_junctions(V, F, 0.02, rng), \
         {"kind": "2 % of edges split on one side, sealed by a zero-area triangle"}, None
+    # Sliver islands: strips 0.2 long and 1e-7 wide, as a bisect at zero threshold plus Mirror leaves (gap analysis
+    # 2026-10-26: 9 min, 8.8 GB). Twelve of them next to the body.
+    parts = [(V, F)]
+    for k in range(12):
+        n = 12
+        z = np.linspace(-0.1, 0.1, n)
+        a = np.stack([np.zeros(n), np.full(n, 1.2 + 0.05 * k), z], 1)
+        b = a + np.array([1e-7, 0.0, 0.0]) * rng.uniform(0.5, 1.5, size=(n, 1))
+        i = np.arange(n - 1)
+        Fk = np.concatenate([np.stack([i, i + 1, n + i], 1), np.stack([i + 1, n + i + 1, n + i], 1)])
+        parts.append((np.concatenate([a, b]), Fk))
+    yield "san_sliver_islands", merge(*parts), {"kind": "spot plus 12 strips 0.2 x 1e-7"}, None
     # Loose vertices far away inflate the bounding box.
     for far in (1e3, 1e5):
         yield f"san_loose_vertex_{far:g}", (np.concatenate([V, [[far, 0.0, 0.0]]]), F), \
