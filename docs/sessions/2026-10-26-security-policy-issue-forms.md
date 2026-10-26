@@ -8,5 +8,6 @@
 - Found: issue-form changes under `.github/` are not "documentation" for ci.yml's `changes` job, so
   such a PR still runs the macOS job.
 - Measured: nothing measured (site build and its tests pass offline).
-- Next: Kajetan enables Private vulnerability reporting in the repository settings; contact data he
-  provides later goes in once he sends it.
+- Contact e-mail quadami.contact@gmail.com (Kajetan, 2026-10-26) added to README Contact, SECURITY.md
+  and the community page as the channel without a GitHub account.
+- Next: Kajetan enables Private vulnerability reporting in the repository settings.

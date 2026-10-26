@@ -43,5 +43,6 @@ What we need from you, and what you should know before you send it:
 - **Bug reports** go to the [bug report form](https://github.com/KajetanMuczynski/quadami/issues/new?template=bug-report.yml) instead; nothing from
   a bug report is shown here.
 
-Permission given another way (e-mail, chat) counts only in writing; the entry then says
+Permission given another way counts only in writing, for example by e-mail to
+[quadami.contact@gmail.com](mailto:quadami.contact@gmail.com); the entry then says
 "Permission: by e-mail, <date>" and the maintainer keeps the message.

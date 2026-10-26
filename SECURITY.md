@@ -10,6 +10,8 @@ Copyright (C) 2026 Quadami contributors
 Please do **not** open a public issue for a security problem. Report it privately on GitHub:
 [Security > Report a vulnerability](https://github.com/KajetanMuczynski/quadami/security/advisories/new)
 (you need a free GitHub account). Only the maintainer sees the report until a fix is published.
+Without a GitHub account, e-mail [quadami.contact@gmail.com](mailto:quadami.contact@gmail.com) with "Security" in the subject;
+e-mail is not encrypted, so send the details of a serious problem only once we have replied.
 
 Include what you can: the build line from the bottom of the Quadami panel, your system and Blender
 version, the steps or the file that triggers the problem, and what an attacker could gain. If the
