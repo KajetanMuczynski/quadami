@@ -20,7 +20,7 @@ Blender add-on
 - Opt-in flattening of needle spikes that Repair Folds cannot untangle
 
 Remeshing
-- libQEx is the default quad extractor, with a per-island fallback to the previous one
+- Quad extraction by libQEx, with a built-in fallback extractor for pieces libQEx cannot handle
 - Closed inputs stay closed and small islands stay present; holes left in closed islands are reported
 - Input cleanup: zero-length edges and inconsistently wound patches are fixed before remeshing
 - Quad cover rounded greedily on one factorisation, then untangled with its integers held
