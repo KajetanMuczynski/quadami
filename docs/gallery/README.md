@@ -73,7 +73,7 @@ Panel rows flagged: Non-quads: 6; Folded faces: 3.
 Panel rows flagged: Handles: 3 lost.
 
 > Panel: Output has 3 handles fewer than the input (tunnels or loops closed up, on 1 island): handles only a few quads around close up. A higher Target Quads keeps more of them
-> Panel: 1 % of the surface (17 spots) is thinner than one quad; expect folds or lost parts there. Try at least 11000 target quads, or thicken those parts
+> Panel: 1 % of the surface (17 spots) is thinner than one quad; expect folds or lost parts there. At least 11000 target quads (an estimate) would fit a quad across about half of it, but each raise also reveals thinner parts, so it can take several raises; thickening those parts is usually the better fix
 > Panel: To thicken a part: Tab into Edit Mode, select it, press Alt+S (Shrink/Fatten) and move the mouse outwards.
 > Panel: Folded input: 500 faces in 364 spots, where the surface folds over itself. The quads there may come out messy or with holes.
 
@@ -92,7 +92,7 @@ Panel rows flagged: none.
 Panel rows flagged: Folded faces: 1; Missing parts: up to 3 quad widths.
 
 > Panel: Parts of the model are missing in the result (up to 3 quad widths away). Thin parts need about two quads across: raise Target Quads.
-> Panel: 4 % of the surface (4 spots) is thinner than one quad; expect folds or lost parts there. Try at least 9800 target quads, or thicken those parts
+> Panel: 4 % of the surface (4 spots) is thinner than one quad; expect folds or lost parts there. At least 9800 target quads (an estimate) would fit a quad across about half of it, but each raise also reveals thinner parts, so it can take several raises; thickening those parts is usually the better fix
 > Panel: To thicken a part: Tab into Edit Mode, select it, press Alt+S (Shrink/Fatten) and move the mouse outwards.
 > Panel: Folded input: 91 faces in 26 spots, where the surface folds over itself. The quads there may come out messy or with holes.
 
@@ -111,7 +111,7 @@ Panel rows flagged: Folds left: 16 faces in 14 spots.
 Panel rows flagged: Folded faces: 10; Missing parts: up to 10 quad widths.
 
 > Panel: Parts of the model are missing in the result (up to 10 quad widths away). Thin parts need about two quads across: raise Target Quads.
-> Panel: 74 % of the surface (4 spots) is thinner than one quad; expect folds or lost parts there. Try at least 7600 target quads, or thicken those parts
+> Panel: 74 % of the surface (4 spots) is thinner than one quad; expect folds or lost parts there. At least 7600 target quads (an estimate) would fit a quad across about half of it, but each raise also reveals thinner parts, so it can take several raises; thickening those parts is usually the better fix
 > Panel: To thicken a part: Tab into Edit Mode, select it, press Alt+S (Shrink/Fatten) and move the mouse outwards.
 > Panel: Folded input: 110 faces in 69 spots, where the surface folds over itself. The quads there may come out messy or with holes.
 
@@ -121,7 +121,7 @@ Panel rows flagged: Folded faces: 10; Missing parts: up to 10 quad widths.
 
 Panel rows flagged: Folded faces: 11.
 
-> Panel: 68 % of the surface (4 spots) is thinner than one quad; expect folds or lost parts there. Try at least 12000 target quads, or thicken those parts
+> Panel: 68 % of the surface (4 spots) is thinner than one quad; expect folds or lost parts there. At least 12000 target quads (an estimate) would fit a quad across about half of it, but each raise also reveals thinner parts, so it can take several raises; thickening those parts is usually the better fix
 > Panel: To thicken a part: Tab into Edit Mode, select it, press Alt+S (Shrink/Fatten) and move the mouse outwards.
 > Panel: Folded input: 110 faces in 69 spots, where the surface folds over itself. The quads there may come out messy or with holes.
 
@@ -147,7 +147,7 @@ Panel rows flagged: none.
 
 Panel rows flagged: none.
 
-> Panel: 10 % of the surface (19 spots) is thinner than one quad; expect folds or lost parts there. Try at least 4500 target quads, or thicken those parts
+> Panel: 10 % of the surface (19 spots) is thinner than one quad; expect folds or lost parts there. At least 4500 target quads (an estimate) would fit a quad across about half of it, but each raise also reveals thinner parts, so it can take several raises; thickening those parts is usually the better fix
 > Panel: To thicken a part: Tab into Edit Mode, select it, press Alt+S (Shrink/Fatten) and move the mouse outwards.
 
 <!-- gallery-table:end -->
