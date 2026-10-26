@@ -238,8 +238,24 @@ class Site:
                                                      html.escape(p["nav"])))
         return "\n      ".join(items)
 
+    def check_coverage(self):
+        """Every ## section of a user-facing file is on a page or excluded with a reason."""
+        for rel, excluded in self.config.get("coverage", {}).items():
+            src = self.source(rel)
+            titles = [a[2] for a in src.anchors if a[1] == 2]
+            whole = any(p["source"] == rel and "sections" not in p for p in self.pages)
+            on_pages = {t for p in self.pages if p["source"] == rel for t in p.get("sections", [])}
+            for t in titles:
+                if not whole and t not in on_pages and t not in excluded:
+                    self.errors.append("%s: section %r is on no page and not excluded in site.json "
+                                       "'coverage' (map it to a page or exclude it with a reason)" % (rel, t))
+            for t in excluded:
+                if t not in titles:
+                    self.errors.append("%s: excluded section %r does not exist" % (rel, t))
+
     def build(self, template, commit):
         os.makedirs(self.out, exist_ok=True)
+        self.check_coverage()
         self.inject_releases()
         for page in self.pages:
             title, body = self.render(page)

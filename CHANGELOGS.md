@@ -21,7 +21,7 @@ Blender add-on
 
 Remeshing
 - Quad extraction by libQEx, with a built-in fallback extractor for pieces libQEx cannot handle
-- Closed inputs stay closed and small islands stay present; holes left in closed islands are reported
+- Fixes for holes in closed islands and for small islands that came out empty; the holes and empty islands that remain are reported
 - Input cleanup: zero-length edges and inconsistently wound patches are fixed before remeshing
 - Quad cover rounded greedily on one factorisation, then untangled with its integers held
 - Validity check of the map before extraction

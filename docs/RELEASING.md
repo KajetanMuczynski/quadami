@@ -73,8 +73,8 @@ Copy into the release PR's description and tick each line there.
 3. **Release PR** (`docs(docs): release <version>`): bump `version` in
    `addon/quadami/blender_manifest.toml`, write `docs/releases/<version>.md` (no TBD left), add the
    version's section to `CHANGELOGS.md`, point the install docs (README, USER-GUIDE §2) to the
-   Releases page, and regenerate the public gallery at this commit (`tools/gallery/gallery.py`,
-   once PR #79 is in; about 10 minutes, needs bpy) so its renders and limits match the release.
+   Releases page, and regenerate the public gallery at this commit (`tools/gallery/gallery.py`;
+   about 10 minutes, needs bpy) so its renders and limits match the release.
    Merge after CI is green.
 4. **Optional dress rehearsal**: tag the merge commit `v<version>-rc.1` and check the draft
    pre-release (zips, notes, build line after installing one zip). Delete that draft and tag after.
