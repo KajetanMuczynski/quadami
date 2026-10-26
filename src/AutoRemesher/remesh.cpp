@@ -663,12 +663,19 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
                 + ") is thinner than one quad; expect folds or lost parts there. ";
             const double needed = growth * (double)parameters.targetQuadCount;
             if (needed > (double)MaximumTargetQuadCount) {
-                text += "No target quad count fits a quad across most of it: thicken those parts";
+                text += "No target quad count fits a quad across half of it: thicken those parts";
             } else {
-                // Two significant digits; a lower bound, since a finer T shows thinner parts.
+                // Two significant digits, rounded up. The count fits a quad across
+                // the area-weighted median of the parts thin at this count, and a
+                // finer T shows thinner parts, so it is a first step, not the count
+                // that clears the warning: on a vine-covered sword it came out at
+                // 1.6-2.1 times the count asked for at every count from 3,000 to 75,000.
                 const double step = std::pow(10.0, std::floor(std::log10(std::max(needed, 1.0))) - 1.0);
-                text += "Try at least "
-                    + std::to_string((long long)(std::ceil(needed / step) * step)) + " target quads, or thicken those parts";
+                text += "At least "
+                    + std::to_string((long long)(std::ceil(needed / step) * step))
+                    + " target quads (an estimate) would fit a quad across about half of it, but each raise "
+                      "also reveals thinner parts, so it can take several raises; thickening those parts is "
+                      "usually the better fix";
             }
             report.warnings.push_back(text);
         }
