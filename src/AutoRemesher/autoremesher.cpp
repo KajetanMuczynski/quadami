@@ -967,7 +967,10 @@ bool AutoRemesher::remeshIslands()
     cleanup.weldedEdges = seams.weldedEdges;
     cleanup.weldedVertices = seams.weldedVertices;
     cleanup.weldKeptParts = seams.keptParts;
-    cleanup.duplicateTriangles = removeDuplicateTriangles(m_triangles);
+    // A duplicate triangle makes its edges non-manifold, so a mesh without
+    // such an edge skips the sort.
+    if (0 != seams.nonManifoldEdges)
+        cleanup.duplicateTriangles = removeDuplicateTriangles(m_triangles);
     orientInput(m_vertices, m_triangles, &cleanup);
     if (m_triangles.empty()) {
         std::cerr << "Input mesh has only degenerate triangles" << std::endl;

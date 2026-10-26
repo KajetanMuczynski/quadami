@@ -42,6 +42,10 @@ struct SeamWeldStats {
     // Connected parts whose welds were undone because they would have made
     // an edge non-manifold.
     size_t keptParts = 0;
+    // Edges of more than two triangles in the input as it came: without
+    // one there can be no duplicate triangle (but for two triangles that
+    // only meet each other).
+    size_t nonManifoldEdges = 0;
 };
 
 // The relative tolerance of weldSeams(): ends of two boundary edges this

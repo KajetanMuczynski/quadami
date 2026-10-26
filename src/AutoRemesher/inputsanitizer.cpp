@@ -91,11 +91,26 @@ namespace {
         return t[0] == t[1] || t[1] == t[2] || t[2] == t[0];
     }
 
-    // Undirected edges as (low, high, triangle), sorted.
-    std::vector<std::array<size_t, 3>> sortedEdges(const std::vector<std::vector<size_t>>& triangles,
+    // An undirected edge packed into one key, with the triangle it belongs
+    // to.  Callers check that vertex indices fit 32 bits.
+    struct EdgeUse {
+        uint64_t key;
+        uint32_t triangle;
+        bool operator<(const EdgeUse& other) const
+        {
+            return key != other.key ? key < other.key : triangle < other.triangle;
+        }
+    };
+
+    uint64_t edgeKey(size_t a, size_t b)
+    {
+        return ((uint64_t)std::min(a, b) << 32) | (uint64_t)std::max(a, b);
+    }
+
+    std::vector<EdgeUse> sortedEdges(const std::vector<std::vector<size_t>>& triangles,
         const std::vector<size_t>* remap)
     {
-        std::vector<std::array<size_t, 3>> edges;
+        std::vector<EdgeUse> edges;
         edges.reserve(triangles.size() * 3);
         for (size_t t = 0; t < triangles.size(); ++t) {
             std::array<size_t, 3> c = { triangles[t][0], triangles[t][1], triangles[t][2] };
@@ -106,7 +121,7 @@ namespace {
             for (size_t i = 0; i < 3; ++i) {
                 const size_t a = c[i], b = c[(i + 1) % 3];
                 if (a != b)
-                    edges.push_back({ std::min(a, b), std::max(a, b), t });
+                    edges.push_back({ edgeKey(a, b), (uint32_t)t });
             }
         }
         tbb::parallel_sort(edges.begin(), edges.end());
@@ -138,7 +153,7 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
     double tolerance)
 {
     SeamWeldStats stats;
-    if (!(tolerance > 0.0) || !std::isfinite(tolerance))
+    if (vertices.size() > 0xffffffffu || triangles.size() > 0xffffffffu)
         return stats;
 
     // Boundary edges: used by one triangle.  Kept as the triangle walks
@@ -151,14 +166,16 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
         const auto edges = sortedEdges(triangles, nullptr);
         for (size_t i = 0; i < edges.size();) {
             size_t j = i + 1;
-            while (j < edges.size() && edges[j][0] == edges[i][0] && edges[j][1] == edges[i][1])
+            while (j < edges.size() && edges[j].key == edges[i].key)
                 ++j;
-            if (1 == j - i) {
-                const auto& t = triangles[edges[i][2]];
+            if (j - i > 2)
+                ++stats.nonManifoldEdges;
+            else if (1 == j - i) {
+                const auto& t = triangles[edges[i].triangle];
                 for (size_t k = 0; k < 3; ++k) {
                     const size_t a = t[k], b = t[(k + 1) % 3];
-                    if (std::min(a, b) == edges[i][0] && std::max(a, b) == edges[i][1]) {
-                        boundary.push_back({ a, b, edges[i][2] });
+                    if (edgeKey(a, b) == edges[i].key) {
+                        boundary.push_back({ a, b, edges[i].triangle });
                         break;
                     }
                 }
@@ -166,7 +183,7 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
             i = j;
         }
     }
-    if (boundary.empty())
+    if (boundary.empty() || !(tolerance > 0.0) || !std::isfinite(tolerance))
         return stats;
 
     // Boundary vertices on a grid of the tolerance, and the boundary sides
@@ -188,14 +205,16 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
         for (const size_t v : ends)
             grid[cellOf(vertices[v])].push_back(v);
     }
-    std::vector<std::array<size_t, 3>> lookup(boundary.size());
-    for (size_t s = 0; s < boundary.size(); ++s)
-        lookup[s] = { boundary[s].from, boundary[s].to, s };
-    std::sort(lookup.begin(), lookup.end());
-    const auto findSide = [&](size_t from, size_t to) {
-        const std::array<size_t, 3> key = { from, to, 0 };
-        auto it = std::lower_bound(lookup.begin(), lookup.end(), key);
-        return (it != lookup.end() && (*it)[0] == from && (*it)[1] == to) ? (*it)[2] : none;
+    // The boundary sides leaving and entering each boundary vertex.
+    std::unordered_map<size_t, std::vector<size_t>> leaving, entering;
+    for (size_t k = 0; k < boundary.size(); ++k) {
+        leaving[boundary[k].from].push_back(k);
+        entering[boundary[k].to].push_back(k);
+    }
+    const std::vector<size_t> noSides;
+    const auto sidesOf = [&](const std::unordered_map<size_t, std::vector<size_t>>& map, size_t v) -> const std::vector<size_t>& {
+        auto found = map.find(v);
+        return found == map.end() ? noSides : found->second;
     };
     const auto near = [&](size_t v, std::vector<size_t>& out) {
         out.clear();
@@ -220,34 +239,33 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
     // oriented later).  None when there are several.
     std::vector<size_t> partner(boundary.size(), none);
     std::vector<unsigned char> reversed(boundary.size(), 0);
-    std::vector<size_t> nearFrom, nearTo;
+    std::vector<size_t> nearFrom;
     for (size_t s = 0; s < boundary.size(); ++s) {
         const Side& side = boundary[s];
         const double length = (vertices[side.from] - vertices[side.to]).length();
         near(side.from, nearFrom);
-        near(side.to, nearTo);
         size_t found = none;
         bool foundReversed = false;
         bool ambiguous = false;
+        const auto consider = [&](size_t k, size_t u, size_t w, bool isReversed) {
+            if (k == s || u == w)
+                return;
+            const double otherLength = (vertices[boundary[k].from] - vertices[boundary[k].to]).length();
+            const double limit = std::min(tolerance, 0.1 * std::min(length, otherLength));
+            if ((vertices[u] - vertices[side.from]).lengthSquared() > limit * limit
+                || (vertices[w] - vertices[side.to]).lengthSquared() > limit * limit)
+                return;
+            if (none != found && found != k)
+                ambiguous = true;
+            found = k;
+            foundReversed = isReversed;
+        };
         for (const size_t u : nearFrom) {
-            for (const size_t w : nearTo) {
-                if (u == w)
-                    continue;
-                for (int direction = 0; direction < 2; ++direction) {
-                    const size_t k = 0 == direction ? findSide(w, u) : findSide(u, w);
-                    if (none == k || k == s)
-                        continue;
-                    const double otherLength = (vertices[boundary[k].from] - vertices[boundary[k].to]).length();
-                    const double limit = std::min(tolerance, 0.1 * std::min(length, otherLength));
-                    if ((vertices[u] - vertices[side.from]).lengthSquared() > limit * limit
-                        || (vertices[w] - vertices[side.to]).lengthSquared() > limit * limit)
-                        continue;
-                    if (none != found && found != k)
-                        ambiguous = true;
-                    found = k;
-                    foundReversed = 0 == direction;
-                }
-            }
+            // k walks w -> u, against s, or u -> w, along it.
+            for (const size_t k : sidesOf(entering, u))
+                consider(k, u, boundary[k].from, true);
+            for (const size_t k : sidesOf(leaving, u))
+                consider(k, u, boundary[k].to, false);
         }
         if (!ambiguous) {
             partner[s] = found;
@@ -298,10 +316,10 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
         const auto edges = sortedEdges(triangles, after ? &remap : nullptr);
         for (size_t i = 0; i < edges.size();) {
             size_t j = i + 1;
-            while (j < edges.size() && edges[j][0] == edges[i][0] && edges[j][1] == edges[i][1])
+            while (j < edges.size() && edges[j].key == edges[i].key)
                 ++j;
             if (j - i > 2)
-                nonManifoldGrowth[partOfTriangle(edges[i][2])] += after ? 1 : -1;
+                nonManifoldGrowth[partOfTriangle(edges[i].triangle)] += after ? 1 : -1;
             i = j;
         }
     }
