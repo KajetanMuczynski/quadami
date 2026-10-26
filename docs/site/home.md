@@ -41,5 +41,7 @@ The full list, with what helps: [user guide §7](../USER-GUIDE.md#7-sculpts-what
 - [User guide](../USER-GUIDE.md): your first remesh, every setting, every warning.
 - [Results](../gallery/README.md): before and after on public meshes, with the numbers and the limits.
 - [Community](community.md): what other people made with it.
+- [Contact](../../README.md#contact): bugs, ideas and questions go to GitHub Issues; security
+  problems to a [private report](../../SECURITY.md).
 - [Credits and license](../../README.md#origin-and-credits): Quadami started as a fork of
   AutoRemesher by Jeremy Hu.

@@ -40,8 +40,8 @@ What we need from you, and what you should know before you send it:
 - **Withdrawing.** Ask in the same issue and the entry is removed from the site at its next update.
   Copies already in the Git history, on mirrors or in someone's download stay, as with anything
   published on the web; send only what you are fine with staying public.
-- **Bug reports are welcome too**, with or without permission to publish: say which in the issue.
-  Without permission nothing from it is shown here.
+- **Bug reports** go to the [bug report form](https://github.com/KajetanMuczynski/quadami/issues/new?template=bug-report.yml) instead; nothing from
+  a bug report is shown here.
 
 Permission given another way (e-mail, chat) counts only in writing; the entry then says
 "Permission: by e-mail, <date>" and the maintainer keeps the message.

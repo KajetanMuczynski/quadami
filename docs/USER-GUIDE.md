@@ -346,7 +346,8 @@ What it does and does not do:
 | **It takes very long or the computer slows down** | Press Esc. Lower Target Quads or use Fast. Memory is about 2 GB per 100,000 quads. |
 | **Blender closed or froze** | The remesher runs as a separate program and cannot crash Blender by itself; report it. |
 
-**Reporting a problem.** Send: the **build line**, the settings (Target Quads, Fast/Quality, anything
+**Reporting a problem.** Use the [bug report form](https://github.com/KajetanMuczynski/quadami/issues/new?template=bug-report.yml) on GitHub (you need a free
+account); it asks for all of this. Send: the **build line**, the settings (Target Quads, Fast/Quality, anything
 changed), a screenshot of the result box, and, if possible, start Blender from a terminal (Windows:
 **Window > Toggle System Console**) and copy the text after `Quadami worker output:`. If you can share
 the model, say so; models are kept private and only their numbers go into the project.
