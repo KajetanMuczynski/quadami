@@ -84,6 +84,8 @@ CI (`.github/workflows/`):
     `addon-<platform>`. One macOS job per PR, since macOS runners are the scarce ones.
   - `site`: tests and builds the website (`tools/site/`, whitelist in `site.json`); fails on broken links,
     upstream links outside the credits page, images outside the media folders, private paths. Artifact `site-preview`.
+    User-facing doc changes must reach the site: every `##` section of `README.md` and `docs/USER-GUIDE.md`
+    is on a page or excluded with a reason in `site.json` `coverage`, else `site` fails.
   - `release (draft)`: only on a `v*` tag, after **CI passed**: `ci/release.py` checks the tag
     against the manifest version and the zips, and makes a **draft** GitHub release with the three
     zips, `SHA256SUMS.txt` and notes from `docs/releases/`. Publishing is Kajetan's click.
