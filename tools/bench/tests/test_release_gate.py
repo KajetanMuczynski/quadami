@@ -66,17 +66,23 @@ class ReleaseGate(unittest.TestCase):
         same = ([run(quads=1000), run()], [run(quads=1000), run()])
         rc, out = self.gate(*same)
         self.assertEqual(rc, 0, out)
-        self.assertIn("| H6 count within ±10 % | 1 / 1 | ok |", out)
+        self.assertIn("| H6 count within ±10 % | 1 / 1 | 0 / 0 | ok |", out)
         self.assertEqual(self.gate(*same, "--hard")[0], 1)
         rc, out = self.gate([run(quads=1000), run(quads=1000)], [run(quads=1000), run()])
         self.assertEqual(rc, 1)
-        self.assertIn("| H6 count within ±10 % | 1 / 2 | **worse** |", out)
+        self.assertIn("| H6 count within ±10 % | 1 / 2 | 0 / 1 | **worse** |", out)
+
+    def test_structural_flip_on_some_replicates_is_noise(self):
+        rc, out = self.gate([run(**{"validity.islands_dropped": 1}), run()], [run(), run()])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("| H4 islands kept (none dropped, split or merged) | 0 / 1 | 0 / 0 | ok |", out)
+        self.assertIn("| spot | fast | 2000 | u0 | H4 |", out)  # still listed
 
     def test_one_more_fold_is_worse(self):
         rc, out = self.gate([run(**{"quads.sj_le_0": 1}), run()], [run(), run()])
         self.assertEqual(rc, 1)
         self.assertIn("| V2 no folded quad | 2 / 1 | **worse** |", out)
-        self.assertIn("| folded quads | 0.000 / 0.250 | **worse** |", out)
+        self.assertIn("| folded quads | 0.0000 / 0.2500 | **worse** |", out)
         self.assertEqual(self.gate([run()], [run(**{"quads.sj_le_0": 1})])[0], 0)  # fewer is fine
 
 

@@ -61,7 +61,7 @@ Copy into the release PR's description and tick each line there.
          = the previous release's tag (for 0.1.0 master of 2026-10-22, `0e9bec8`, the default). Each
          platform builds both, runs corpus and closed sets with 5 replicates (about an hour; macOS
          longer) and `tools/bench/release_gate.py` decides: for 0.x no structural gate (H1–H6, H8)
-         fails on more runs than in the baseline and no §3.2 validity number is worse (TARGETS §6,
+         fails on every replicate of more cases (mesh, resolution, target) than in the baseline and no §3.2 validity number is worse (TARGETS §6,
          decision 3); tick **hard** for 1.0, where the structural gates must hold on every run. The
          job summary has the tables and `ab.py compare`; the artifact `release-check-<platform>` the
          run records. A macOS job dropped for want of a runner: re-run it from the run page.
