@@ -1665,7 +1665,7 @@ static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group,
         // Flatten indices
         for (size_t i = 0; i < prim_group.lineGroup.size(); i++) {
             for (size_t j = 0; j < prim_group.lineGroup[i].vertex_indices.size();
-                j++) {
+                 j++) {
                 const vertex_index_t& vi = prim_group.lineGroup[i].vertex_indices[j];
 
                 index_t idx;
@@ -1686,7 +1686,7 @@ static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group,
         // Flatten & convert indices
         for (size_t i = 0; i < prim_group.pointsGroup.size(); i++) {
             for (size_t j = 0; j < prim_group.pointsGroup[i].vertex_indices.size();
-                j++) {
+                 j++) {
                 const vertex_index_t& vi = prim_group.pointsGroup[i].vertex_indices[j];
 
                 index_t idx;

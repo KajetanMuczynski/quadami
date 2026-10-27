@@ -86,6 +86,12 @@ public:
         m_sharpEdgeDegrees = degrees;
     }
 
+    // Positions of conical tips the triangle mesh kept (TODO 2.23).
+    void setConicalTips(const std::vector<Vector3>* conicalTips)
+    {
+        m_conicalTips = conicalTips;
+    }
+
     void setAnisotropy(double anisotropy)
     {
         m_anisotropy = anisotropy;
@@ -127,6 +133,7 @@ private:
     double m_targetQuadCount = 0.0;
     double m_adaptivity = 0.5;
     double m_sharpEdgeDegrees = 90.0;
+    const std::vector<Vector3>* m_conicalTips = nullptr;
     double m_anisotropy = 1.0;
     double m_maxAspectRatio = 2.3;
     bool m_singularitySimplification = true;

@@ -1295,6 +1295,7 @@ bool AutoRemesher::remeshIslands()
         parameterizer.setGradientAdaptivity(ctx.adaptivity);
         parameterizer.setAnisotropy(ctx.anisotropy);
         parameterizer.setSharpEdgeDegrees(ctx.sharpEdgeDegrees);
+        parameterizer.setConicalTips(&run.conicalTips);
         bool parameterizeSucceeded = true;
         try {
             parameterizeSucceeded = parameterizer.parameterize();

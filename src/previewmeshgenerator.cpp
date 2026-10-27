@@ -246,7 +246,7 @@ static ModelShaderMesh* buildUvRenderMesh(
         memset(connectionVertices, 0, sizeof(ModelShaderVertex) * extractedConnections.size() * 2);
         size_t connectionVertexIndex = 0;
         for (size_t connectionIndex = 0; connectionIndex < extractedConnections.size();
-            ++connectionIndex) {
+             ++connectionIndex) {
             const auto& connection = extractedConnections[connectionIndex];
             const uint8_t flag = connectionIndex < extractedConnectionMoved.size()
                 ? extractedConnectionMoved[connectionIndex]

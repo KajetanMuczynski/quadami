@@ -287,13 +287,25 @@ bool Parameterizer::parameterize()
         return false;
     }
 
+    // The remesh kept each conical tip as one of its vertices.
+    std::vector<size_t> tipVertices;
+    if (nullptr != m_conicalTips) {
+        const double tolerance = 1e-6 * topology.averageEdgeLength();
+        for (const Vector3& tip : *m_conicalTips)
+            for (size_t v = 0; v < m_vertices->size(); ++v)
+                if (((*m_vertices)[v] - tip).length() <= tolerance) {
+                    tipVertices.push_back(v);
+                    break;
+                }
+    }
+
     report(0.03f, "Solving frame field");
     // Topology, field, and quad cover form the complete active path.
     std::vector<Vector3> field;
     if (nullptr != m_triangleFieldVectors) {
         field = *m_triangleFieldVectors;
     } else if (!FrameField::create(topology, m_sharpEdgeDegrees,
-                   &field, &m_diagnostics)) {
+                   &field, &m_diagnostics, &tipVertices)) {
         std::cerr << "Frame field solve failed" << std::endl;
         return false;
     }
