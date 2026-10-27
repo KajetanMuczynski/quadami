@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Quadami contributors
-"""ab.py's lane verdict and the metrics it adds to runs made without them.
+"""ab.py's lane verdict, the metrics it adds to runs made without them or whose measurement failed,
+and what `compare` says when the two sides' metrics are missing or come from different code.
 
     python -m unittest discover -s tools/bench/tests -v
 """
+import contextlib
+import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -78,6 +82,84 @@ class MetricsAddedLater(unittest.TestCase):
         self.assertTrue(ab.has_metrics(self.d))
         _, calls = self.run_one(metrics=True)
         self.assertEqual(calls, 0)
+
+    def test_failed_measurement_is_retried_by_the_next_run(self):
+        # metrics.py failing (out of memory under load) left "metrics": null, which every later run reused.
+        with mock.patch.object(ab, "measure", side_effect=lambda rec, *a: rec.update(metrics=None)):
+            ab.run_one("cli", self.mesh, "corpus", 2000, "quality", 0, self.out, [], self.work, True, 1)
+        self.assertFalse(ab.has_metrics(self.d))
+        rec, calls = self.run_one(metrics=True)
+        self.assertEqual((calls, rec["metrics"]), (1, {"measured": True}))
+
+
+class Measure(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.d = tmp.name
+
+    def measure(self, results):
+        """measure() with metrics.py replaced: each call writes the next of `results` (None = fails)."""
+        it = iter(results)
+
+        def fake(cmd, **kw):
+            res = next(it)
+            if res is not None:
+                with open(cmd[cmd.index("--json") + 1], "w") as fp:
+                    json.dump(res, fp)
+            return subprocess.CompletedProcess(cmd, 0 if res is not None else 1, b"", b"" if res else b"MemoryError")
+        rec = {}
+        with mock.patch.object(ab.subprocess, "run", side_effect=fake) as m:
+            ab.measure(rec, self.d, {"id": "m"}, 2000, "in.obj", self.d)
+        return rec, m.call_count
+
+    def test_one_retry_then_recorded_with_the_tool(self):
+        rec, calls = self.measure([None, {"ok": True}])
+        self.assertEqual((calls, rec["metrics"]), (2, {"ok": True}))
+        self.assertNotIn("metrics_error", rec)
+        self.assertEqual(rec["metrics_tool"]["metrics_py"], ab.file_hash(ab.METRICS)[:12])
+        self.assertIn("numpy", rec["metrics_tool"])
+
+    def test_two_failures_leave_none_and_the_error(self):
+        rec, calls = self.measure([None, None])
+        self.assertEqual((calls, rec["metrics"]), (2, None))
+        self.assertIn("MemoryError", rec["metrics_error"])
+
+
+class Compare(unittest.TestCase):
+    def side(self, root, name, recs):
+        for u, rec in enumerate(recs):
+            d = os.path.join(root, name, "corpus", "m", "quality-t2000", "u%d" % u)
+            os.makedirs(d)
+            with open(os.path.join(d, "record.json"), "w") as fp:
+                json.dump(dict({"mesh": "m", "res": "quality", "target": 2000, "replicate": u, "rc": 0}, **rec), fp)
+        return os.path.join(root, name)
+
+    def compare(self, a, b):
+        with tempfile.TemporaryDirectory() as root:
+            args = mock.Mock(a=self.side(root, "A", a), b=self.side(root, "B", b), set="corpus", work=root,
+                             per_run=False)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                ab.cmd_compare(args)
+        return out.getvalue()
+
+    @staticmethod
+    def rec(hausdorff, tool="t1"):
+        return {"metrics": {"distance": {"hausdorff": hausdorff}}, "metrics_tool": {"metrics_py": tool}}
+
+    def test_failed_metrics_leave_the_replicate_out_on_both_sides(self):
+        # A's u1 lost its metrics: averaging A over u0 only against B over u0 and u1 made a difference.
+        out = self.compare([self.rec(1.0), {"metrics": None}], [self.rec(1.0), self.rec(5.0)])
+        self.assertIn("**1 replicate-runs completed but metrics.py failed on them**", out)
+        self.assertIn("| hausdorff | 1 | 1 | ×1.000 | 0 / 0 |", out)
+
+    def test_different_metrics_code_is_named(self):
+        self.assertIn("measured by different metrics code", self.compare([self.rec(1.0)], [self.rec(1.0, "t2")]))
+        self.assertNotIn("measured by different metrics code", self.compare([self.rec(1.0)], [self.rec(1.0)]))
+        # records from before the tool was recorded say nothing either way
+        self.assertNotIn("different metrics code", self.compare([{"metrics": {"distance": {"hausdorff": 1}}}],
+                                                                  [self.rec(1.0)]))
 
 
 if __name__ == "__main__":
