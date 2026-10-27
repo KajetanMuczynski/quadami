@@ -137,6 +137,21 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(lines, [("1 of 3 islands", True, True), ("produced no faces", False, True)])
         self.assertEqual(report.warning_lines({"status": "ok"}), [])
 
+    def test_warnings_wrap_to_pixels(self):
+        # The panel passes its width in pixels and the font's measure: here
+        # 10 pixels per character, and "W" twice as wide.
+        def measure(text):
+            return 10 * len(text) + 10 * text.count("W")
+        self.assertEqual(report.wrap("1 of 3 islands produced no faces", 200, measure),
+                         ["1 of 3 islands", "produced no faces"])
+        self.assertEqual(report.wrap("WWWW WWWW", 160, measure), ["WWWW", "WWWW"])
+        # A word wider than the panel is split rather than cut off.
+        self.assertEqual(report.wrap("abcdefghij", 40, measure), ["abcd", "efgh", "ij"])
+        lines = report.warning_lines({"status": "ok", "warnings": ["Parts thinner than one quad are missing"]},
+                                     150, measure)
+        self.assertTrue(all(measure(text) <= 150 for text, _, _ in lines))
+        self.assertEqual(" ".join(text for text, _, _ in lines), "Parts thinner than one quad are missing")
+
     def test_holes_in_a_closed_input(self):
         # Kajetan's closed head at 10k quads (2026-10-21).
         holes = {

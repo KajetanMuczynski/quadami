@@ -338,6 +338,25 @@ jobs:
           "$BLENDER" -b --factory-startup --python-exit-code 1 \
             --python addon/tests/blender_smoke.py -- --installed
 
+      # The panel as Blender draws it, in a window on a virtual X display with
+      # software OpenGL: a result with missing thin parts at UI scale 1 and 1.5,
+      # uploaded as panel-linux-x64 for a person to check for cut-off text.
+      - name: Panel screenshots
+        if: runner.os == 'Linux'
+        run: |
+          ci/apt_install.sh xvfb xauth libgl1-mesa-dri
+          xvfb-run -a -s "-screen 0 1600x900x24" "$BLENDER" --factory-startup \
+            --python addon/tests/blender_panel_shot.py -- --out build/panel
+          test -s build/panel/panel-1.png && test -s build/panel/panel-1.5.png
+
+      - name: Upload the panel screenshots
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: panel-linux-x64
+          path: build/panel/
+          if-no-files-found: ignore
+
       - name: Upload the extension zip
         if: matrix.ship
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

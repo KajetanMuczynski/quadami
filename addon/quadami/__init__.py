@@ -24,6 +24,7 @@ The add-on's name and ids come from names.py.
 
 import json
 
+import blf
 import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
@@ -476,9 +477,32 @@ class OBJECT_OT_remesh_quads_cancel(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _draw_fold_offer(box, settings):
+# Pixels of a sidebar row that a warning's text cannot use at UI scale 1: the
+# panel's and the box's margins on both sides and the icon in front of the text.
+WARNING_MARGIN_PIXELS = 60
+
+
+def _text_width(context):
+    """(width, measure) to wrap panel text to the sidebar's real width in
+    pixels with the font the panel draws in; the report's character count
+    where Blender gives no region."""
+    region = context.region
+    scale = context.preferences.system.ui_scale
+    if region is None or region.width <= 0 or scale <= 0:
+        return report_rows.WARNING_WIDTH, len
+    size = context.preferences.ui_styles[0].widget.points * scale
+
+    # Font 0 is Blender's interface font.
+    def measure(text):
+        blf.size(0, size)
+        return blf.dimensions(0, text)[0]
+
+    return max(region.width - WARNING_MARGIN_PIXELS * scale, 10 * size), measure
+
+
+def _draw_fold_offer(box, settings, width, measure):
     column = box.column(align=True)
-    for line in report_rows.fold_offer_lines():
+    for line in report_rows.fold_offer_lines(width, measure):
         column.label(text=line)
     box.prop(settings, "flatten_spikes")
     operator = box.operator(OBJECT_OT_remesh_quads.bl_idname, text="Repair Folds and Re-run", icon="MOD_SMOOTH")
@@ -520,6 +544,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         else:
             layout.operator(OBJECT_OT_remesh_quads.bl_idname, icon="MOD_REMESH")
 
+        width, measure = _text_width(context)
         obj = context.active_object
         if obj is not None and obj.type == "MESH":
             # What Remesh will run on: a result shows its source, which the
@@ -532,7 +557,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
             if warning:
                 column = layout.column(align=True)
                 column.alert = True
-                for i, line in enumerate(report_rows.wrap(warning)):
+                for i, line in enumerate(report_rows.wrap(warning, width, measure)):
                     column.label(text=line, icon="ERROR" if i == 0 else "BLANK1")
 
         # A failed or cancelled last run stays on show until the next run;
@@ -558,13 +583,13 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
                     row.label(text=value)
                 # Full width, so a sentence is not cut off at the value column.
                 column = box.column(align=True)
-                for text, first, problem in report_rows.warning_lines(report):
+                for text, first, problem in report_rows.warning_lines(report, width, measure):
                     row = column.row()
                     row.alert = problem
                     icon = ("ERROR" if problem else "INFO") if first else "BLANK1"
                     row.label(text=text, icon=icon)
                 if report_rows.offers_fold_repair(report) and _source(obj) is not None:
-                    _draw_fold_offer(box, settings)
+                    _draw_fold_offer(box, settings, width, measure)
 
         preferences = _preferences(context)
         _draw_build(layout, worker.find_executable(bpy.path.abspath(preferences.executable) if preferences else ""))

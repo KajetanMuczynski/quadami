@@ -52,8 +52,8 @@ bool IsotropicRemesher::remesh()
 
     size_t outputIndex = 0;
     for (IsotropicHalfedgeMesh::Vertex* vertex = halfedgeMesh->moveToNextVertex(nullptr);
-        nullptr != vertex;
-        vertex = halfedgeMesh->moveToNextVertex(vertex)) {
+         nullptr != vertex;
+         vertex = halfedgeMesh->moveToNextVertex(vertex)) {
         vertex->outputIndex = outputIndex++;
         m_remeshedVertices.push_back(Vector3 {
             vertex->position.x(),
@@ -61,8 +61,8 @@ bool IsotropicRemesher::remesh()
             vertex->position.z() });
     }
     for (IsotropicHalfedgeMesh::Face* face = halfedgeMesh->moveToNextFace(nullptr);
-        nullptr != face;
-        face = halfedgeMesh->moveToNextFace(face)) {
+         nullptr != face;
+         face = halfedgeMesh->moveToNextFace(face)) {
         m_remeshedTriangles.push_back(std::vector<size_t> {
             face->halfedge->previousHalfedge->startVertex->outputIndex,
             face->halfedge->startVertex->outputIndex,

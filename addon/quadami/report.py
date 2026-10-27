@@ -16,10 +16,9 @@
 
 """Turn the remesher's JSON report into rows for the panel. No bpy in here."""
 
-import textwrap
-
-# Characters per line of a warning: panel labels don't wrap, and the sidebar
-# is about this wide at its default size.
+# Characters per line of a warning where the panel's width is not known:
+# panel labels don't wrap, and the sidebar is about this wide at its default
+# size.  The panel itself wraps to its real width in pixels.
 WARNING_WIDTH = 36
 
 STATUS_TEXT = {
@@ -141,18 +140,37 @@ def kept_text(kept):
     return ", ".join(parts)
 
 
-def wrap(text, width=WARNING_WIDTH):
-    """A panel text wrapped to the panel's width."""
-    return textwrap.wrap(text, width)
+def wrap(text, width=WARNING_WIDTH, measure=len):
+    """A panel text wrapped to the panel's width: greedily by words, so that
+    measure(line) <= width; a word wider than that is split.  By default in
+    characters; the panel passes its width in pixels and a font measure."""
+    lines, line = [], ""
+    for word in text.split():
+        candidate = line + " " + word if line else word
+        if measure(candidate) <= width:
+            line = candidate
+            continue
+        if line:
+            lines.append(line)
+        while len(word) > 1 and measure(word) > width:
+            cut = 1
+            while measure(word[:cut + 1]) <= width:
+                cut += 1
+            lines.append(word[:cut])
+            word = word[cut:]
+        line = word
+    if line:
+        lines.append(line)
+    return lines
 
 
-def warning_lines(report, width=WARNING_WIDTH):
+def warning_lines(report, width=WARNING_WIDTH, measure=len):
     """(text, first, is_problem) lines for the report's warnings, wrapped to
     the panel's width; first marks the line that starts a warning or a hint."""
     lines = []
 
     def add(text, problem):
-        for i, line in enumerate(wrap(text, width)):
+        for i, line in enumerate(wrap(text, width, measure)):
             lines.append((line, i == 0, problem))
 
     for warning in report.get("warnings", []):
@@ -185,8 +203,8 @@ def warning_lines(report, width=WARNING_WIDTH):
     return lines
 
 
-def fold_offer_lines(width=WARNING_WIDTH):
+def fold_offer_lines(width=WARNING_WIDTH, measure=len):
     """The hint above the Repair Folds and Re-run button, wrapped."""
-    return textwrap.wrap("Repair Folds and Re-run smooths out only those spots, in the copy "
-                         "the remesher works on, and remeshes again. Your original object "
-                         "is not changed.", width)
+    return wrap("Repair Folds and Re-run smooths out only those spots, in the copy "
+                "the remesher works on, and remeshes again. Your original object "
+                "is not changed.", width, measure)
