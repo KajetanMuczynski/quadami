@@ -1,5 +1,5 @@
 # 2026-10-26 · cloud thread "Prototype thin-part sizing floor" · thin-island floor (TODO 4.1 step 1)
-- Repos/commits: core aaa9b4e (master, no core change up to 91f3c48) → branch claude/project-thread-lqmy8v 30e08c1, 9440288.
+- Repos/commits: core aaa9b4e (master, no core change up to 91f3c48) → branch claude/project-thread-lqmy8v v1 9440288, v2 7a5a6ec.
 - Did: per-island thickness floor with a budget clamp from research/thin-part-sizing-note-2026-10-23.md §4.
   `islandThinWidth` (thinparts.cpp) measures each input island: area-weighted median of max(t, 2 s), t the
   nearest vertex facing back (dot < −0.5), s the nearest vertex turned sideways (−0.5 ≤ dot < 0.6), search
@@ -27,6 +27,15 @@
     scifihelmet 3k uncovered 0.013 → 0.0006.
   - Cost: thin_floor_ms up to 0.3 s (spot_x8 2k, 9.5 % of the run; 4,096 samples × dense neighbourhoods);
     time over sets ×0.93–×1.04 under load.
-- Next: do not ship as is. Payers must stay resolved (only islands far above their own width / minimum pay),
+- v2 (a22f3f0, 7a5a6ec): islands under 256 triangles don't pay, an ask is capped at 4× the island's count,
+  1,024 width samples, and the raised-island T bound is gone again. That bound, not the floor, caused most of
+  v1's external loss: it coarsened 1,138 of mosquito's hair islands at the small-island minimum. The sliver
+  policy is TODO 2.7's (the sanitizer thread leaves sliver islands out before sizing).
+- Measured v2 (same A/B, ×6): closed, corpus, brush, suzanne, realsculpt byte-identical. stress_thin dropped
+  20.8 → 9.7, Hausdorff ×0.52, SJ ≤ 0 ×1.01, the r0.002 needle regression gone (topology 56/56).
+  stress_ribbon uncovered ×0.05. sculpt dropped 2 → 0, Hausdorff ×0.94. Sword uncovered ×0.71, Hausdorff ×0.76,
+  but 3k folds 21 → 50. external dropped 1151 → 1130, non-quads ×0.93, SJ ≤ 0 ×0.95, Hausdorff ×1.08
+  (scifihelmet 10k 0.015 → 0.117, corset 3k ×1.7, flighthelmet 3k uncovered ×1.7).
+- Next (v1 and v2): do not ship as is. Payers must stay resolved (only islands far above their own width / minimum pay),
   plates and straps need the extent filter (note §3.3) or an ask cap, fewer samples for speed; then rerun the
   same A/B. DO NOT MERGE before the v0.1.0 tag.
