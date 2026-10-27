@@ -15,4 +15,7 @@
 - Measured: the 20 `external` OBJs and `check.json` are byte-identical with the patched reader;
   bench tests 57/57 in the CI venv (with DracoPy 2.2.0). Shape checks of the new set in
   docs/EXTERNAL-MESHES.md. No A/B (the thin-part thread measures).
-- Next: kinds 3 (hair) and 6 (chains) have no fetchable public mesh; they wait on the hand downloads.
+- Hand downloads (Kajetan, same day): hair elf, chain links, wrought-iron gate, rubber plant scan and
+  two MakeHuman skirts, converted to OBJ in the project files (`external-models/thin/`, set
+  `external_thin_hand`), credited in docs/EXTERNAL-MESHES.md. Every kind 1-6 now has at least one mesh;
+  closed (watertight) variants stay scarce outside the chains.
