@@ -24,8 +24,12 @@ on:
 permissions:
   contents: read
 
+# A pull request has one group, so a new push cancels its older run. Push and manual runs get one
+# group per commit: GitHub keeps only one pending run per group, so with one group per branch a
+# merge soon after another cancelled the earlier merge's waiting run even with cancel-in-progress
+# off, and that master commit had no CI result (6 of 30 merges, #98 to #129, 2026-10-23 to 27).
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || format('{0}-{1}', github.ref, github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
