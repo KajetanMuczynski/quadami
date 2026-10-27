@@ -121,9 +121,13 @@ $P tools/bench/ab.py run HEAD --set closed   # genus check; also --set suzanne
   records, a **libQEx fallbacks** section lists the replicate-runs with a fallback, the reasons, and folds,
   non-quads and topology on exactly those runs for both sides. `--per-run` adds one row per run.
 - **Re-measuring.** After a change to `metrics.py`, `run <ref> --remeasure` recomputes `metrics.json` of the
-  finished runs without running the CLI again. With `--jobs 4` on 2M-triangle inputs (nefertiti, cat)
-  metrics.py can run out of memory; such a run keeps `"metrics": null` (never the old file) and
-  `gates.py` lists it as "left out": re-measure it with `--jobs 1`.
+  finished runs without running the CLI again. Each record names the code that measured it
+  (`metrics_tool`: a hash of `metrics.py` and the numpy, scipy and libigl versions), and `compare`
+  says when A and B were measured by different code. With `--jobs 4` on 2M-triangle inputs (nefertiti,
+  cat) metrics.py can run out of memory: it is tried once more, then the run keeps `"metrics": null`
+  (never the old file) with the end of the error in `metrics_error`; the next `run` measures it again,
+  `compare` leaves that replicate-run out of the metric rows on both sides, `gates.py` lists it as
+  "left out" and `release_gate.py` refuses to decide (exit 2). `--jobs 1` avoids it.
 - **Timing.** The `time` row is the CLI's own total under `--jobs` load. Use it for effects of 20 % or
   more; for anything finer run `--jobs 1` on an idle machine, or `ar_bench` with `--repeat`.
 
