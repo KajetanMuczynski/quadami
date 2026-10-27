@@ -36,6 +36,14 @@ This file is for building and packaging. **Using** the add-on: [docs/USER-GUIDE.
   Remesh and Repair Folds on a result run on that source and hide the old
   result. The panel warns when the object's scale is uneven (more than 5 %
   between axes), since the quads then stretch with it.
+- *Keep from Original* (`transfer.py`) copies from the evaluated source:
+  materials (nearest source face per result face), vertex groups and colour
+  attributes (Blender's Data Transfer modifier, nearest face interpolated,
+  baked), sharp/crease/seam marks (each marked line becomes a shortest edge
+  path through waypoints two result edges apart, edges off the line dearer)
+  and, opt-in, UV maps (each result face takes the one UV island under its
+  centre; corners from the nearest point of that island). A failure there
+  becomes a report warning, never a lost result.
 - The panel shows the quality report from the worker: status, quads against
   the target, non-quads, holes, handles, non-manifold edges and vertices,
   winding flips, folded faces, input cleanup, empty islands, missing parts,
