@@ -22,6 +22,7 @@
  */
 #include "qexextraction.h"
 #include <AutoRemesher/AutoRemesher>
+#include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/FoldRepair>
 #include <AutoRemesher/IsotropicRemesher>
 #include <AutoRemesher/MeshSeparator>
@@ -222,52 +223,6 @@ namespace {
     // failed island.
     struct RemeshCancelled {
     };
-
-    void markSharpEdgeVertices(const std::vector<Vector3>& vertices,
-        const std::vector<unsigned int>& indices,
-        double sharpEdgeRadians,
-        std::vector<unsigned char>& vertexLock)
-    {
-        const size_t faceCount = indices.size() / 3;
-
-        std::vector<Vector3> faceNormals(faceCount);
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, faceCount),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t i = range.begin(); i != range.end(); ++i) {
-                    faceNormals[i] = Vector3::normal(vertices[indices[i * 3 + 0]],
-                        vertices[indices[i * 3 + 1]],
-                        vertices[indices[i * 3 + 2]]);
-                }
-            });
-
-        std::vector<std::pair<uint64_t, unsigned int>> edges(faceCount * 3);
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, faceCount),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t i = range.begin(); i != range.end(); ++i) {
-                    for (size_t j = 0; j < 3; ++j) {
-                        unsigned int first = indices[i * 3 + j];
-                        unsigned int second = indices[i * 3 + (j + 1) % 3];
-                        if (first > second)
-                            std::swap(first, second);
-                        edges[i * 3 + j] = { ((uint64_t)first << 32) | second, (unsigned int)i };
-                    }
-                }
-            });
-        // Every (edge, face) pair is distinct, so the parallel sort produces the
-        // same order the serial one did.
-        tbb::parallel_sort(edges.begin(), edges.end());
-
-        for (size_t i = 0; i + 1 < edges.size(); ++i) {
-            if (edges[i].first != edges[i + 1].first)
-                continue;
-            if (Vector3::angle(faceNormals[edges[i].second],
-                    faceNormals[edges[i + 1].second])
-                < sharpEdgeRadians)
-                continue;
-            vertexLock[(size_t)(edges[i].first >> 32)] |= meshopt_SimplifyVertex_Priority;
-            vertexLock[(size_t)(edges[i].first & 0xffffffffu)] |= meshopt_SimplifyVertex_Priority;
-        }
-    }
 }
 
 const double AutoRemesher::m_defaultSharpEdgeDegrees = 90;
@@ -534,6 +489,8 @@ bool AutoRemesher::decimateIfTooDense(std::vector<Vector3>& vertices,
     const SurfaceTopology& topology,
     double voxelSize,
     double sharpEdgeDegrees,
+    FeatureEdgeSet& featureEdges,
+    size_t* droppedFeatureEdges,
     size_t islandIndex,
     DecimationStats* stats)
 {
@@ -586,11 +543,8 @@ bool AutoRemesher::decimateIfTooDense(std::vector<Vector3>& vertices,
     }
 
     std::vector<unsigned char> vertexLock;
-    if (sharpEdgeDegrees > 0.0) {
-        vertexLock.assign(vertices.size(), 0);
-        markSharpEdgeVertices(vertices, indices,
-            sharpEdgeDegrees * (M_PI / 180.0), vertexLock);
-    }
+    if (!featureEdges.empty())
+        vertexLock = featureVertexLock(featureEdges, vertices.size());
 
     // T must keep the input's topology: a non-manifold edge in it becomes a
     // hole or a wrong genus in the output.  Plain meshopt merges vertices by
@@ -656,6 +610,8 @@ bool AutoRemesher::decimateIfTooDense(std::vector<Vector3>& vertices,
     (void)resultError;
 #endif
 
+    featureEdges = remapFeatureEdges(featureEdges, outputIndexOfInput,
+        decimatedVertices, decimatedTriangles, sharpEdgeDegrees, droppedFeatureEdges);
     vertices = std::move(decimatedVertices);
     triangles = std::move(decimatedTriangles);
     return true;
@@ -667,6 +623,8 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     double voxelSize,
     double adaptivity,
     double sharpEdgeDegrees,
+    FeatureEdgeSet& featureEdges,
+    SharpEdgeStats* sharpEdgeStats,
     double smoothNormalDegrees,
     size_t islandIndex,
     DecimationStats* decimationStats,
@@ -676,7 +634,10 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     std::vector<std::vector<size_t>>* decimatedTrianglesOut)
 {
     auto t_decimateStart = std::chrono::high_resolution_clock::now();
-    decimateIfTooDense(vertices, triangles, topology, voxelSize, sharpEdgeDegrees, islandIndex, decimationStats);
+    decimateIfTooDense(vertices, triangles, topology, voxelSize, sharpEdgeDegrees, featureEdges,
+        nullptr != sharpEdgeStats ? &sharpEdgeStats->decimationDropped : nullptr, islandIndex, decimationStats);
+    if (nullptr != sharpEdgeStats)
+        sharpEdgeStats->decimatedEdges = featureEdges.size();
     if (nullptr != decimationStats) {
         decimationStats->timeUs += std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::high_resolution_clock::now() - t_decimateStart)
@@ -825,11 +786,19 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     isotropicRemesher.setTargetEdgeLength(voxelSize);
     if (!vertexTargetLengths.empty())
         isotropicRemesher.setVertexTargetEdgeLengths(&vertexTargetLengths);
-    isotropicRemesher.setSharpEdgeDegrees(sharpEdgeDegrees);
+    isotropicRemesher.setFeatureEdges(featureEdges);
     isotropicRemesher.setSmoothNormalDegrees(smoothNormalDegrees);
     isotropicRemesher.remesh();
     vertices = isotropicRemesher.remeshedVertices();
     triangles = isotropicRemesher.remeshedTriangles();
+    // A flip takes a feature edge away; the edge between the same feature
+    // vertices that a later flip or the relaxation leaves sharp counts again.
+    featureEdges = extendFeatureEdges(isotropicRemesher.featureEdges(), isotropicRemesher.featureVertices(),
+        vertices, triangles, sharpEdgeDegrees, nullptr != sharpEdgeStats ? &sharpEdgeStats->restored : nullptr);
+    if (nullptr != sharpEdgeStats) {
+        sharpEdgeStats->carried = isotropicRemesher.featureEdges().size();
+        sharpEdgeStats->flipped = isotropicRemesher.clearedFeatureEdges();
+    }
 #if AUTO_REMESHER_DEBUG
     std::cerr << "Island[" << islandIndex << "]: Uniformly remesh done, vertex count: " << vertices.size() << " triangle count: " << triangles.size() << std::endl;
 #endif
@@ -1030,12 +999,18 @@ bool AutoRemesher::remeshIslands()
         double anisotropy;
         double sharpEdgeDegrees;
         double smoothNormalDegrees;
+        // The island's sharp edges, in its own vertex numbering: classified
+        // once here, on the input, and carried to T by resampleIsland.
+        FeatureEdgeSet featureEdges;
+        // Input vertex of each island vertex.
+        std::vector<size_t> inputVertices;
     };
 
     // Copies one island out of the input, with its own vertex numbering.
     const auto buildIslandContext = [&](size_t islandIndex, IslandContext& context) {
         const auto& island = trianglesIslands[islandIndex];
         context.vertices.clear();
+        context.inputVertices.clear();
         context.triangles.clear();
         context.triangles.reserve(island.size());
         std::unordered_map<size_t, size_t> oldToNewVertexMap;
@@ -1045,8 +1020,10 @@ bool AutoRemesher::remeshIslands()
             triangle.reserve(3);
             for (size_t i = 0; i < 3; ++i) {
                 auto insertResult = oldToNewVertexMap.insert({ face[i], context.vertices.size() });
-                if (insertResult.second)
+                if (insertResult.second) {
                     context.vertices.push_back(m_vertices[face[i]]);
+                    context.inputVertices.push_back(face[i]);
+                }
                 triangle.push_back(insertResult.first->second);
             }
             context.triangles.push_back(std::move(triangle));
@@ -1064,6 +1041,7 @@ bool AutoRemesher::remeshIslands()
         context.anisotropy = m_anisotropy;
         context.sharpEdgeDegrees = m_sharpEdgeDegrees;
         context.smoothNormalDegrees = m_smoothNormalDegrees;
+        context.featureEdges = classifySharpEdges(context.vertices, context.triangles, context.sharpEdgeDegrees);
     };
 
     if (nullptr != m_progressHandler)
@@ -1138,6 +1116,9 @@ bool AutoRemesher::remeshIslands()
         // Of the island after decimation and after isotropic remeshing.
         SurfaceTopology decimatedTopology;
         SurfaceTopology isotropicTopology;
+        // The island's sharp edges as edges of T, and what became of them.
+        FeatureEdgeSet isotropicFeatureEdges;
+        SharpEdgeStats sharpEdgeStats;
         bool parameterized = false;
         bool extracted = false;
         long long resampleUs = 0;
@@ -1155,7 +1136,9 @@ bool AutoRemesher::remeshIslands()
             0.0f, islandResampleEnd, -1.0f);
 
         auto t0 = std::chrono::high_resolution_clock::now();
-        resample(ctx.vertices, ctx.triangles, ctx.inputTopology, ctx.voxelSize, ctx.adaptivity, ctx.sharpEdgeDegrees, ctx.smoothNormalDegrees, islandIndex, stats,
+        run.isotropicFeatureEdges = ctx.featureEdges;
+        resample(ctx.vertices, ctx.triangles, ctx.inputTopology, ctx.voxelSize, ctx.adaptivity,
+            ctx.sharpEdgeDegrees, run.isotropicFeatureEdges, &run.sharpEdgeStats, ctx.smoothNormalDegrees, islandIndex, stats,
             &adaptiveFieldTime, &isotropicProgress,
             &run.decimatedVertices, &run.decimatedTriangles);
         auto t1 = std::chrono::high_resolution_clock::now();
@@ -1195,6 +1178,7 @@ bool AutoRemesher::remeshIslands()
         parameterizer.setGradientAdaptivity(ctx.adaptivity);
         parameterizer.setAnisotropy(ctx.anisotropy);
         parameterizer.setSharpEdgeDegrees(ctx.sharpEdgeDegrees);
+        parameterizer.setFeatureEdges(&run.isotropicFeatureEdges);
         bool parameterizeSucceeded = true;
         try {
             parameterizeSucceeded = parameterizer.parameterize();
@@ -1218,6 +1202,23 @@ bool AutoRemesher::remeshIslands()
         parameterizeTimeAccumulated += run.parameterizeUs;
         run.parameterized = parameterizeSucceeded;
         run.diagnostics = parameterizer.takeDiagnostics();
+        {
+            // The island's one sharp-edge classification (TODO 2.6): on the
+            // input, after decimation, and the edges T still has, which the
+            // field, the singularity simplifier and the constraints used.
+            const double h = ctx.voxelSize > 0.0 ? ctx.voxelSize : 1.0;
+            DiagnosticRecord record("sharp_edges");
+            record.set("sharp_edge_degrees", ctx.sharpEdgeDegrees);
+            record.set("input_edges", (double)ctx.featureEdges.size());
+            record.set("decimated_edges", (double)run.sharpEdgeStats.decimatedEdges);
+            record.set("decimation_dropped", (double)run.sharpEdgeStats.decimationDropped);
+            record.set("flipped", (double)run.sharpEdgeStats.flipped);
+            record.set("t_carried", (double)run.sharpEdgeStats.carried);
+            record.set("t_restored", (double)run.sharpEdgeStats.restored);
+            record.set("t_edges", (double)run.isotropicFeatureEdges.size());
+            record.set("t_length_rel_h", featureEdgeLength(run.isotropicFeatureEdges, vertices) / h);
+            run.diagnostics.insert(run.diagnostics.begin(), std::move(record));
+        }
 
         if (parameterizeSucceeded) {
             throwIfCancelled();
@@ -1263,7 +1264,12 @@ bool AutoRemesher::remeshIslands()
                 // The extractor leaves the output on T; this puts it on the
                 // island's own input faces (TODO 2.8).
                 const auto projectStart = std::chrono::high_resolution_clock::now();
-                SurfaceProjector projector(&m_vertices, &trianglesIslands[islandIndex], ctx.sharpEdgeDegrees);
+                FeatureEdgeSet creases;
+                for (const auto& edge : ctx.featureEdges.edges)
+                    creases.edges.emplace_back(ctx.inputVertices[edge.first], ctx.inputVertices[edge.second]);
+                creases.flags = ctx.featureEdges.flags;
+                creases.normalize();
+                SurfaceProjector projector(&m_vertices, &trianglesIslands[islandIndex], &creases);
                 const auto projection = projector.project(&run.remeshedVertices, run.remeshedQuads);
                 DiagnosticRecord record("surface_projection");
                 record.set("vertices", (double)projection.vertices);

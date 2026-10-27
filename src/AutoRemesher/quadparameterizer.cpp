@@ -84,9 +84,9 @@ namespace {
         ConstraintU = 1,
         ConstraintV = 2 };
     int edgeConstraint(const SurfaceMesh& mesh, size_t c, const std::vector<Vector3>& field,
-        const std::vector<Vector3>& normals, double hardEdgeDegrees)
+        const std::vector<Vector3>& normals, const std::vector<char>& hardCorners)
     {
-        if (mesh.oppositeCorner(c) != SurfaceMesh::npos && std::fabs(mesh.normalAngle(c)) * 180.0 / M_PI < hardEdgeDegrees)
+        if (mesh.oppositeCorner(c) != SurfaceMesh::npos && !hardCorners[c])
             return ConstraintNone;
         const size_t f = mesh.cornerFace(c);
         const Vector3 edge = unit(mesh.edgeVector(c), Vector3(1, 0, 0));
@@ -133,7 +133,7 @@ namespace {
     }
 
     void smoothCrossField(const SurfaceMesh& mesh, const std::vector<Vector3>& normals,
-        double hardEdgeDegrees, std::vector<Vector3>* field)
+        const std::vector<char>& hardCorners, std::vector<Vector3>* field)
     {
         std::vector<double> alpha(2 * mesh.faceCount(), 0.0);
         std::vector<char> locked(mesh.faceCount(), 0);
@@ -142,7 +142,7 @@ namespace {
                 alpha[2 * faceIndex] = 1.0;
                 for (size_t localCorner = 0; localCorner < 3; ++localCorner) {
                     const size_t cornerIndex = 3 * faceIndex + localCorner, oppositeCornerIndex = mesh.oppositeCorner(cornerIndex);
-                    if (oppositeCornerIndex != SurfaceMesh::npos && std::fabs(mesh.normalAngle(cornerIndex)) * 180.0 / M_PI < hardEdgeDegrees)
+                    if (oppositeCornerIndex != SurfaceMesh::npos && !hardCorners[cornerIndex])
                         continue;
                     const Vector3 edge = unit(mesh.edgeVector(cornerIndex), Vector3(1, 0, 0));
                     const Vector3 fieldDirection = (*field)[faceIndex];
@@ -311,13 +311,13 @@ namespace {
     }
 
     std::vector<signed char> computeCornerConstraints(const SurfaceMesh& mesh,
-        const std::vector<Vector3>& field, const std::vector<Vector3>& normals, double hardEdgeDegrees)
+        const std::vector<Vector3>& field, const std::vector<Vector3>& normals, const std::vector<char>& hardCorners)
     {
         const size_t corners = mesh.cornerCount();
         std::vector<signed char> cornerConstraints(corners, ConstraintNone);
         tbb::parallel_for(tbb::blocked_range<size_t>(0, corners), [&](const tbb::blocked_range<size_t>& range) {
             for (size_t c = range.begin(); c != range.end(); ++c)
-                cornerConstraints[c] = static_cast<signed char>(edgeConstraint(mesh, c, field, normals, hardEdgeDegrees));
+                cornerConstraints[c] = static_cast<signed char>(edgeConstraint(mesh, c, field, normals, hardCorners));
         });
         return cornerConstraints;
     }
@@ -1420,7 +1420,7 @@ namespace {
 bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     const std::vector<std::vector<size_t>>& triangles,
     const std::vector<Vector3>* guidance, double quadEdgeLength,
-    double hardEdgeDegrees, Result* result,
+    const FeatureEdgeSet& hardEdges, Result* result,
     const std::vector<double>* faceScaling,
     const std::vector<double>* faceScalingU,
     const std::vector<double>* faceScalingV,
@@ -1439,6 +1439,7 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
         return false;
     const size_t corners = mesh.cornerCount();
     const size_t uvVariables = 2 * corners;
+    const std::vector<char> hardCorners = featureCornerFlags(mesh, hardEdges);
     const double scale = std::max(1e-12, quadEdgeLength);
 
     std::vector<Vector3> normals;
@@ -1480,13 +1481,13 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
 
     report(0.04f, "Smoothing cross field");
     if (!(guidance && guidance->size() == mesh.faceCount()))
-        smoothCrossField(mesh, normals, hardEdgeDegrees, &result->field);
+        smoothCrossField(mesh, normals, hardCorners, &result->field);
     brushFieldAlongSpanningTree(mesh, normals, &result->field);
 
     report(0.14f, "Computing corner rotations");
     std::vector<int> rotation = computeCornerRotations(mesh, result->field, normals);
     std::vector<signed char> cornerConstraints = computeCornerConstraints(mesh, result->field,
-        normals, hardEdgeDegrees);
+        normals, hardCorners);
     std::vector<char> rerounded;
     const size_t reroundedEdges = raiseSmallConeAngles(mesh, result->field, normals, cornerConstraints,
         &rotation, &rerounded);

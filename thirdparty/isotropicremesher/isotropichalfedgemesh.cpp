@@ -325,6 +325,7 @@ void IsotropicHalfedgeMesh::breakEdge(IsotropicHalfedgeMesh::Halfedge *halfedge)
 
     breakPointVertex->featured = halfedge->startVertex->featured &&
         halfedge->nextHalfedge->startVertex->featured;
+    breakPointVertex->onFeature = halfedge->feature;
 
     // Propagate target edge length to the new vertex
     if (halfedge->startVertex->targetEdgeLength > 0 && 
@@ -348,7 +349,13 @@ void IsotropicHalfedgeMesh::breakEdge(IsotropicHalfedgeMesh::Halfedge *halfedge)
             rightNewFaceHalfedges, rightOldFaceHalfedges);
         linkHalfedgePair(leftOldFaceHalfedges[1], rightNewFaceHalfedges[1]);
         linkHalfedgePair(leftNewFaceHalfedges[1], rightOldFaceHalfedges[1]);
+        rightNewFaceHalfedges[1]->feature = halfedge->feature;
+        rightNewFaceHalfedges[1]->featureFlags = halfedge->featureFlags;
     }
+    // Both halves of a feature edge stay feature edges; `halfedge` and its
+    // opposite keep theirs, the new halfedges along the edge copy it.
+    leftNewFaceHalfedges[1]->feature = halfedge->feature;
+    leftNewFaceHalfedges[1]->featureFlags = halfedge->featureFlags;
 }
 
 void IsotropicHalfedgeMesh::collectVerticesAroundVertex(Vertex *vertex,
@@ -635,6 +642,14 @@ bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge)
         return false;
 
     Halfedge *opposite = halfedge->oppositeHalfedge;
+
+    // The flip turns this edge into the other diagonal, which is no feature
+    // edge.  (Hard edges, TODO 5.4, will refuse the flip next to this.)
+    if (halfedge->feature) {
+        halfedge->feature = opposite->feature = false;
+        halfedge->featureFlags = opposite->featureFlags = 0;
+        ++m_clearedFeatureEdges;
+    }
     
     Face *topFace = halfedge->leftFace;
     Face *bottomFace = opposite->leftFace;
@@ -828,28 +843,6 @@ void IsotropicHalfedgeMesh::updateVertexNormals()
     }
 }
 
-void IsotropicHalfedgeMesh::featureHalfedge(Halfedge *halfedge, double radians)
-{
-    if (-1 != halfedge->featureState)
-        return;
-    
-    auto &opposite = halfedge->oppositeHalfedge;
-    if (nullptr == opposite) {
-        halfedge->startVertex->featured = true;
-        halfedge->featureState = 1;
-        return;
-    }
-    
-    if (Vector3::angle(halfedge->leftFace->_normal, 
-            opposite->leftFace->_normal) >= radians) {
-        halfedge->featureState = opposite->featureState = 1;
-        halfedge->startVertex->featured = opposite->startVertex->featured = true;
-        return;
-    }
-    
-    halfedge->featureState = opposite->featureState = 0;
-}
-
 void IsotropicHalfedgeMesh::featureBoundaries()
 {
     for (Face *face = m_firstFace; nullptr != face; face = face->nextFace) {
@@ -868,14 +861,59 @@ void IsotropicHalfedgeMesh::featureBoundaries()
     }
 }
 
-void IsotropicHalfedgeMesh::featureEdges(double radians)
+void IsotropicHalfedgeMesh::markFeatureEdges(const std::vector<std::pair<size_t, size_t>> &edges,
+    const std::vector<unsigned char> &flags)
+{
+    if (edges.empty())
+        return;
+    std::vector<Vertex *> vertices;
+    for (Vertex *vertex = m_firstVertex; nullptr != vertex; vertex = vertex->nextVertex)
+        vertices.push_back(vertex);
+    std::unordered_map<Vertex *, size_t> indices;
+    indices.reserve(vertices.size());
+    for (size_t i = 0; i < vertices.size(); ++i)
+        indices[vertices[i]] = i;
+    std::unordered_map<uint64_t, unsigned char> featureFlags;
+    featureFlags.reserve(edges.size());
+    for (size_t i = 0; i < edges.size(); ++i) {
+        const size_t first = std::min(edges[i].first, edges[i].second);
+        const size_t second = std::max(edges[i].first, edges[i].second);
+        featureFlags[makeHalfedgeKey(first, second)] = i < flags.size() ? flags[i] : 0;
+    }
+    for (Face *face = m_firstFace; nullptr != face; face = face->nextFace) {
+        if (face->removed)
+            continue;
+        Halfedge *halfedge = face->halfedge;
+        do {
+            Halfedge *opposite = halfedge->oppositeHalfedge;
+            if (nullptr != opposite) {
+                size_t first = indices[halfedge->startVertex];
+                size_t second = indices[opposite->startVertex];
+                if (first > second)
+                    std::swap(first, second);
+                auto found = featureFlags.find(makeHalfedgeKey(first, second));
+                if (found != featureFlags.end()) {
+                    halfedge->feature = opposite->feature = true;
+                    halfedge->featureFlags = opposite->featureFlags = found->second;
+                }
+            }
+            halfedge = halfedge->nextHalfedge;
+        } while (halfedge != face->halfedge);
+    }
+}
+
+void IsotropicHalfedgeMesh::featureVertices()
 {
     for (Face *face = m_firstFace; nullptr != face; face = face->nextFace) {
         if (face->removed)
             continue;
-        auto &startHalfedge = face->halfedge;
-        featureHalfedge(startHalfedge->previousHalfedge, radians);
-        featureHalfedge(startHalfedge, radians);
-        featureHalfedge(startHalfedge->nextHalfedge, radians);
+        Halfedge *halfedge = face->halfedge;
+        do {
+            if (halfedge->feature) {
+                halfedge->startVertex->featured = halfedge->nextHalfedge->startVertex->featured = true;
+                halfedge->startVertex->onFeature = halfedge->nextHalfedge->startVertex->onFeature = true;
+            }
+            halfedge = halfedge->nextHalfedge;
+        } while (halfedge != face->halfedge);
     }
 }

@@ -23,6 +23,7 @@
 #ifndef AUTO_REMESHER_AUTO_REMESHER_H
 #define AUTO_REMESHER_AUTO_REMESHER_H
 #include <AutoRemesher/Diagnostics>
+#include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/Progress>
 #include <AutoRemesher/Vector3>
 #include <atomic>
@@ -361,6 +362,19 @@ public:
         long long eulerCharacteristic = 0;
     };
 
+    // What became of an island's sharp edges between the input and T.
+    struct SharpEdgeStats {
+        size_t decimatedEdges = 0;
+        // Edges whose ends both survived decimation but no longer share an edge.
+        size_t decimationDropped = 0;
+        // Edges of the remesh that a flip turned into the other diagonal.
+        size_t flipped = 0;
+        // Edges of T carried from the input edges, and those added between
+        // feature vertices (extendFeatureEdges).
+        size_t carried = 0;
+        size_t restored = 0;
+    };
+
     struct DecimationStats {
         std::atomic<long long> timeUs { 0 };
         std::atomic<size_t> islandsDecimated { 0 };
@@ -433,6 +447,8 @@ private:
         const SurfaceTopology& topology,
         double voxelSize,
         double sharpEdgeDegrees,
+        FeatureEdgeSet& featureEdges,
+        size_t* droppedFeatureEdges,
         size_t islandIndex,
         DecimationStats* stats);
     static void resample(std::vector<Vector3>& vertices,
@@ -441,6 +457,9 @@ private:
         double voxelSize,
         double adaptivity,
         double sharpEdgeDegrees,
+        // In: the sharp edges of `vertices`; out: those of T.
+        FeatureEdgeSet& featureEdges,
+        SharpEdgeStats* sharpEdgeStats,
         double smoothNormalDegrees,
         size_t islandIndex,
         DecimationStats* decimationStats,

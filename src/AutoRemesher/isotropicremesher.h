@@ -21,6 +21,7 @@
  */
 #ifndef AUTO_REMESHER_ISOTROPIC_REMESHER_H
 #define AUTO_REMESHER_ISOTROPIC_REMESHER_H
+#include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/Progress>
 #include <AutoRemesher/Vector3>
 #include <unordered_set>
@@ -52,9 +53,11 @@ public:
         m_targetEdgeLength = edgeLength;
     }
 
-    void setSharpEdgeDegrees(double degrees)
+    // The input's sharp edges (classifySharpEdges); their vertices stay where
+    // they are, and featureEdges() is what is left of them in the result.
+    void setFeatureEdges(const FeatureEdgeSet& featureEdges)
     {
-        m_sharpEdgeDegrees = degrees;
+        m_featureEdges = featureEdges;
     }
 
     void setSmoothNormalDegrees(double degrees)
@@ -77,6 +80,25 @@ public:
         return m_remeshedTriangles;
     }
 
+    // The input's feature edges as edges of the result: the halves of every
+    // split one, less those a flip removed (clearedFeatureEdges()).
+    const FeatureEdgeSet& featureEdges() const
+    {
+        return m_remeshedFeatureEdges;
+    }
+
+    size_t clearedFeatureEdges() const
+    {
+        return m_clearedFeatureEdges;
+    }
+
+    // Per vertex of the result: 1 on an input feature edge (an end of one,
+    // or a split point on it), also after a flip took its edges away.
+    const std::vector<char>& featureVertices() const
+    {
+        return m_featureVertices;
+    }
+
     bool remesh();
 
     void debugExportObj(const char* filename);
@@ -87,12 +109,15 @@ private:
     const std::unordered_set<size_t>* m_constraintVertices = nullptr;
     const std::vector<double>* m_vertexTargetEdgeLengths = nullptr;
     double m_targetEdgeLength = 0;
-    double m_sharpEdgeDegrees = 60;
+    FeatureEdgeSet m_featureEdges;
     double m_smoothNormalDegrees = 0.0;
     int m_remeshIterations = 3;
     ProgressHandler m_progressHandler;
     std::vector<Vector3> m_remeshedVertices;
     std::vector<std::vector<size_t>> m_remeshedTriangles;
+    FeatureEdgeSet m_remeshedFeatureEdges;
+    size_t m_clearedFeatureEdges = 0;
+    std::vector<char> m_featureVertices;
 };
 
 }

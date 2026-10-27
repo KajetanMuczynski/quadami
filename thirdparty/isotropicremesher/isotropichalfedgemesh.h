@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <set>
 #include <functional>
+#include <utility>
+#include <vector>
 #include "vector3.h"
 #include <cstdint>
 
@@ -47,6 +49,8 @@ public:
         size_t debugIndex = 0;
         size_t outputIndex = 0;
         bool featured = false;
+        // On a feature edge (marked, or a split of one), see markFeatureEdges().
+        bool onFeature = false;
         double targetEdgeLength = 0.0; // 0 = use global default in split/collapse
         Vertex *_allocLink = nullptr;
     };
@@ -69,7 +73,10 @@ public:
         Halfedge *nextHalfedge = nullptr;
         Halfedge *previousHalfedge = nullptr;
         Halfedge *oppositeHalfedge = nullptr;
-        int featureState = -1;
+        // A feature edge (both halfedges carry it), from the caller's set:
+        // split halves inherit it, a flip clears it.
+        bool feature = false;
+        unsigned char featureFlags = 0;
         size_t debugIndex = 0;
         Halfedge *_allocLink = nullptr;
     };
@@ -89,8 +96,18 @@ public:
     void updateVertexValences();
     void updateVertexNormals();
     void updateTriangleNormals();
-    void featureEdges(double radians);
+    // Marks the caller's feature edges, given as pairs of input vertex
+    // indices with a flags byte each; call before anything adds a vertex.
+    void markFeatureEdges(const std::vector<std::pair<size_t, size_t>> &edges,
+        const std::vector<unsigned char> &flags);
+    // Marks the ends of feature edges as feature vertices.
+    void featureVertices();
     void featureBoundaries();
+    // Feature edges a flip has removed so far.
+    size_t clearedFeatureEdges() const
+    {
+        return m_clearedFeatureEdges;
+    }
 private:
     Vertex *m_firstVertex = nullptr;
     Vertex *m_lastVertex = nullptr;
@@ -102,6 +119,7 @@ private:
     Vertex *m_vertexAllocLink = nullptr;
     Face *m_faceAllocLink = nullptr;
     Halfedge *m_halfedgeAllocLink = nullptr;
+    size_t m_clearedFeatureEdges = 0;
     
     static inline uint64_t makeHalfedgeKey(size_t first, size_t second)
     {
@@ -149,7 +167,6 @@ private:
         Face *removedFaceTwo);
     void collectVerticesAroundVertex(Vertex *vertex,
         std::set<Vertex *> *vertices);
-    void featureHalfedge(Halfedge *halfedge, double radians);
     void iterateVertexHalfedges(Vertex *vertex, std::function<bool(Halfedge *halfedge)> handler);
 };
 
