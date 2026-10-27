@@ -48,6 +48,15 @@ namespace {
     // the units the input mesh happens to be modelled in.
     const double relativeRidge = 1e-10;
 
+    // A normal matrix whose product would take more than this many multiply-adds
+    // (the sum of the squared row lengths, which also bounds its non-zeros) is
+    // not formed and the solve fails, so that Eigen's int indices cannot
+    // overflow. The bound is loose for memory: rows of one dense system share
+    // most of their columns, and its normal matrix held 1/60 of the bound
+    // (ext_watch at 3000 quads), so it is no per-unknown fill limit; the
+    // elimination's fill budget in MixedIntegerLeastSquares is.
+    const size_t maximumNormalNonZeros = (size_t)std::numeric_limits<int>::max() / 2;
+
     typedef std::chrono::steady_clock Clock;
 
     double secondsSince(const Clock::time_point& start)
@@ -307,9 +316,14 @@ bool ConstrainedLeastSquares::buildReducedSystem()
     Cache& cache = *m_cache;
 
     std::vector<Eigen::Triplet<double>> entries;
-    size_t entryCount = 0;
-    for (const LinearEquation& equation : m_energyEquations)
+    size_t entryCount = 0, normalBound = 0;
+    for (const LinearEquation& equation : m_energyEquations) {
         entryCount += equation.coefficients.size();
+        normalBound += equation.coefficients.size() * equation.coefficients.size();
+    }
+    m_lastSolveStats.normalNonZerosBound = normalBound;
+    if (normalBound > maximumNormalNonZeros)
+        return false;
     entries.reserve(entryCount);
 
     cache.rowShift = Eigen::VectorXd::Zero(rowCount);
@@ -583,6 +597,7 @@ void appendSolveStats(DiagnosticRecord* record, const std::string& prefix,
     record->set(p + "fixed", (double)stats.fixedVariables);
     record->set(p + "n", (double)stats.freeVariables);
     record->set(p + "normal_nnz", (double)stats.normalNonZeros);
+    record->set(p + "normal_nnz_bound", (double)stats.normalNonZerosBound);
     record->set(p + "factor_nnz", (double)stats.factorNonZeros);
     record->set(p + "ridge", stats.ridge);
     record->set(p + "refactorized", stats.refactorized ? 1.0 : 0.0);

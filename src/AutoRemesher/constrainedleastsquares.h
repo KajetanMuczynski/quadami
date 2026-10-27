@@ -67,6 +67,9 @@ public:
         // Unknowns of the factorised system after constraint substitution.
         size_t freeVariables = 0;
         size_t normalNonZeros = 0;
+        // Sum of the squared lengths of the energy rows, which bounds the
+        // non-zeros of the normal matrix before it is formed.
+        size_t normalNonZerosBound = 0;
         // Non-zeros of L; 0 when the platform solver does not expose it.
         size_t factorNonZeros = 0;
         double ridge = 0.0;
