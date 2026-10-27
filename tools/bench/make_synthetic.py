@@ -22,6 +22,11 @@ Meshes (symmetry plane x = 0 where noted):
                    c in {0.003, 0.01, 0.03, 0.1}, and tori R = 1, r in {0.03, 0.05, 0.1, 0.2, 0.4}.
                    Genus regressions show here first. Reconstruction of the face-tracing thread's
                    set (2026-10-19), whose generator was lost.
+  cad_box, cad_box_rot, cad_chamfer_box, cad_cylinder, cad_wedge, cad_csg_bracket_rot
+                   the "cad" A/B set (crease preservation, TODO 2.5/5.2): a 12-triangle box (exact
+                   90 deg edges), the same box rotated by (23, 37, 11) deg (its right angles compute
+                   as 90 +- 1e-7 deg), a box with 45 deg chamfers (all creases below 90 deg), a
+                   cylinder with two circular 90 deg rims, a 30/60/90 deg prism, and csg_bracket rotated.
 """
 import argparse
 import hashlib
@@ -83,6 +88,40 @@ def csg_bracket():
     part = part - box(2.6, 0.25, 0.3, (0, 0.75, 0.4)) - box(2.6, 0.25, 0.3, (0, -0.75, 0.4))
     mesh = part.to_mesh()
     return np.asarray(mesh.vert_properties[:, :3], float), np.asarray(mesh.tri_verts, np.int64)
+
+
+def rotated(V, degrees=(23.0, 37.0, 11.0)):
+    """V rotated about x, y, z in turn: no edge stays axis-aligned, so right angles stop being exact."""
+    ax, ay, az = np.radians(degrees)
+    rx = np.array([[1, 0, 0], [0, np.cos(ax), -np.sin(ax)], [0, np.sin(ax), np.cos(ax)]])
+    ry = np.array([[np.cos(ay), 0, np.sin(ay)], [0, 1, 0], [-np.sin(ay), 0, np.cos(ay)]])
+    rz = np.array([[np.cos(az), -np.sin(az), 0], [np.sin(az), np.cos(az), 0], [0, 0, 1]])
+    return V @ (rz @ ry @ rx).T
+
+
+def cad_set():
+    from manifold3d import CrossSection, Manifold
+
+    def mesh(m):
+        g = m.to_mesh()
+        return np.asarray(g.vert_properties[:, :3], float), np.asarray(g.tri_verts, np.int64)
+
+    def chamfered_box(sx, sy, sz, c):
+        box = lambda x, y, z: Manifold.cube([x, y, z], True)
+        return Manifold.batch_hull([box(sx - 2 * c, sy - 2 * c, sz), box(sx - 2 * c, sy, sz - 2 * c),
+                                    box(sx, sy - 2 * c, sz - 2 * c)])
+
+    box = mesh(Manifold.cube([2.0, 1.5, 1.0], True))
+    bracket = csg_bracket()
+    wedge = CrossSection([[(0.0, 0.0), (2.0, 0.0), (0.0, 2.0 * np.tan(np.radians(30.0)))]])
+    return {
+        "cad_box": lambda: box,
+        "cad_box_rot": lambda: (rotated(box[0]), box[1]),
+        "cad_chamfer_box": lambda: mesh(chamfered_box(2.0, 1.5, 1.0, 0.15)),
+        "cad_cylinder": lambda: mesh(Manifold.cylinder(2.0, 1.0, 1.0, 128, True)),
+        "cad_wedge": lambda: mesh(Manifold.extrude(wedge, 1.5)),
+        "cad_csg_bracket_rot": lambda: (rotated(bracket[0]), bracket[1]),
+    }
 
 
 def blob_sym(n=161):
@@ -245,6 +284,7 @@ def main():
         "spot_noisy": lambda: spot_noisy(spot),
         "spot_x8": lambda: spot_x8(spot),
         **closed_set(),
+        **cad_set(),
     }
     manifest = {}
     for name, make in jobs.items():

@@ -4,7 +4,7 @@
 
     python metrics.py --input in.obj --output out.obj [--target-quads N]
                       [--sym-axis x --sym-center 0] [--samples 200000] [--json m.json]
-                      [--input-cache DIR]
+                      [--input-cache DIR] [--sharp-degrees 90]
 
 Needs numpy, scipy and libigl (python bindings, `pip install libigl`).
 
@@ -23,7 +23,10 @@ named *_rel_edge, which are relative to the output mean edge length):
               aspect ratio
   creases     (TARGETS A1) share of the length of input edges sharper than 40 deg
               that has an output edge within 0.1 h and 10 deg, h = output mean
-              edge (the remesher comparison's definition; TARGETS wants local h)
+              edge (the remesher comparison's definition; TARGETS wants local h);
+              crease_report(): the same on creases at the run's sharp-edge angle,
+              on those not in a strip narrower than h/2 (A1theta), and quads bent
+              across a crease per 1k quads
   degenerate  faces with a repeated vertex, near-zero area or near-zero edge
   flipped     output faces whose normal opposes the input normal at the closest
               input point (minority orientation, so a globally reversed output
@@ -475,11 +478,9 @@ def sharp_edges(Vin, Fin, sharp_deg=40.0):
     return he[start[man]][ang > sharp_deg].reshape(-1, 2)
 
 
-def crease_coverage(Vin, sharp, V, E_out, h, dist_tol=0.1, ang_tol=10.0):
-    """TARGETS A1: share of the sharp input edges' length that an output edge follows."""
-    if len(sharp) == 0 or len(E_out) == 0:
-        return {"input_length_rel_h": 0.0, "coverage": None}
-    # Input sharp edges sampled at h/4, output edges at h/10.
+def crease_samples(Vin, sharp, V, E_out, h, dist_tol=0.1, ang_tol=10.0):
+    """Input sharp edges sampled at h/4: points, unit tangents, edge index, length weight, and whether an
+    output edge follows each sample (within dist_tol h and ang_tol deg; output edges sampled at h/10)."""
     A, B = Vin[sharp[:, 0]], Vin[sharp[:, 1]]
     L = np.linalg.norm(B - A, axis=1)
     ns = np.maximum(1, np.ceil(L / (h / 4)).astype(int))
@@ -504,7 +505,90 @@ def crease_coverage(Vin, sharp, V, E_out, h, dist_tol=0.1, ang_tol=10.0):
         tt = np.clip(np.sum((P - OA[e]) * d, 1) / np.maximum(np.sum(d * d, 1), 1e-300), 0, 1)
         dist = np.linalg.norm(P - (OA[e] + tt[:, None] * d), axis=1)
         covered |= (dist < dist_tol * h) & (np.abs(np.sum(T * OT[e], 1)) > np.cos(np.radians(ang_tol)))
+    return P, T, idx, w, covered
+
+
+def crease_coverage(Vin, sharp, V, E_out, h, dist_tol=0.1, ang_tol=10.0):
+    """TARGETS A1: share of the sharp input edges' length that an output edge follows."""
+    if len(sharp) == 0 or len(E_out) == 0:
+        return {"input_length_rel_h": 0.0, "coverage": None}
+    L = np.linalg.norm(Vin[sharp[:, 1]] - Vin[sharp[:, 0]], axis=1)
+    _, _, _, w, covered = crease_samples(Vin, sharp, V, E_out, h, dist_tol, ang_tol)
     return {"input_length_rel_h": float(L.sum() / h), "coverage": float(w[covered].sum() / w.sum())}
+
+
+def sharp_edge_angles(Vin, Fin, sharp):
+    """Dihedral angle (between the face normals, degrees) of each edge sharp_edges() returned."""
+    if len(sharp) == 0:
+        return np.zeros(0)
+    he = np.concatenate([Fin[:, [0, 1]], Fin[:, [1, 2]], Fin[:, [2, 0]]])
+    fid = np.tile(np.arange(len(Fin)), 3)
+    key = he.min(1) * len(Vin) + he.max(1)
+    order = np.argsort(key, kind="stable")
+    key, fid = key[order], fid[order]
+    n = np.cross(Vin[Fin[:, 1]] - Vin[Fin[:, 0]], Vin[Fin[:, 2]] - Vin[Fin[:, 0]])
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-300)
+    pos = np.searchsorted(key, sharp.min(1) * len(Vin) + sharp.max(1))
+    return np.degrees(np.arccos(np.clip(np.sum(n[fid[pos]] * n[fid[pos + 1]], 1), -1, 1)))
+
+
+def narrow_strip_samples(P, T, idx, h):
+    """Samples with another sharp edge within h/2 that runs near-parallel (within 30 deg) beside them
+    (offset mostly across the tangent): the two lines bound a strip narrower than half a quad, which
+    a quad layout of edge h cannot keep both of (TODO 5.3). A zigzag crease counts as a strip too."""
+    narrow = np.zeros(len(P), bool)
+    pairs = cKDTree(P).query_pairs(h / 2, output_type="ndarray")
+    if not len(pairs):
+        return narrow
+    i, j = pairs[:, 0], pairs[:, 1]
+    keep = idx[i] != idx[j]
+    i, j = i[keep], j[keep]
+    d = P[j] - P[i]
+    dist = np.linalg.norm(d, axis=1)
+    parallel = np.abs(np.sum(T[i] * T[j], 1)) > np.cos(np.radians(30.0))
+    ok = parallel & (dist > 1e-9 * h)
+    narrow[i[ok & (np.abs(np.sum(d * T[i], 1)) < 0.5 * dist)]] = True
+    narrow[j[ok & (np.abs(np.sum(d * T[j], 1)) < 0.5 * dist)]] = True
+    return narrow
+
+
+def crease_report(Vin, sharp, angles, V, faces, E_out, h, sharp_degrees=90.0, bend_deg=30.0):
+    """A1 split for crease preservation (research/crease-preservation-2026-10-26.md):
+    coverage_theta_all  coverage of the creases at or above the run's sharp-edge angle (minus 1 deg, so a
+                       right angle counts on every rotation), the creases the pipeline is asked to keep;
+    resolvable_share   share of that length not in a strip narrower than h/2 (narrow_strip_samples);
+    coverage_theta     A1theta: coverage of the resolvable part, the number a crease fix must move;
+    bent_quads_per_1k  quads folded across a crease: the smaller fold over the two diagonals above
+                       bend_deg, with a sharp input edge (> 40 deg) within h/2 of the quad's centre."""
+    out = {"sharp_degrees": float(sharp_degrees), "coverage_theta_all": None, "resolvable_share": None,
+           "coverage_theta": None, "bent_quads_per_1k": None}
+    quads = np.array([f for f in faces if len(f) == 4], dtype=np.int64).reshape(-1, 4)
+    if len(quads) and len(sharp):
+        def fold(a, b, c, d):
+            n1 = np.cross(V[b] - V[a], V[c] - V[a])
+            n2 = np.cross(V[c] - V[a], V[d] - V[a])
+            n1 /= np.maximum(np.linalg.norm(n1, axis=1, keepdims=True), 1e-300)
+            n2 /= np.maximum(np.linalg.norm(n2, axis=1, keepdims=True), 1e-300)
+            return np.degrees(np.arccos(np.clip(np.sum(n1 * n2, 1), -1, 1)))
+        bend = np.minimum(fold(quads[:, 0], quads[:, 1], quads[:, 2], quads[:, 3]),
+                          fold(quads[:, 1], quads[:, 2], quads[:, 3], quads[:, 0]))
+        A, B = Vin[sharp[:, 0]], Vin[sharp[:, 1]]
+        L = np.linalg.norm(B - A, axis=1)
+        ns = np.maximum(1, np.ceil(L / (h / 4)).astype(int))
+        idx = np.repeat(np.arange(len(sharp)), ns)
+        t = (np.concatenate([np.arange(k) for k in ns]) + 0.5) / ns[idx]
+        dist, _ = cKDTree(A[idx] + t[:, None] * (B - A)[idx]).query(V[quads].mean(1))
+        out["bent_quads_per_1k"] = float(1000.0 * np.sum((bend > bend_deg) & (dist < h / 2)) / len(quads))
+    keep = angles >= sharp_degrees - 1.0
+    if not np.any(keep) or len(E_out) == 0 or sharp_degrees >= 180.0 or sharp_degrees <= 0.0:
+        return out
+    P, T, idx, w, covered = crease_samples(Vin, sharp[keep], V, E_out, h)
+    out["coverage_theta_all"] = float(w[covered].sum() / w.sum())
+    ok = ~narrow_strip_samples(P, T, idx, h)
+    out["resolvable_share"] = float(w[ok].sum() / w.sum())
+    if np.any(ok):
+        out["coverage_theta"] = float(w[ok & covered].sum() / w[ok].sum())
+    return out
 
 
 def input_side(input_path, cache_dir=None):
@@ -540,12 +624,13 @@ def input_side(input_path, cache_dir=None):
     bad_v[ein_u[ein_c > 2].ravel()] = True
     island_nm = np.zeros(nisl, bool)
     island_nm[vlab[bad_v]] = True
+    sharp = sharp_edges(Vin, Fin)
     d = {"Vin": Vin, "Fin": Fin, "used_in": used_in,
          "diag": np.float64(np.linalg.norm(Vin[used_in].max(0) - Vin[used_in].min(0))),
          "euler_input": np.int64(len(used_in) - len(ein) + len(Fin)),
          "components_input": np.int64(len(np.unique(comps(len(Vin), ein)[used_in]))),
          "boundary_loops_input": np.int64(loops(len(Vin), ein_u[ein_c == 1])),
-         "sharp_edges": sharp_edges(Vin, Fin),
+         "sharp_edges": sharp, "sharp_angles": sharp_edge_angles(Vin, Fin, sharp),
          "tri_island": vlab[Fin[:, 0]], "island_euler": island_euler, "island_loops": island_loops,
          "island_non_manifold": island_nm, "island_area": np.bincount(vlab[Fin[:, 0]], weights=tri_area, minlength=nisl),
          "Fin_oriented": Fin_oriented, "input_reoriented": np.int64(reoriented),
@@ -560,7 +645,7 @@ def input_side(input_path, cache_dir=None):
 
 
 def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_center=0.0, samples=200000, seed=0,
-            cache_dir=None):
+            cache_dir=None, sharp_degrees=90.0):
     rng = np.random.default_rng(seed)
     inp = input_side(input_path, cache_dir)
     Vin, Fin, used_in = inp["Vin"], inp["Fin"], inp["used_in"]
@@ -665,6 +750,8 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
                         "sj_hist": np.histogram(sjmin, bins=10, range=(-1, 1))[0].tolist()}
 
     out["creases"] = crease_coverage(Vin, inp["sharp_edges"], V, E, mean_edge)
+    out["creases"].update(crease_report(Vin, inp["sharp_edges"], inp["sharp_angles"], V, faces, E, mean_edge,
+                                        sharp_degrees))
 
     # Flips against the input surface and distances. The input normals are those of the input as the
     # core sees it, oriented like its orientInput (TODO 1.4): an export with a turned patch would
@@ -758,6 +845,8 @@ def main():
     ap.add_argument("--sym-axis", choices=["x", "y", "z"])
     ap.add_argument("--sym-center", type=float, default=0.0)
     ap.add_argument("--samples", type=int, default=200000)
+    ap.add_argument("--sharp-degrees", type=float, default=90.0,
+                    help="the run's --sharp-edge setting, for creases.coverage_theta(_all) and bent_quads_per_1k")
     ap.add_argument("--json")
     ap.add_argument("--input-cache", help="folder that caches the input's share of the work (same results)")
     ap.add_argument("--prepare-input", action="store_true", help="only fill --input-cache for --input")
@@ -770,7 +859,7 @@ def main():
     if not args.output:
         ap.error("--output is required")
     res = compute(args.input, args.output, args.target_quads, args.sym_axis, args.sym_center, args.samples,
-                  cache_dir=args.input_cache)
+                  cache_dir=args.input_cache, sharp_degrees=args.sharp_degrees)
     text = json.dumps(res, indent=1)
     if args.json:
         with open(args.json, "w") as f:
