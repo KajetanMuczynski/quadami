@@ -12,5 +12,8 @@
 - Measured: research/few-triangles-2026-10-26.md (private sculpts, 6 replicates per side) and the PR.
 - Checked: a second worker with its own distance code confirmed the loss drop in every replicate pair
   and found the cost: more faces folded over in the swirled cube's grooves (flips +40 % at 3k).
-- Next: finish the public guard of the switch on the PR build; after the v0.1.0 tag, a fold guard for
-  the groove flips, then decide the default (full lane); local sizing for thin parts (2.21, 2.22 a).
+- Public guard (2026-10-27, option on, 6 replicates per side on every public set): closer to the
+  input everywhere, topology unchanged; costs a few more folds on one external mesh and a slightly
+  lower worst-quad shape on hard-surface meshes (numbers in the PR and TODO 2.8).
+- Next: a fold guard for the groove flips, then decide the default (full lane); local sizing for thin
+  parts (2.21, 2.22 a).
