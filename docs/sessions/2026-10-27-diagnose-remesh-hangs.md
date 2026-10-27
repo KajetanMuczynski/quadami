@@ -11,8 +11,10 @@
     forever. Fixed by a bounded circulation (row 12).
   - `ext_watch` at 2000 quads, an intermittent segfault in `garbage_collection`: not a race. ASan shows
     the same heap-buffer-overflow on 4 threads and pinned to 1 CPU: a vertex's outgoing halfedge lies past
-    the halfedge array after the merge. Fixed by a range check that throws before the collection (row 13);
-    where the handle comes from is not traced.
+    the halfedge array after the merge. Traced: libQEx built faces with a self-loop edge (both ends at one
+    vertex); OpenMesh's `delete_face` left that vertex on a deleted halfedge, and the merge's own collection
+    moved the handle past the array. Fixed by a check for that state before the merge's collection, plus a
+    range check before the last one (row 13).
   - `ext_hair_elf` at 3000 quads (plain input only): a segfault in Eigen's AMD ordering. A sliver island
     (223 faces, area 1e-11) resamples to 66k faces, cone raising re-rounds 3,200 edges, the seam BFS
     (rotation-0 edges only) reaches 1,785 of 66,254 faces, so the cover is cut almost everywhere and its

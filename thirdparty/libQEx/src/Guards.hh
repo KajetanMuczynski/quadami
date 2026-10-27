@@ -117,12 +117,33 @@ std::vector<typename MeshT::HalfedgeHandle> outgoingHalfedgesBounded(const MeshT
     return outgoing;
 }
 
+// Throws if a vertex that is not deleted keeps a deleted outgoing halfedge.
+// OpenMesh's delete_face assumes manifold connectivity; on a face with a
+// self-loop edge (both ends at one vertex, which libQEx's extraction can build
+// on a folded map) or at a pinched vertex it can leave the vertex on one of
+// the deleted halfedges. garbage_collection() moves deleted halfedges past the
+// end of the array and remaps the vertex's handle there (ext_watch at 2000
+// quads). O(#vertices).
+template <class MeshT>
+void checkOutgoingHalfedgesLive(const MeshT& m, const char* where)
+{
+    for (auto v = m.vertices_begin(); v != m.vertices_end(); ++v) {
+        if (m.status(*v).deleted())
+            continue;
+        const auto h = m.halfedge_handle(*v);
+        if (h.is_valid() && m.status(m.edge_handle(h)).deleted())
+            throw Abort(std::string("vertex keeps a deleted halfedge ") + where);
+    }
+}
+
 // Throws unless every handle a vertex or halfedge keeps (outgoing halfedge,
 // next halfedge, to-vertex, face) is invalid or inside the mesh's arrays.
 // garbage_collection() indexes its maps with them: a vertex whose outgoing
 // halfedge lay past the halfedges after the n-gon merge made it read out of
 // bounds (ASan, ext_watch at 2000 quads; a segfault in some runs, garbage
-// connectivity in the others). O(#vertices + #halfedges).
+// connectivity in the others). checkOutgoingHalfedgesLive now stops that case
+// where it starts; this stays as the check before the last collection, which
+// indexes out of bounds on any stray handle. O(#vertices + #halfedges).
 template <class MeshT>
 void checkHandlesInRange(const MeshT& m, const char* where)
 {

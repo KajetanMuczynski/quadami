@@ -17,7 +17,7 @@
  * You should have received a copy of the GNU General Public License
  * along with QEx.  If not, see <http://www.gnu.org/licenses/>.
  *
- * Modified by the Quadami fork, 2026-10-21 (TODO 6.1b): connectivity checks before vertex deletion and before each merged face is rebuilt, bounded vertex circulation in create_faces (Guards.hh); no log output.
+ * Modified by the Quadami fork, 2026-10-21 (TODO 6.1b): connectivity checks before vertex deletion and before each merged face is rebuilt, bounded vertex circulation in create_faces, a check for vertices left on deleted halfedges before garbage collection (Guards.hh); no log output.
  * See thirdparty/libQEx/PATCHES.md.
  */
 
@@ -868,6 +868,9 @@ void QuadExtractorPostprocT<MeshT>::ngons_to_quads() {
             << "  During face materialization skipped " << skippedFaces << " faces due to non-manifoldness." << std::endl;
 #endif
 
+    // Quadami fork: a vertex left on a deleted halfedge (a self-loop edge in
+    // delete_face) would get a handle past the halfedges here.
+    checkOutgoingHalfedgesLive(mesh_, "after merging n-gons");
     mesh_.garbage_collection();
     mesh_.update_normals();
 
