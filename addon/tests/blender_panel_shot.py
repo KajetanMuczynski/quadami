@@ -30,10 +30,13 @@ error; the pictures are for a person to look at (a label too wide for the
 sidebar is cut off with an ellipsis, which the script cannot see).
 """
 
+import base64
 import importlib
 import os
+import struct
 import sys
 import traceback
+import zlib
 
 import addon_utils
 import bmesh
@@ -121,8 +124,44 @@ def shoot(scale):
     window, area = view3d()
     region = next(r for r in area.regions if r.type == "UI")
     print("panel_shot: UI scale %.2f, sidebar %d x %d px" % (scale, region.width, region.height))
+    path = os.path.join(out, "panel-%g.png" % scale)
     with bpy.context.temp_override(window=window, area=area):
-        bpy.ops.screen.screenshot_area(filepath=os.path.join(out, "panel-%g.png" % scale))
+        # Draw and swap once, so the screenshot reads a drawn frame.
+        bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+        bpy.ops.screen.screenshot_area(filepath=path)
+    image = bpy.data.images.load(path)
+    width, height = image.size
+    pixels = [0.0] * (width * height * 4)
+    image.pixels.foreach_get(pixels)
+    bpy.data.images.remove(image)
+    # The sidebar's columns of the picture (it is the right edge of the area).
+    left = max(0, width - region.width)
+    colours = {tuple(round(c * 255) for c in pixels[4 * (y * width + x):4 * (y * width + x) + 3])
+               for y in range(0, height, 2) for x in range(left, width, 2)}
+    print("panel_shot: %s %d x %d, %d colours in the sidebar" % (os.path.basename(path), width, height, len(colours)))
+    if len(colours) < 8:
+        raise RuntimeError("the screenshot's sidebar is blank: nothing was drawn")
+    if "--dump" in args:
+        dump(pixels, width, height, left)
+
+
+def dump(pixels, width, height, left):
+    # The sidebar as a PNG in the log (base64), for a look without the artifact.
+    rows = []
+    for y in range(height - 1, -1, -1):
+        row = bytearray(b"\0")
+        for x in range(left, width):
+            row += bytes(round(c * 255) for c in pixels[4 * (y * width + x):4 * (y * width + x) + 3])
+        rows.append(bytes(row))
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width - left, height, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b""))
+    text = base64.b64encode(png).decode()
+    for i in range(0, len(text), 4000):
+        print("panel_dump: " + text[i:i + 4000])
+    print("panel_dump: end")
 
 
 def step():

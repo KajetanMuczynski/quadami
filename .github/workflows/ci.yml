@@ -346,7 +346,7 @@ jobs:
         run: |
           ci/apt_install.sh xvfb xauth libgl1-mesa-dri
           xvfb-run -a -s "-screen 0 1600x900x24" "$BLENDER" --factory-startup \
-            --python addon/tests/blender_panel_shot.py -- --out build/panel
+            --python addon/tests/blender_panel_shot.py -- --out build/panel --dump
           test -s build/panel/panel-1.png && test -s build/panel/panel-1.5.png
 
       - name: Upload the panel screenshots
