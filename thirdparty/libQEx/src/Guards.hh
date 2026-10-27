@@ -69,6 +69,32 @@ void checkFaceLoopCloses(const MeshT& m, typename MeshT::FaceHandle f, const cha
     throw Abort(std::string("face loop does not close ") + where);
 }
 
+// OpenMesh's PolyConnectivity::adjust_outgoing_halfedge(v), bounded: makes the
+// first boundary halfedge of v's rotation h -> next(opposite(h)) its outgoing
+// one, visiting the rotation in the same order as OpenMesh's circulator, so
+// the result is the same wherever that terminates. QEx's add_face calls it
+// after every face; on a folded map a rotation can run into a cycle that
+// misses its start, and the circulator then never ended (ext_mosquito at
+// 2000 quads), before checkCirculatorsTerminate below could see it.
+template <class MeshT>
+void adjustOutgoingHalfedgeBounded(MeshT& m, typename MeshT::VertexHandle v, const char* where)
+{
+    const auto h0 = m.halfedge_handle(v);
+    auto h = h0;
+    for (size_t n = 0; n <= m.n_halfedges(); ++n) {
+        if (!h.is_valid())
+            return;
+        if (m.is_boundary(h)) {
+            m.set_halfedge_handle(v, h);
+            return;
+        }
+        h = m.next_halfedge_handle(m.opposite_halfedge_handle(h));
+        if (h == h0)
+            return;
+    }
+    throw Abort(std::string("vertex rotation does not close ") + where);
+}
+
 // Throws unless every vertex rotation h -> next(opposite(h)) and every face
 // loop h -> next(h) of the polygon mesh returns to its start, which OpenMesh's
 // circulators assume. O(#halfedges).
