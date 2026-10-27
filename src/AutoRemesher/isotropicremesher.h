@@ -23,8 +23,8 @@
 #define AUTO_REMESHER_ISOTROPIC_REMESHER_H
 #include <AutoRemesher/Progress>
 #include <AutoRemesher/Vector3>
-#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace AutoRemesher {
 
