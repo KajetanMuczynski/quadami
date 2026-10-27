@@ -691,6 +691,10 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
     
     if (bottomVertex->featured)
         return false;
+
+    if ((topVertex->pinned && vertexValence(topVertex) <= pinnedMinimumValence) ||
+            (bottomVertex->pinned && vertexValence(bottomVertex) <= pinnedMinimumValence))
+        return false;
     
     Vector3 collapseTo;
     if (!halfedge->startVertex->_smoothNormal.isZero() &&

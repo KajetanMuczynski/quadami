@@ -479,6 +479,16 @@ void IsotropicRemesher::flipEdges()
             const auto &nextHalfedge = halfedge->nextHalfedge;
             if (nullptr != halfedge->oppositeHalfedge) {
                 //if (!halfedge->startVertex->featured && !nextHalfedge->startVertex->featured) {
+                    // A pinned tip keeps a fan fine enough that its edges do
+                    // not read as creases (a valence-4 fan around Blender's
+                    // default cone apex turns 84 to 90 degrees per edge).
+                    if ((halfedge->startVertex->pinned &&
+                                m_halfedgeMesh->vertexValence(halfedge->startVertex) <= IsotropicHalfedgeMesh::pinnedMinimumValence) ||
+                            (nextHalfedge->startVertex->pinned &&
+                                m_halfedgeMesh->vertexValence(nextHalfedge->startVertex) <= IsotropicHalfedgeMesh::pinnedMinimumValence)) {
+                        halfedge = nextHalfedge;
+                        continue;
+                    }
                     if (m_halfedgeMesh->flipEdge(halfedge)) {
                         break;
                     }

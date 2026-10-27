@@ -86,6 +86,9 @@ public:
     bool flipEdge(Halfedge *halfedge);
     void relaxVertex(Vertex *vertex);
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);
+    // Flips and collapses keep at least this many edges at a pinned vertex
+    // (Quadami), so that its fan does not turn into a pyramid with creases.
+    static const size_t pinnedMinimumValence = 8;
     Face *moveToNextFace(Face *face);
     Vertex *moveToNextVertex(Vertex *vertex);
     void updateVertexValences();
