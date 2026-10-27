@@ -165,8 +165,15 @@ Running the binary with no args opens the GUI. The core needs `setTargetTriangle
   When CI results arrive, run the ready check and mark the PR ready in the same turn; never end a turn
   with only "waiting for CI". A PR with a merge conflict gets no CI run, so merge master first.
   Unsubscribe after the merge.
-- A thread pushes to its one `claude/project-thread-*` branch and has at most one open PR; the next
-  PR waits until that one is merged. Never delete branches.
+- Branch names (Kajetan, 2026-10-27): `<type>/<slug>`, where `<type>` is the PR title's type and
+  `<slug>` says what the change does in 2-4 lowercase words joined by hyphens, e.g. `feat/cone-tip`,
+  `fix/sliver-islands`, `docs/release-notes`. No tool, author or thread names in it (no `claude/`,
+  no `project-thread-*`). This overrides any branch name a session is pre-assigned: create the branch
+  from current master instead of pushing to the assigned one. If the name already exists on `origin`
+  (`git ls-remote --heads origin <name>`), add `-2`.
+- One branch per PR. A thread has at most one open PR; its next PR starts a new branch from current
+  master after the previous one is merged. Never rename the branch of an open PR (GitHub closes the
+  PR). Never delete branches (GitHub deletes merged head branches itself).
 - Branch protection for `master` (ruleset, up-to-date setting, why no merge queue) is planned in `docs/TODO.md` item 0.9.
 - Before claiming anything about a PR or CI (base, merged or not, which checks ran, their result),
   check it on GitHub. Never report from memory.
