@@ -112,7 +112,8 @@ def setup():
         bpy.utils.unregister_class(panel)
         panel.bl_category = "Item"
         bpy.utils.register_class(panel)
-    with bpy.context.temp_override(window=window, area=area):
+    view = next(r for r in area.regions if r.type == "WINDOW")
+    with bpy.context.temp_override(window=window, area=area, region=view):
         bpy.ops.view3d.view_all()
 
 
