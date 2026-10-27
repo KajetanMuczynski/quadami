@@ -108,6 +108,10 @@ try:
     # Follow Marks: the equator's 128 edges, as vertex pairs; none when off.
     assert marked.shape == (128, 2) and abs(positions[marked.ravel(), 2]).max() < 1e-4, marked.shape
     assert len(addon._mesh_arrays(bpy.context, source)[3]) == 0
+    # Off by default; the panel counts the marks (a small share of the edges: no flood).
+    assert not getattr(bpy.context.scene, names.ID).follow_marks
+    counts = addon._mark_counts(source)
+    assert counts and "Sharp 128" in counts[0] and "Seam 128" in counts[0] and not counts[1], counts
 
     # Uneven scale warns (shear from a rotated parent counts too); even scale does not.
     assert addon._uneven_scale_warning(source) is None

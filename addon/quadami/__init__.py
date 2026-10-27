@@ -163,7 +163,9 @@ class RemeshSettings(bpy.types.PropertyGroup):
             ("SEAM", "Seam", "UV seams"),
         ),
         options={"ENUM_FLAG"},
-        default={"SHARP"},
+        # Off: an FBX or OBJ import often marks nearly every edge Sharp
+        # (93 % of the edges of a sculpt checked); the panel shows the counts.
+        default=set(),
         description="Marked edges the result keeps a row of edges along, whatever their "
                     "angle (Sharp Edge decides only for unmarked edges)")
 
@@ -215,6 +217,23 @@ def _marked_pairs(mesh, kinds):
         if values is not None:
             wanted |= values > 0
     return _edge_vertices(mesh)[wanted]
+
+
+def _mark_counts(obj):
+    """Panel line with how many edges of obj carry each mark, and whether
+    most edges are marked (an import's marks rather than the user's)."""
+    if obj is None or obj.type != "MESH" or not len(obj.data.edges):
+        return None
+    marks = transfer.marked_edges(obj.data)
+    if not marks:
+        return None
+    names = (("sharp", "Sharp"), ("crease", "Crease"), ("seam", "Seam"))
+    counts = {kind: int(np.count_nonzero(marks[kind] > 0)) for kind, _ in names if kind in marks}
+    text = "Marked: " + ", ".join("%s %d" % (label, counts[kind]) for kind, label in names if kind in counts)
+    flood = len(obj.data.edges) > 1000 and max(counts.values()) * 2 > len(obj.data.edges)
+    if flood:
+        text += " (most edges: an import's marks?)"
+    return text, flood
 
 
 def _mesh_arrays(context, obj, follow_marks=()):
@@ -546,6 +565,11 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         row.enabled = _job is None
         row.label(text="Follow Marks")
         row.prop(settings, "follow_marks")
+        counts = _mark_counts(context.active_object)
+        if counts:
+            row = layout.row()
+            row.enabled = _job is None
+            row.label(text=counts[0], icon="ERROR" if counts[1] else "NONE")
         header, body = layout.panel(ID + "_advanced", default_closed=True)
         header.label(text="Advanced")
         if body is not None:
