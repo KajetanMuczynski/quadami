@@ -346,7 +346,10 @@ namespace {
     // (2 pi minus the angle sum) gathered within `radius` reaches
     // `minimumDeficit`, the apex of a cone. Each tip is the vertex with the
     // largest own deficit of its cluster; a cluster touching a boundary is
-    // left out. The isotropic remesh keeps tips where they are: it used to
+    // left out, and so is one whose triangles do not form a cap (some faces
+    // away from their mean normal): a corner of sharp edges, which the
+    // feature edges hold, or folded brush input, whose angle sums mean
+    // nothing (brush_box_relief had 18 such "tips"). The isotropic remesh keeps tips where they are: it used to
     // collapse and relax the apex away, so the quads were laid out on a cut
     // cone and their cap sat about one quad below the tip.
     std::vector<size_t> conicalTips(const std::vector<Vector3>& vertices,
@@ -355,11 +358,13 @@ namespace {
         const size_t n = vertices.size();
         std::vector<double> angleSum(n, 0.0);
         std::vector<std::vector<size_t>> neighbours(n);
+        std::vector<std::vector<size_t>> vertexTriangles(n);
         std::unordered_map<unsigned long long, int> edgeFaces;
         const auto key = [](size_t a, size_t b) {
             return ((unsigned long long)std::min(a, b) << 32) | (unsigned long long)std::max(a, b);
         };
-        for (const auto& t : triangles) {
+        for (size_t i = 0; i < triangles.size(); ++i) {
+            const auto& t = triangles[i];
             if (t.size() != 3)
                 continue;
             for (size_t k = 0; k < 3; ++k) {
@@ -368,8 +373,23 @@ namespace {
                 angleSum[a] += std::atan2(Vector3::crossProduct(u, w).length(), Vector3::dotProduct(u, w));
                 ++edgeFaces[key(a, b)];
                 neighbours[a].push_back(b);
+                vertexTriangles[a].push_back(i);
             }
         }
+        const auto isCap = [&](const std::vector<size_t>& vertexSet) {
+            std::vector<Vector3> normals;
+            Vector3 mean;
+            for (const size_t u : vertexSet)
+                for (const size_t i : vertexTriangles[u]) {
+                    const auto& t = triangles[i];
+                    normals.push_back(Vector3::crossProduct(vertices[t[1]] - vertices[t[0]], vertices[t[2]] - vertices[t[0]]));
+                    mean += normals.back();
+                }
+            for (const Vector3& normal : normals)
+                if (Vector3::dotProduct(normal, mean) <= 0.0)
+                    return false;
+            return true;
+        };
         std::vector<char> interior(n, 1);
         for (const auto& it : edgeFaces)
             if (it.second != 2)
@@ -410,7 +430,7 @@ namespace {
             }
             for (const size_t u : region)
                 seen[u] = 0;
-            if (open || gathered < minimumDeficit)
+            if (open || gathered < minimumDeficit || !isCap(region))
                 continue;
             tips.push_back(v);
             for (const size_t u : region)
