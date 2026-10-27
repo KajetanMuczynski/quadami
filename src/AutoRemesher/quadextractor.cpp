@@ -2005,8 +2005,44 @@ void QuadExtractor::smoothAndProject(size_t iterations,
     // projection only reads the bounding box tree, so each vertex is independent
     // and the parallel result is the same as the serial one.
     const double smoothFactor = 0.5;
+    // Tangential smoothing: each step loses its part along the vertex normal
+    // (the sum of its faces' area vectors at the start of the round), so a
+    // vertex slides over the surface instead of cutting the corner of a ridge
+    // or crease, which the projection onto T only partly brings back.
+    std::vector<std::vector<size_t>> vertexPolygons;
+    std::vector<Vector3> unitNormals;
+    if (m_tangentialSmoothing) {
+        vertexPolygons.resize(m_remeshedVertices.size());
+        for (size_t f = 0; f < m_remeshedPolygons.size(); ++f) {
+            for (const auto v : m_remeshedPolygons[f]) {
+                if (v < vertexPolygons.size())
+                    vertexPolygons[v].push_back(f);
+            }
+        }
+        unitNormals.resize(m_remeshedVertices.size());
+    }
+    const auto faceNormal = [&](const std::vector<size_t>& face) {
+        Vector3 normal;
+        const auto& origin = m_remeshedVertices[face[0]];
+        for (size_t i = 1; i + 1 < face.size(); ++i) {
+            normal += Vector3::crossProduct(m_remeshedVertices[face[i]] - origin,
+                m_remeshedVertices[face[i + 1]] - origin);
+        }
+        return normal;
+    };
     for (size_t iteration = 0; iteration < iterations; ++iteration) {
         std::vector<Vector3> smoothedVertices(m_remeshedVertices);
+        if (m_tangentialSmoothing) {
+            std::vector<Vector3> faceNormals(m_remeshedPolygons.size());
+            for (size_t f = 0; f < m_remeshedPolygons.size(); ++f)
+                faceNormals[f] = faceNormal(m_remeshedPolygons[f]);
+            for (size_t i = 0; i < m_remeshedVertices.size(); ++i) {
+                Vector3 normal;
+                for (const auto f : vertexPolygons[i])
+                    normal += faceNormals[f];
+                unitNormals[i] = normal.normalized();
+            }
+        }
         tbb::parallel_for(tbb::blocked_range<size_t>(0, m_remeshedVertices.size()),
             [&](const tbb::blocked_range<size_t>& range) {
                 for (size_t i = range.begin(); i != range.end(); ++i) {
@@ -2016,7 +2052,13 @@ void QuadExtractor::smoothAndProject(size_t iterations,
                     for (const auto& neighbor : neighbors[i])
                         center += m_remeshedVertices[neighbor];
                     center /= (double)neighbors[i].size();
-                    smoothedVertices[i] = m_remeshedVertices[i] + smoothFactor * (center - m_remeshedVertices[i]);
+                    if (m_tangentialSmoothing) {
+                        Vector3 step = smoothFactor * (center - m_remeshedVertices[i]);
+                        step = step - Vector3::dotProduct(step, unitNormals[i]) * unitNormals[i];
+                        smoothedVertices[i] = m_remeshedVertices[i] + step;
+                    } else {
+                        smoothedVertices[i] = m_remeshedVertices[i] + smoothFactor * (center - m_remeshedVertices[i]);
+                    }
                 }
             });
         tbb::parallel_for(tbb::blocked_range<size_t>(0, smoothedVertices.size()),

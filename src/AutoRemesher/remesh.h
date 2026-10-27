@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 8;
+const int InterfaceVersionMinor = 9;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -61,6 +61,16 @@ enum class MeshResolution {
 enum class Extractor {
     Qex,
     Trace
+};
+
+// Since 1.9.  How the extracted quads are smoothed before they are projected
+// onto the surface.  Laplacian: the 3D step; it rounds ridges and creases off,
+// and on sculpts most of the shape the output loses is lost there
+// (research/few-triangles-2026-10-26.md).  Tangential: the same step without
+// its part along the vertex normal, so vertices slide over the surface.
+enum class QuadSmoothing {
+    Laplacian,
+    Tangential
 };
 
 // Defaults are those of the command line.
@@ -92,6 +102,8 @@ struct RemeshParameters {
     // lower the tips of needle spikes near it (a shape change, so off by
     // default; diagnostics input_fold_spikes and input_fold_spike_drop_quads).
     bool flattenSpikes = false;
+    // Since 1.9.
+    QuadSmoothing quadSmoothing = QuadSmoothing::Laplacian;
 };
 
 struct RemeshRequest {
@@ -244,6 +256,9 @@ bool parseMeshResolution(const std::string& text, MeshResolution* resolution);
 // "qex" and "trace".
 const char* toString(Extractor extractor);
 bool parseExtractor(const std::string& text, Extractor* extractor);
+// "laplacian" and "tangential".
+const char* toString(QuadSmoothing smoothing);
+bool parseQuadSmoothing(const std::string& text, QuadSmoothing* smoothing);
 
 }
 

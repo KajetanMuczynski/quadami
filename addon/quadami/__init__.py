@@ -140,6 +140,18 @@ class RemeshSettings(bpy.types.PropertyGroup):
         ),
         default="quality",
         description="Triangle mesh the quads are solved on. The quad count is the same either way")
+    quad_smoothing: EnumProperty(
+        name="Quad Smoothing",
+        items=(
+            ("laplacian", "Standard", "Evens out the quads by moving them in 3D, which rounds off "
+                                      "ridges, swirls and sharp edges"),
+            ("tangential", "Keep Ridges", "Evens out the quads by sliding them along the surface: "
+                                          "on test sculpts a third to a half less of the shape lost, "
+                                          "but sometimes a few more flipped quads in deep grooves "
+                                          "(experimental)"),
+        ),
+        default="laplacian",
+        description="How the quads are evened out after they are found")
 
     # Not a remesh parameter: a choice next to Repair Folds and Re-run.
     flatten_spikes: BoolProperty(
@@ -169,7 +181,7 @@ class RemeshSettings(bpy.types.PropertyGroup):
 # How the panel shows the parameters: the main ones, then a collapsed
 # "Advanced" section. Every parameter appears exactly once (blender_smoke.py).
 MAIN_PARAMETERS = ("target_quads", "adaptivity", "sharp_edge_degrees")
-ADVANCED_PARAMETERS = ("resolution", "anisotropy", "edge_scaling", "smooth_normal_degrees")
+ADVANCED_PARAMETERS = ("resolution", "anisotropy", "edge_scaling", "smooth_normal_degrees", "quad_smoothing")
 KEEP_OPTIONS = ("keep_attributes", "keep_uvs")
 
 

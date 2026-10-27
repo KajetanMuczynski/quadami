@@ -6,7 +6,7 @@
   "conclusion": "cancelled",
   "run_attempt": 1,
   "head_sha": "3cb2f1060a5a9ca5adf7e36373547fe67090103f",
-  "head_branch": "claude/project-thread-c47ar9"
+  "head_branch": "fix/superseded"
  },
  "pull_requests": [],
  "jobs": [
