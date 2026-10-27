@@ -19,8 +19,9 @@ this script only decides:
   no more defects per 1k faces, than the baseline. Aggregates over a set need no replicate vote
   (CLAUDE.md, noise rule), so a single extra defect counts as worse.
 
-Prints Markdown (and appends it to --summary, e.g. $GITHUB_STEP_SUMMARY); exits 1 when the check
-fails, 2 when a folder has no runs of a set.
+A baseline run the candidate lacks fails the check. Prints Markdown (and appends it to --summary, e.g.
+$GITHUB_STEP_SUMMARY); exits 1 when the check fails, 2 when a folder has no runs of a set or a run
+completed without metrics.
 """
 import argparse
 import os
@@ -41,20 +42,24 @@ DEFECTS = ["non-quads", "folded quads", "flipped off input folds", "degenerate",
 
 
 def score(folder, setname):
-    """{(mesh, res, target, replicate): (gates passed, defect counts)} of one set; a run that did not
-    complete, or completed without metrics, fails every gate."""
+    """({(mesh, res, target, replicate): (gates passed, defect counts)}, [runs without metrics]) of one
+    set; a run that did not complete fails every gate. A run that completed without metrics (metrics.py
+    failed) is not scored: it is listed, and main() refuses to decide rather than call it a crash (H1)."""
     _, meshes = ab.load_set(setname)
     fams = {m["id"]: gates.family(m, setname) for m in meshes}
-    out = {}
+    out, unmeasured = {}, []
     for key, by_rep in ab.load_runs(folder, setname).items():
         for u, rec in by_rep.items():
             run_dir = os.path.join(folder, setname, key[0], f"{key[1]}-t{key[2]}", f"u{u}")
             res = gates.gates(rec, run_dir, fams.get(key[0], setname))
-            g, d = res if res is not None else ({"H1 completes": False}, {})
+            if res is None:
+                unmeasured.append(key + (u,))
+                continue
+            g, d = res
             if not g["H1 completes"]:
                 g = {name: False for name in STRUCTURAL + VALIDITY}
             out[key + (u,)] = (g, d)
-    return out
+    return out, unmeasured
 
 
 def failing(runs, keys, gate):
@@ -81,6 +86,12 @@ def check_set(cand, base, hard):
     broken = {k: [g.split()[0] for g in STRUCTURAL if not cand[k][0][g]] for k in cand}
     broken = {k: v for k, v in broken.items() if v}
     lines.append("%d runs, %d fail a structural gate." % (len(cand), len(broken)))
+    # A run the candidate lacks (a mesh missing from its run, a run folder cut short) would otherwise
+    # drop out of every row below and pass unseen.
+    lost = sorted(set(base) - set(cand)) if base is not None else []
+    if lost:
+        lines += ["", "**%d baseline runs have no candidate run** (fails the check): %s" % (
+            len(lost), ", ".join("%s %s %d u%d" % k for k in lost[:20]) + (" ..." if len(lost) > 20 else ""))]
     if base is None or hard:
         bad = bool(broken)
     else:
@@ -105,6 +116,7 @@ def check_set(cand, base, hard):
             bad |= c > b + 1e-12
         if len(common) < len(cand):
             lines += ["", "%d candidate runs have no baseline run." % (len(cand) - len(common))]
+    bad |= bool(lost)
     if broken:
         lines += ["", "<details><summary>Runs failing a structural gate</summary>", "",
                   "| mesh | resolution | target | replicate | fails |", "|---|---|---|---|---|"]
@@ -128,8 +140,15 @@ def main():
         lines.append("Baseline: `%s`" % a.baseline)
     lines.append("Structural gates: %s" % ("hard (1.0)" if a.hard or not a.baseline else "no worse than the baseline (0.x)"))
     for setname in a.sets or ["corpus", "closed"]:
-        cand = score(a.candidate, setname)
-        base = score(a.baseline, setname) if a.baseline else None
+        cand, cand_unmeasured = score(a.candidate, setname)
+        base, base_unmeasured = score(a.baseline, setname) if a.baseline else (None, [])
+        for folder, missing in ((a.candidate, cand_unmeasured), (a.baseline, base_unmeasured)):
+            if missing:
+                print("%d %s runs in %s completed without metrics (%s): `ab.py run` measures them again; "
+                      "no decision without them" % (len(missing), setname, folder,
+                                                    ", ".join("%s %s %d u%d" % k for k in sorted(missing)[:10])),
+                      file=sys.stderr)
+                sys.exit(2)
         if not cand or base == {}:
             print("no %s runs in %s" % (setname, a.baseline if cand else a.candidate), file=sys.stderr)
             sys.exit(2)

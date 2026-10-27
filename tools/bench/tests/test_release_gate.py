@@ -85,6 +85,21 @@ class ReleaseGate(unittest.TestCase):
         self.assertIn("| folded quads | 0.0000 / 0.2500 | **worse** |", out)
         self.assertEqual(self.gate([run()], [run(**{"quads.sj_le_0": 1})])[0], 0)  # fewer is fine
 
+    def test_baseline_run_missing_from_the_candidate_fails(self):
+        # Without this the lost replicate dropped out of every row and the check passed.
+        rc, out = self.gate([run()], [run(), run()])
+        self.assertEqual(rc, 1, out)
+        self.assertIn("**1 baseline runs have no candidate run**", out)
+        self.assertEqual(self.gate([run()], [run(), run()], "--hard")[0], 1)
+        self.assertEqual(self.gate([run(), run()], [run()])[0], 0)  # a new candidate run is fine
+
+    def test_run_without_metrics_is_not_scored_as_a_crash(self):
+        # metrics.py failing (out of memory under load) once made identical outputs fail H1.
+        for cand, base in (([dict(run(), metrics=None)], None), ([run()], [dict(run(), metrics=None)])):
+            rc, out = self.gate(cand, base)
+            self.assertEqual(rc, 2, out)
+            self.assertIn("completed without metrics", out)
+
 
 if __name__ == "__main__":
     unittest.main()
