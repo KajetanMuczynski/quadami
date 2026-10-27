@@ -62,7 +62,7 @@ SurfaceMesh::SurfaceMesh(const std::vector<Vector3>& positions,
                 continue;
             const size_t v2 = cornerVertex(nextCorner(c1));
             for (size_t c2 = nextAroundVertex[c1]; c2 != npos;
-                 c2 = nextAroundVertex[c2]) {
+                c2 = nextAroundVertex[c2]) {
                 if (c2 == c1)
                     continue;
                 const size_t c3 = previousCorner(c2);
