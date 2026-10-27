@@ -170,7 +170,8 @@ endif()
 
 # `cmake --install` lays out what the Blender add-on bundles (addon/package.py):
 # the program in bin/, its build id in build-id.txt and the license of
-# everything compiled into it in licenses/.
+# everything compiled into it in licenses/. A new license here also needs its
+# copyright holder in addon/quadami/blender_manifest.toml.
 install(TARGETS autoremesher-cli RUNTIME DESTINATION bin)
 install(FILES "${AUTOREMESHER_GENERATED}/build-id.txt" DESTINATION .)
 install(FILES LICENSE LICENSE-MIT-upstream DESTINATION licenses)
