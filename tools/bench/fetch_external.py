@@ -10,7 +10,8 @@ triangle OBJ (positions and faces only) with a topology check.
 The repo's manifest (external.json) lists only meshes whose license allows public use (CC0, public
 domain, CC BY, CC BY-SA); test-only meshes keep their manifest outside the repo. Each entry pins its
 files by commit in the URL and by SHA-256. Sources are OBJ, PLY (also as a `member` of a zip) or glTF 2.0 (.glb, or .gltf with its
-.bin): all mesh nodes with their world transforms, triangles only. glTF splits vertices at UV and
+.bin): all mesh nodes with their world transforms, triangles only; Draco-compressed primitives need
+`pip install DracoPy` (checked with 2.2.0), quantized positions (KHR_mesh_quantization) are read as is. glTF splits vertices at UV and
 normal seams, so glTF positions are welded where they are bit-identical (a sculpt exported from
 Blender has them joined); OBJ vertices are kept as they are. `groups` keeps only those OBJ groups
 (MakeHuman's base mesh carries helper geometry next to the body). Polygons are fan-triangulated and
@@ -144,6 +145,8 @@ def read_gltf(path):
         buf = buffers[view["buffer"]]
         view_array = np.ndarray((a["count"], ncomp), dt, buf, start, (stride, dt.itemsize))
         out = view_array.astype(np.float64 if dt == np.float32 else np.int64)
+        if a.get("normalized"):
+            out = np.maximum(out / np.iinfo(dt).max, -1.0)
         return out if ncomp > 1 else out.reshape(-1)
 
     def local(node):
@@ -172,12 +175,17 @@ def read_gltf(path):
         for prim in doc["meshes"][node["mesh"]]["primitives"]:
             if prim.get("mode", 4) != 4:
                 continue
-            if "extensions" in prim and "KHR_draco_mesh_compression" in prim["extensions"]:
-                raise ValueError(f"{path}: Draco compression is not supported")
-            if doc["accessors"][prim["attributes"]["POSITION"]]["componentType"] != 5126:
-                raise ValueError(f"{path}: quantized positions are not supported")
-            p = accessor(prim["attributes"]["POSITION"])
-            idx = accessor(prim["indices"]) if "indices" in prim else np.arange(len(p))
+            draco = prim.get("extensions", {}).get("KHR_draco_mesh_compression")
+            if draco:
+                import DracoPy
+                view = doc["bufferViews"][draco["bufferView"]]
+                start = view.get("byteOffset", 0)
+                mesh = DracoPy.decode(buffers[view["buffer"]][start:start + view["byteLength"]])
+                p = np.asarray(mesh.points, dtype=np.float32).astype(np.float64).reshape(-1, 3)
+                idx = np.asarray(mesh.faces, dtype=np.int64).reshape(-1)
+            else:
+                p = accessor(prim["attributes"]["POSITION"])
+                idx = accessor(prim["indices"]) if "indices" in prim else np.arange(len(p))
             p = p @ world[:3, :3].T + world[:3, 3]
             base = sum(len(v) for v in verts)
             verts.append(p)

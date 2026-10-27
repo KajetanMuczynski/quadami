@@ -55,6 +55,42 @@ use, no commercial use without permission), and most of alecjacobson/common-3d-t
 license). pyvista documents the Nefertiti scan it ships as CC BY-NC-SA 4.0 ("The Other Nefertiti"),
 which supports keeping our corpus `nefertiti` out of public material (docs/gallery/README.md).
 
+## Thin-part set
+
+Six more public meshes for the thin-part work (TODO 4.1): parts narrower than one quad, attached or
+loose. They are the `external_thin` set of `tools/bench/corpus.json`, from `tools/bench/external_thin.json`.
+The set has no default targets, so `ab.py lane` leaves it out and runs name their targets:
+
+```bash
+python3 tools/bench/fetch_external.py --manifest tools/bench/external_thin.json --out $AR_WORK/meshes/external_thin
+python3 tools/bench/ab.py run master --set external_thin --targets 3000,10000
+```
+
+Three of the sources are Draco-compressed glb files; reading them needs `pip install DracoPy`
+(Apache-2.0, checked with 2.2.0). Kinds: 1 thin attached parts, 2 ornament or relief, 4 foliage,
+5 thin shells or single-sided cloth, 6 chains, rings, bead strands. Kind 3 (hair) has no public
+mesh the cloud can fetch yet. License read at the source on 2026-10-27: for Sketchfab models on
+Sketchfab's own page or API, not only in the mirror.
+
+| id | What it tests | Kinds | Triangles | Islands (closed) | Author / source | License |
+|---|---|---|---:|---|---|---|
+| ext_nemetona | figure with wolf: bow with a hair-thin string, horns, bead necklaces, cloth strips, tail | 1, 5, 6 | 320,325 | 121 (20), 1,223 non-manifold edges | JOJObrush, [Nemetona_NatureBeauty](https://sketchfab.com/3d-models/nemetona-naturebeauty-c338180707ce4b7c9bb4d1c6d24843c0), via three.js examples | CC BY 4.0 |
+| ext_tarisland_dragon | membrane wings (thin open shells), horns, spikes, claws | 1, 5 | 40,433 | 55 (18) | Doctor A., [Tarisland - Dragon (High Poly)](https://sketchfab.com/3d-models/tarisland-dragon-high-poly-ecf63885166c40e2bbbcdf11cd14e65f), via [BabylonJS/Assets](https://github.com/BabylonJS/Assets) | CC BY 4.0 |
+| ext_bee | insect: thin legs, antennae, single-sheet wings | 1, 5 | 51,731 | 112 (2) | BabylonJS/Assets `meshes/Bee.glb` (no per-asset author) | CC BY 4.0 |
+| ext_clothfolds | one single-sided cloth sheet draped over a sphere | 5 | 76,832 | 1 (0) | BabylonJS/Assets `meshes/clothFolds.glb` (no per-asset author) | CC BY 4.0 |
+| ext_vaseflowers | thin stems, single-sheet leaves and petals (coarse input) | 4 | 14,036 | 72 (8) | Eric Chadwick (vase), Rico Cilliers (flowers), via Khronos glTF-Sample-Assets (GlassVaseFlowers) | CC0 1.0 |
+| ext_yenching | guardian-lion scan: curled mane relief, carved base | 2 | 311,086 | 3 (2) | Alexandre Tokovinine, [Harvard-Yenching Institute statue](https://sketchfab.com/3d-models/harvard-yenching-institute-statue-fc245710c4d64d0886a7f37dc522ff87), via BabylonJS/Assets | CC BY 4.0 |
+
+Bee and cloth folds carry BabylonJS/Assets' repository license (CC BY 4.0 "unless specified otherwise
+in the asset folder"); the repository names no author for them, so the credit names the repository.
+
+Left out on purpose: the octopus tea bath (gkjohnson/3d-demo-data says CC BY 4.0, Sketchfab now shows
+"Free Standard"), Littlest Tokyo (three.js says CC BY 4.0, Sketchfab now shows "Editorial", not
+downloadable), the Venice mask in three.js (CC BY-NC 4.0), and gkjohnson/3d-demo-data's trex, sci-fi
+toad and botanist scenes (NC). Mirrors that are only `EXT_meshopt_compression` glb files (Just a girl,
+Ring Twist Halo, Mercury about to kill Argos, the threedscans statues) are on the hand-download list
+instead: their originals are not quantized.
+
 ## Hand-downloaded meshes
 
 Seven more meshes come from sites the cloud cannot reach (Sketchfab needs a login; Blender Studio and
@@ -92,5 +128,8 @@ for Sketchfab, CC BY 4.0. Plant and chronograph watch: Darmstadt Graphics Group 
 from "Chronograph Watch Mudmaster" by graphiccompressor), CC BY 4.0. Corset: UX3D, CC0. Sheen cloth:
 Microsoft, CC0. Barramundi fish, flight helmet, sci-fi helmet, scattering skull: Khronos
 glTF-Sample-Assets, CC0. George Washington bust and Lincoln life mask: Smithsonian Institution, CC0.
-MakeHuman base mesh: MakeHuman Community, CC0. Results of remeshing these meshes are adaptations: give
+MakeHuman base mesh: MakeHuman Community, CC0. Thin-part set: Nemetona_NatureBeauty by JOJObrush,
+Tarisland - Dragon (High Poly) by Doctor A., Harvard-Yenching Institute statue by Alexandre Tokovinine,
+all CC BY 4.0 on Sketchfab; Bee and cloth folds from BabylonJS/Assets, CC BY 4.0; glass vase by Eric
+Chadwick and flowers by Rico Cilliers, CC0. Results of remeshing these meshes are adaptations: give
 the credit, link the license, and say they were remeshed.

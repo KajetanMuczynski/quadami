@@ -121,7 +121,7 @@ jobs:
       - name: Bench tools tests
         run: |
           python3 -m venv build/bench-venv
-          build/bench-venv/bin/pip install -q numpy==2.5.4 scipy==1.18.1 libigl==2.6.3
+          build/bench-venv/bin/pip install -q numpy==2.5.4 scipy==1.18.1 libigl==2.6.3 DracoPy==2.2.0
           build/bench-venv/bin/python -m unittest discover -s tools/bench/tests -v
 
       # The decision of ci/rerun_dropped.py (rerun-dropped.yml runs it from master only).
