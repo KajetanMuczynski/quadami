@@ -2490,8 +2490,8 @@ void QuadExtractor::collapseThreeValenceDiagonals()
         size_t left = noVertex;
         size_t right = noVertex;
         for (size_t faceIndex = 0; faceIndex < m_remeshedPolygons.size()
-             && noFace == collapsingFace;
-             ++faceIndex) {
+            && noFace == collapsingFace;
+            ++faceIndex) {
             const auto& face = m_remeshedPolygons[faceIndex];
             if (4 != face.size() || hasRepeatedVertex(face))
                 continue;
