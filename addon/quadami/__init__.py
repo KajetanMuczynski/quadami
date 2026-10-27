@@ -29,7 +29,7 @@ import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
 
 from . import report as report_rows
-from . import worker
+from . import transfer, worker
 from .names import ID, NAME
 
 REPORT_PROPERTY = ID + "_report"
@@ -160,6 +160,20 @@ class RemeshSettings(bpy.types.PropertyGroup):
                     "lower the spike's tip to its base. This changes the shape: the panel "
                     "says how many tips moved and how far")
 
+    # Not remesh parameters: what the result copies from the original
+    # (transfer.py). The quads do not follow seams, so UVs are opt-in.
+    keep_attributes: BoolProperty(
+        name="Materials, Groups, Marks", default=True,
+        description="Copy the original's materials, vertex groups, colour attributes and "
+                    "sharp, crease and seam marks onto the result. Material borders zigzag "
+                    "along the quads; marks follow the quads nearest to the marked line")
+    keep_uvs: BoolProperty(
+        name="UV Maps", default=False,
+        description="Copy the original's UV maps. Faces that cross a UV seam reach a little "
+                    "past the island's border (on test meshes with many seams up to 6 % of the "
+                    "faces come out distorted). For a fresh map, keep the seams (above) and unwrap "
+                    "the result again instead")
+
     def parameters(self):
         return {name: getattr(self, name) for name in worker.PARAMETER_FLAGS}
 
@@ -168,6 +182,7 @@ class RemeshSettings(bpy.types.PropertyGroup):
 # "Advanced" section. Every parameter appears exactly once (blender_smoke.py).
 MAIN_PARAMETERS = ("target_quads", "adaptivity", "sharp_edge_degrees")
 ADVANCED_PARAMETERS = ("resolution", "anisotropy", "edge_scaling", "smooth_normal_degrees", "quad_smoothing")
+KEEP_OPTIONS = ("keep_attributes", "keep_uvs")
 
 
 def _mesh_arrays(context, obj):
@@ -239,6 +254,21 @@ def _place_like(obj, source):
     for name in ("location", "rotation_euler", "rotation_quaternion", "rotation_axis_angle", "scale",
                  "delta_location", "delta_rotation_euler", "delta_rotation_quaternion", "delta_scale"):
         setattr(obj, name, getattr(source, name))
+
+
+def _keep(context, source, result, report, settings):
+    """Copy what the settings ask for from the source onto the result; a
+    failure costs the copy, never the result."""
+    if not (settings.keep_attributes or settings.keep_uvs):
+        return
+    try:
+        if settings.keep_attributes:
+            report["kept"] = transfer.transfer(context, source, result, uvs=settings.keep_uvs)
+        else:
+            report["kept"] = transfer.transfer_uvs(context, source, result)
+    except Exception as error:  # noqa: BLE001 - any failure here must not lose the result
+        report.setdefault("warnings", []).append("Could not copy data from the original: %s" % error)
+    result[REPORT_PROPERTY] = json.dumps(report)
 
 
 def _build_object(context, source, outcome, smooth, warnings=()):
@@ -408,6 +438,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             self.report({"ERROR"}, "%s: %s" % (NAME, _last_message))
             return {"CANCELLED"}
         new_obj, _last_report = _build_object(context, source, outcome, self._smooth, self._warnings)
+        _keep(context, source, new_obj, _last_report, _settings(context))
         _show_result(context, new_obj, (source, bpy.data.objects.get(self._replaced) if self._replaced else None))
         output = outcome.report.get("output", {})
         self.report({"INFO"}, "%s: %d quads, %d non-quads" % (
@@ -473,6 +504,12 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         if body is not None:
             body.enabled = _job is None
             for name in ADVANCED_PARAMETERS:
+                body.prop(settings, name)
+        header, body = layout.panel(ID + "_keep", default_closed=True)
+        header.label(text="Keep from Original")
+        if body is not None:
+            body.enabled = _job is None
+            for name in KEEP_OPTIONS:
                 body.prop(settings, name)
 
         if _job is not None:
