@@ -297,7 +297,7 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
     with open(os.path.join(d, "log.txt"), "wb") as log:
         rc, rss = call_measured(cmd, log, timeout)
     rec = {"mesh": mesh["id"], "set": setname, "target": target, "res": res, "replicate": k, "rc": rc,
-           "wall": time.time() - t0, "peak_rss_mb": rss, "cli_args": cli_args, "jobs": jobs,
+           "wall": time.time() - t0, "peak_rss_mb": rss, "peak_rss_from": "wait4", "cli_args": cli_args, "jobs": jobs,
            "input_sha": file_hash(inp)}
     if os.path.exists(os.path.join(d, "out.obj")):
         rec["out_sha"] = file_hash(os.path.join(d, "out.obj"))
@@ -306,6 +306,12 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
         rec["output"] = rep.get("output")
         rec["diagnostics"] = rep.get("diagnostics")
         rec["time"] = rep.get("time", {}).get("total_seconds")
+        # The CLI's own peak (VmHWM on Linux since 2026-10-27; Windows has no wait4 figure at all).
+        # wait4's ru_maxrss is at least this harness's own peak: Python starts the CLI with vfork, and
+        # exec keeps the parent's high-water mark (research/measurement-audit-2026-10-27.md §10.1).
+        cli_rss = (rec["diagnostics"] or {}).get("peak_rss_bytes")
+        if cli_rss:
+            rec["peak_rss_mb"], rec["peak_rss_from"] = cli_rss / (1 << 20), "cli"
     except (OSError, ValueError) as ex:
         rec["error"] = str(ex)
     try:

@@ -326,6 +326,21 @@ size_t peakResidentSetBytes()
         return (size_t)counters.PeakWorkingSetSize;
     return 0;
 #else
+#if defined(__linux__)
+    // VmHWM belongs to this process's own address space. ru_maxrss does not: at exec the kernel
+    // keeps the old address space's high-water mark, and a parent that starts us with vfork (Python's
+    // subprocess, so ab.py and the add-on under Blender) hands over its own peak.
+    if (FILE* status = std::fopen("/proc/self/status", "r")) {
+        char line[256];
+        unsigned long long kib = 0;
+        bool found = false;
+        while (!found && std::fgets(line, sizeof(line), status))
+            found = 1 == std::sscanf(line, "VmHWM: %llu kB", &kib);
+        std::fclose(status);
+        if (found)
+            return (size_t)kib * 1024;
+    }
+#endif
     struct rusage usage;
     if (0 != getrusage(RUSAGE_SELF, &usage))
         return 0;

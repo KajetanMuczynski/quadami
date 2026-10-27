@@ -92,6 +92,38 @@ class MetricsAddedLater(unittest.TestCase):
         self.assertEqual((calls, rec["metrics"]), (1, {"measured": True}))
 
 
+class PeakMemory(unittest.TestCase):
+    """peak_rss_mb comes from the CLI's report when it has one: wait4's figure is at least the
+    harness's own peak, since Python starts the CLI with vfork and exec keeps the parent's
+    high-water mark (a 60 MB run read 3.6 GB after a big case)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.work = tmp.name
+        self.out = os.path.join(self.work, "runs", "k")
+        self.mesh = {"id": "m", "file": "m.obj"}
+
+    def run_one(self, report):
+        def fake_cli(cmd, log, timeout):
+            if report is not None:
+                with open(cmd[cmd.index("--report-json") + 1], "w") as fp:
+                    json.dump(report, fp)
+            return 0, 3652.0
+        with mock.patch.object(ab, "call_measured", side_effect=fake_cli), \
+                mock.patch.object(ab, "perturbed", side_effect=lambda src, k, work: src), \
+                mock.patch.object(ab, "file_hash", return_value="0"):
+            return ab.run_one("cli", self.mesh, "corpus", 2000, "quality", 0, self.out, [], self.work, False, 1)
+
+    def test_the_cli_figure_wins(self):
+        rec = self.run_one({"output": {}, "diagnostics": {"peak_rss_bytes": 62 << 20}})
+        self.assertEqual((rec["peak_rss_mb"], rec["peak_rss_from"]), (62.0, "cli"))
+
+    def test_wait4_without_a_cli_figure(self):
+        rec = self.run_one(None)
+        self.assertEqual((rec["peak_rss_mb"], rec["peak_rss_from"]), (3652.0, "wait4"))
+
+
 class Measure(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
