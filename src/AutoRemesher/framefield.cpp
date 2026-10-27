@@ -31,17 +31,14 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
-#ifndef TIP_UNGUIDED_EDGES
-#define TIP_UNGUIDED_EDGES 8.0
-#endif
-
 namespace AutoRemesher {
 namespace {
     constexpr double kSymmetry = 4.0;
 
     // Radius, in mean edges of the mesh, around a conical tip within which
-    // curvature does not guide the field.
-    constexpr double kTipUnguidedEdges = TIP_UNGUIDED_EDGES;
+    // curvature does not guide the field. 4 and 16 kept the tip as well
+    // (Blender cones, 500 to 10k quads, 6 replicates each).
+    constexpr double kTipUnguidedEdges = 8.0;
 
     struct FacetTangentBasis {
         Vector3 tangent;
