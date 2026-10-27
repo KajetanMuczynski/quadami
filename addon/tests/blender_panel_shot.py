@@ -19,8 +19,12 @@
 Background mode draws no interface, so this runs Blender with a window (on
 Linux CI under Xvfb) after the zip is installed:
 
-    xvfb-run -a -s "-screen 0 1600x900x24" blender --factory-startup \\
+    blender -b --factory-startup --python-expr \\
+        "import bpy; bpy.ops.wm.save_as_mainfile(filepath='start.blend')"
+    xvfb-run -a -s "-screen 0 1400x2400x24" blender --factory-startup start.blend \\
         --python addon/tests/blender_panel_shot.py -- --out build/panel
+
+(a file on the command line keeps the splash screen away from the sidebar).
 
 It remeshes a sphere with a thin horn and a one-triangle speck beside it at a
 low target, so the report has missing thin parts and a missing piece, shows the
