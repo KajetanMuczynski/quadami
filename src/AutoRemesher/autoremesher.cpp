@@ -105,6 +105,11 @@ namespace {
     // The deficit is gathered within half a target edge of T, so a tip
     // rounded off below that scale in a dense input still counts.
     const double conicalTipDegrees = 140.0;
+    // From 225 degrees on a tip asks for three or more quarter turns, more
+    // than a valence-2 vertex gives: a needle (TODO 2.19). Kept there, a
+    // brush's one-vertex spike split off as its own piece of quads
+    // (brush_box_relief, brush_pits), so needles are left as they were.
+    const double needleTipDegrees = 225.0;
     const double conicalTipRadius = 0.5;
 
     // Rounds of tangential smoothing after the surface projection (TODO 2.8),
@@ -343,17 +348,19 @@ namespace {
     }
 
     // Conical tips (TODO 2.23): interior vertices where the angle deficit
-    // (2 pi minus the angle sum) gathered within `radius` reaches
-    // `minimumDeficit`, the apex of a cone. Each tip is the vertex with the
-    // largest own deficit of its cluster; a cluster touching a boundary is
-    // left out, and so is one whose triangles do not form a cap (some faces
-    // away from their mean normal): a corner of sharp edges, which the
-    // feature edges hold, or folded brush input, whose angle sums mean
-    // nothing (brush_box_relief had 18 such "tips"). The isotropic remesh keeps tips where they are: it used to
-    // collapse and relax the apex away, so the quads were laid out on a cut
-    // cone and their cap sat about one quad below the tip.
+    // (2 pi minus the angle sum) gathered within `radius` is at least
+    // `minimumDeficit` and below `maximumDeficit`, the apex of a cone. Each
+    // tip is the vertex with the largest own deficit of its cluster; a
+    // cluster touching a boundary is left out, and so is one whose triangles
+    // do not form a cap (some faces away from their mean normal): a corner of
+    // sharp edges, which the feature edges hold, or folded brush input, whose
+    // angle sums mean nothing (brush_box_relief had 18 such "tips"). The
+    // isotropic remesh keeps tips where they are: it used to collapse and
+    // relax the apex away, so the quads were laid out on a cut cone and their
+    // cap sat about one quad below the tip.
     std::vector<size_t> conicalTips(const std::vector<Vector3>& vertices,
-        const std::vector<std::vector<size_t>>& triangles, double radius, double minimumDeficit)
+        const std::vector<std::vector<size_t>>& triangles, double radius, double minimumDeficit,
+        double maximumDeficit)
     {
         const size_t n = vertices.size();
         std::vector<double> angleSum(n, 0.0);
@@ -430,7 +437,7 @@ namespace {
             }
             for (const size_t u : region)
                 seen[u] = 0;
-            if (open || gathered < minimumDeficit || !isCap(region))
+            if (open || gathered < minimumDeficit || gathered >= maximumDeficit || !isCap(region))
                 continue;
             tips.push_back(v);
             for (const size_t u : region)
@@ -994,7 +1001,7 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     if (nullptr != progressHandler && *progressHandler)
         isotropicRemesher.setProgressHandler(*progressHandler);
     const std::vector<size_t> tips = conicalTips(vertices, triangles,
-        conicalTipRadius * voxelSize, conicalTipDegrees * M_PI / 180.0);
+        conicalTipRadius * voxelSize, conicalTipDegrees * M_PI / 180.0, needleTipDegrees * M_PI / 180.0);
     if (nullptr != decimationStats)
         decimationStats->conicalTips += tips.size();
     if (nullptr != conicalTipsOut) {

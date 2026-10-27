@@ -22,7 +22,7 @@
 // cap (TODO 2.23): the triangle remesh collapsed and relaxed the apex, and
 // the extraction merged and smoothed the valence-2 vertex the field put
 // there. Checked here: the output keeps a vertex at the apex, shared by two
-// quads, on the default cone and on a slimmer one.
+// quads, on the default cone (deficit 199 degrees) and on a wider one (175).
 
 #include <AutoRemesher/AutoRemesher>
 #include <cmath>
@@ -87,8 +87,8 @@ int check(const char* name, const Mesh& input, size_t targetQuads)
     // In planned quad edges, h = sqrt(area / target).
     const double gap = (vertices[nearest] - apex).length() / std::sqrt(area(input) / targetQuads);
     std::printf("%s %zu: nearest output vertex %.3f h from the apex, in %zu faces\n", name, targetQuads, gap, faces);
-    // Before the fix (TODO 2.23): 1.0 h on the default cone, 2.3 to 2.8 h on
-    // the slim one, a regular vertex in 4 faces.
+    // Before the fix (TODO 2.23): 1.0 h on the default cone, 0.7 h on the
+    // wide one, a regular vertex in 4 faces.
     return (gap < 0.05 && 2 == faces) ? 0 : 1;
 }
 
@@ -99,7 +99,7 @@ int main()
     int failures = 0;
     for (const size_t targetQuads : { 1000, 3000 }) {
         failures += check("cone", cone(32, 1.0), targetQuads);
-        failures += check("slim cone", cone(32, 0.4), targetQuads);
+        failures += check("wide cone", cone(32, 1.2), targetQuads);
     }
     if (0 != failures) {
         std::printf("FAILED: %d checks\n", failures);
