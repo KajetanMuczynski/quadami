@@ -35,7 +35,7 @@ public:
     SingularitySimplifier(const SurfaceMesh& mesh,
         std::vector<Vector3>* faceField);
     void setMaximumPairDistance(size_t hops) { m_maximumPairDistance = hops; }
-    // Cones are not moved across these edges (convex or concave); none
+    // Cones are not moved across the concave ones of these edges; none
     // when unset.  Must outlive simplify().
     void setFeatureEdges(const FeatureEdgeSet* sharpEdges) { m_sharpEdges = sharpEdges; }
     void simplify();

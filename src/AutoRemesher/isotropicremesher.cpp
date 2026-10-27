@@ -55,7 +55,6 @@ bool IsotropicRemesher::remesh()
         nullptr != vertex;
         vertex = halfedgeMesh->moveToNextVertex(vertex)) {
         vertex->outputIndex = outputIndex++;
-        m_featureVertices.push_back(vertex->onFeature ? 1 : 0);
         m_remeshedVertices.push_back(Vector3 {
             vertex->position.x(),
             vertex->position.y(),

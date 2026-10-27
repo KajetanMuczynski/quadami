@@ -27,11 +27,12 @@
 
 namespace AutoRemesher {
 
-// The sharp edges of an island (TODO 2.6), classified once on the input and
-// carried through decimation and the isotropic remesh to T, so every stage
-// (decimation lock, remesher feature vertices, field lock, singularity
-// freeze, isoline constraints, crease snap) works on the same edges instead
-// of testing dihedrals of its own.
+// The sharp edges of an island (TODO 2.6), with one test instead of a test
+// of each stage's own.  The input's set, classified once, drives the
+// decimation lock, the remesher's feature vertices and the crease snap; it
+// is carried through the decimation (remapFeatureEdges).  The set of the
+// isotropic remesh T (reclassifyFeatureEdges), with the same test, drives
+// the field lock, the singularity freeze and the isoline constraints.
 //
 // An interior edge is sharp when the angle between its two face normals is
 // at least the Sharp Edge angle minus kSharpEdgeToleranceDegrees.  Without
@@ -70,23 +71,26 @@ FeatureEdgeSet classifySharpEdges(const SurfaceMesh& mesh, double sharpEdgeDegre
 FeatureEdgeSet classifySharpEdges(const std::vector<Vector3>& vertices,
     const std::vector<std::vector<size_t>>& triangles, double sharpEdgeDegrees);
 
-// The set on a mesh made from the classified one (decimated, remeshed):
-// the edges carried over (`carried`, those that are still edges of
-// `triangles`), plus every interior edge whose two ends are both on a
-// feature (`onFeature`, per vertex) and that passes the sharp test on this
-// mesh.  So a vertex the decimation removed from a chain, or a flip in the
-// remesh, leaves a chain edge rather than a gap, and nothing away from the
-// input's features is ever classified again.  `added` counts the latter.
-FeatureEdgeSet extendFeatureEdges(const FeatureEdgeSet& carried,
-    const std::vector<char>& onFeature,
+// The set of the isotropic remesh T: the hard edges of `carried` (the
+// remesher's carried set) that are still edges of T, plus every interior
+// edge of T that passes the sharp test on T itself; `classified` counts the
+// latter.  The input's other sharp edges are not carried: the remesher's
+// smoothing moves their vertices off the crease and bends them, and the
+// field and isolines constrained to a bent edge fold the parameterization
+// (TODO 2.6 measurements: continuous UV flips x4.5 on the cad set), where
+// the edges sharp on T are the creases T really has.
+FeatureEdgeSet reclassifyFeatureEdges(const FeatureEdgeSet& carried,
     const std::vector<Vector3>& vertices,
     const std::vector<std::vector<size_t>>& triangles,
-    double sharpEdgeDegrees, size_t* added = nullptr);
+    double sharpEdgeDegrees, size_t* classified = nullptr);
 
 // Carries a set through a decimation that kept a subset of the vertices
 // (`outputIndexOfInput`, SIZE_MAX for a removed vertex) and rebuilt the
-// faces, with extendFeatureEdges().  `dropped` counts set edges whose two
-// ends both survive but are no longer joined by an edge.
+// faces: the set's edges that are still edges, plus every edge between two
+// of the set's surviving vertices that passes the sharp test on the
+// decimated mesh, so a vertex the decimation removed from a chain leaves a
+// chain edge rather than a gap.  `dropped` counts set edges whose two ends
+// both survive but are no longer joined by an edge.
 FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
     const std::vector<size_t>& outputIndexOfInput,
     const std::vector<Vector3>& vertices,

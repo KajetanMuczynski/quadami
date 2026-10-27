@@ -369,10 +369,11 @@ public:
         size_t decimationDropped = 0;
         // Edges of the remesh that a flip turned into the other diagonal.
         size_t flipped = 0;
-        // Edges of T carried from the input edges, and those added between
-        // feature vertices (extendFeatureEdges).
+        // Edges of T that still carry an input edge (split halves included),
+        // and the edges of T's own set that pass the sharp test on T
+        // (reclassifyFeatureEdges).
         size_t carried = 0;
-        size_t restored = 0;
+        size_t classified = 0;
     };
 
     struct DecimationStats {

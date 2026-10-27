@@ -325,7 +325,6 @@ void IsotropicHalfedgeMesh::breakEdge(IsotropicHalfedgeMesh::Halfedge *halfedge)
 
     breakPointVertex->featured = halfedge->startVertex->featured &&
         halfedge->nextHalfedge->startVertex->featured;
-    breakPointVertex->onFeature = halfedge->feature;
 
     // Propagate target edge length to the new vertex
     if (halfedge->startVertex->targetEdgeLength > 0 && 
@@ -911,7 +910,6 @@ void IsotropicHalfedgeMesh::featureVertices()
         do {
             if (halfedge->feature) {
                 halfedge->startVertex->featured = halfedge->nextHalfedge->startVertex->featured = true;
-                halfedge->startVertex->onFeature = halfedge->nextHalfedge->startVertex->onFeature = true;
             }
             halfedge = halfedge->nextHalfedge;
         } while (halfedge != face->halfedge);

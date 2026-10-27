@@ -92,13 +92,6 @@ public:
         return m_clearedFeatureEdges;
     }
 
-    // Per vertex of the result: 1 on an input feature edge (an end of one,
-    // or a split point on it), also after a flip took its edges away.
-    const std::vector<char>& featureVertices() const
-    {
-        return m_featureVertices;
-    }
-
     bool remesh();
 
     void debugExportObj(const char* filename);
@@ -117,7 +110,6 @@ private:
     std::vector<std::vector<size_t>> m_remeshedTriangles;
     FeatureEdgeSet m_remeshedFeatureEdges;
     size_t m_clearedFeatureEdges = 0;
-    std::vector<char> m_featureVertices;
 };
 
 }

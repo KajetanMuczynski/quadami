@@ -49,8 +49,6 @@ public:
         size_t debugIndex = 0;
         size_t outputIndex = 0;
         bool featured = false;
-        // On a feature edge (marked, or a split of one), see markFeatureEdges().
-        bool onFeature = false;
         double targetEdgeLength = 0.0; // 0 = use global default in split/collapse
         Vertex *_allocLink = nullptr;
     };

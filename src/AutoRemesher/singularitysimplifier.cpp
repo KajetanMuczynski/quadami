@@ -255,7 +255,11 @@ void SingularitySimplifier::buildFramesAndConnection()
         const size_t f = m_mesh.cornerFace(c), g = m_mesh.cornerFace(other);
         const Vector3 edge = m_mesh.edgeVector(c);
         m_connection[c] = std::atan2(Vector3::dotProduct(edge, m_frameV[g]), Vector3::dotProduct(edge, m_frameU[g])) - std::atan2(Vector3::dotProduct(edge, m_frameV[f]), Vector3::dotProduct(edge, m_frameU[f]));
-        m_sharpCorner[c] = 0 != sharpCorners[c];
+        // Concave sharp edges only (normalAngle > 0), as before the set:
+        // freezing the convex ones too keeps cones from reaching the convex
+        // corners they belong to (inferred), and measured worse (TODO 2.6:
+        // cad SJ p1 x0.82, UV flips x1.25).
+        m_sharpCorner[c] = 0 != sharpCorners[c] && m_mesh.normalAngle(c) > 0.0;
     }
 }
 

@@ -47,6 +47,41 @@ namespace {
         return std::fabs(mesh.normalAngle(corner));
     }
 
+    // `carried` edges that are still edges of the mesh, plus the edges that
+    // pass the sharp test on it and have both ends on a feature (every
+    // vertex when `onFeature` is null).
+    FeatureEdgeSet carryAndClassify(const FeatureEdgeSet& carried,
+        const std::vector<char>* onFeature,
+        const std::vector<Vector3>& vertices,
+        const std::vector<std::vector<size_t>>& triangles,
+        double sharpEdgeDegrees, size_t* added)
+    {
+        const SurfaceMesh mesh(vertices, triangles);
+        FeatureEdgeSet result;
+        size_t addedEdges = 0;
+        for (size_t c = 0; c < mesh.cornerCount(); ++c) {
+            const size_t opposite = mesh.oppositeCorner(c);
+            if (opposite == SurfaceMesh::npos || opposite < c)
+                continue;
+            const size_t a = mesh.cornerVertex(c), b = mesh.cornerVertex(mesh.nextCorner(c));
+            const auto edge = undirected(a, b);
+            const auto found = std::lower_bound(carried.edges.begin(), carried.edges.end(), edge);
+            if (found != carried.edges.end() && *found == edge) {
+                result.edges.push_back(edge);
+                result.flags.push_back(carried.flags[found - carried.edges.begin()]);
+            } else if ((nullptr == onFeature || ((*onFeature)[a] && (*onFeature)[b]))
+                && isSharpNormalAngle(cornerNormalAngle(mesh, c), sharpEdgeDegrees)) {
+                result.edges.push_back(edge);
+                result.flags.push_back(0);
+                ++addedEdges;
+            }
+        }
+        result.normalize();
+        if (nullptr != added)
+            *added = addedEdges;
+        return result;
+    }
+
 }
 
 bool FeatureEdgeSet::contains(size_t a, size_t b) const
@@ -116,36 +151,19 @@ FeatureEdgeSet classifySharpEdges(const std::vector<Vector3>& vertices,
     return classifySharpEdges(SurfaceMesh(vertices, triangles), sharpEdgeDegrees);
 }
 
-FeatureEdgeSet extendFeatureEdges(const FeatureEdgeSet& carried,
-    const std::vector<char>& onFeature,
+FeatureEdgeSet reclassifyFeatureEdges(const FeatureEdgeSet& carried,
     const std::vector<Vector3>& vertices,
     const std::vector<std::vector<size_t>>& triangles,
-    double sharpEdgeDegrees, size_t* added)
+    double sharpEdgeDegrees, size_t* classified)
 {
-    const SurfaceMesh mesh(vertices, triangles);
-    FeatureEdgeSet result;
-    size_t addedEdges = 0;
-    for (size_t c = 0; c < mesh.cornerCount(); ++c) {
-        const size_t opposite = mesh.oppositeCorner(c);
-        if (opposite == SurfaceMesh::npos || opposite < c)
-            continue;
-        const size_t a = mesh.cornerVertex(c), b = mesh.cornerVertex(mesh.nextCorner(c));
-        const auto edge = undirected(a, b);
-        const auto found = std::lower_bound(carried.edges.begin(), carried.edges.end(), edge);
-        if (found != carried.edges.end() && *found == edge) {
-            result.edges.push_back(edge);
-            result.flags.push_back(carried.flags[found - carried.edges.begin()]);
-        } else if (onFeature[a] && onFeature[b]
-            && isSharpNormalAngle(cornerNormalAngle(mesh, c), sharpEdgeDegrees)) {
-            result.edges.push_back(edge);
-            result.flags.push_back(0);
-            ++addedEdges;
+    FeatureEdgeSet hard;
+    for (size_t i = 0; i < carried.edges.size(); ++i) {
+        if (0 != (carried.flags[i] & FeatureEdgeSet::Hard)) {
+            hard.edges.push_back(carried.edges[i]);
+            hard.flags.push_back(carried.flags[i]);
         }
     }
-    result.normalize();
-    if (nullptr != added)
-        *added = addedEdges;
-    return result;
+    return carryAndClassify(hard, nullptr, vertices, triangles, sharpEdgeDegrees, classified);
 }
 
 FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
@@ -171,7 +189,7 @@ FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
     }
     mapped.normalize();
 
-    const FeatureEdgeSet result = extendFeatureEdges(mapped, onFeature, vertices, triangles, sharpEdgeDegrees);
+    const FeatureEdgeSet result = carryAndClassify(mapped, &onFeature, vertices, triangles, sharpEdgeDegrees, nullptr);
     if (nullptr != dropped) {
         size_t kept = 0;
         for (const auto& edge : mapped.edges)

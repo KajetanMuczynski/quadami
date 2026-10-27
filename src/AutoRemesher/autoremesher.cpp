@@ -853,10 +853,8 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     isotropicRemesher.remesh();
     vertices = isotropicRemesher.remeshedVertices();
     triangles = isotropicRemesher.remeshedTriangles();
-    // A flip takes a feature edge away; the edge between the same feature
-    // vertices that a later flip or the relaxation leaves sharp counts again.
-    featureEdges = extendFeatureEdges(isotropicRemesher.featureEdges(), isotropicRemesher.featureVertices(),
-        vertices, triangles, sharpEdgeDegrees, nullptr != sharpEdgeStats ? &sharpEdgeStats->restored : nullptr);
+    featureEdges = reclassifyFeatureEdges(isotropicRemesher.featureEdges(), vertices, triangles,
+        sharpEdgeDegrees, nullptr != sharpEdgeStats ? &sharpEdgeStats->classified : nullptr);
     if (nullptr != sharpEdgeStats) {
         sharpEdgeStats->carried = isotropicRemesher.featureEdges().size();
         sharpEdgeStats->flipped = isotropicRemesher.clearedFeatureEdges();
@@ -1179,9 +1177,8 @@ bool AutoRemesher::remeshIslands()
         // Of the island after decimation and after isotropic remeshing.
         SurfaceTopology decimatedTopology;
         SurfaceTopology isotropicTopology;
-        // The island's sharp edges as edges of T, and what became of them.
+        // T's sharp edges (FeatureEdgeSet).
         FeatureEdgeSet isotropicFeatureEdges;
-        SharpEdgeStats sharpEdgeStats;
         bool parameterized = false;
         bool extracted = false;
         long long resampleUs = 0;
@@ -1201,8 +1198,9 @@ bool AutoRemesher::remeshIslands()
         const CreaseLengths inputCreases = creaseLengths(ctx.vertices, ctx.triangles, ctx.sharpEdgeDegrees);
         auto t0 = std::chrono::high_resolution_clock::now();
         run.isotropicFeatureEdges = ctx.featureEdges;
+        SharpEdgeStats sharpEdgeStats;
         resample(ctx.vertices, ctx.triangles, ctx.inputTopology, ctx.voxelSize, ctx.adaptivity,
-            ctx.sharpEdgeDegrees, run.isotropicFeatureEdges, &run.sharpEdgeStats, ctx.smoothNormalDegrees, islandIndex, stats,
+            ctx.sharpEdgeDegrees, run.isotropicFeatureEdges, &sharpEdgeStats, ctx.smoothNormalDegrees, islandIndex, stats,
             &adaptiveFieldTime, &isotropicProgress,
             &run.decimatedVertices, &run.decimatedTriangles);
         auto t1 = std::chrono::high_resolution_clock::now();
@@ -1229,6 +1227,17 @@ bool AutoRemesher::remeshIslands()
         run.features.set("isotropic_gt_theta_rel_h", isotropicCreases.gtTheta / h);
         run.features.set("isotropic_ge_theta_minus1_rel_h", isotropicCreases.geThetaMinus1 / h);
         run.features.set("isotropic_near_theta_edges", (double)isotropicCreases.nearTheta);
+        // The island's FeatureEdgeSet (TODO 2.6): on the input, after the
+        // decimation, what the remesh carried, and T's own set, which the
+        // field, the singularity freeze and the constraints use.
+        run.features.set("set_input_edges", (double)ctx.featureEdges.size());
+        run.features.set("set_decimated_edges", (double)sharpEdgeStats.decimatedEdges);
+        run.features.set("set_decimation_dropped", (double)sharpEdgeStats.decimationDropped);
+        run.features.set("set_flipped", (double)sharpEdgeStats.flipped);
+        run.features.set("set_t_carried", (double)sharpEdgeStats.carried);
+        run.features.set("set_t_classified", (double)sharpEdgeStats.classified);
+        run.features.set("set_t_edges", (double)run.isotropicFeatureEdges.size());
+        run.features.set("set_t_length_rel_h", featureEdgeLength(run.isotropicFeatureEdges, ctx.vertices) / h);
 
         updateProgress(islandIndex, islandResampleEnd);
     };
@@ -1282,23 +1291,6 @@ bool AutoRemesher::remeshIslands()
         parameterizeTimeAccumulated += run.parameterizeUs;
         run.parameterized = parameterizeSucceeded;
         run.diagnostics = parameterizer.takeDiagnostics();
-        {
-            // The island's one sharp-edge classification (TODO 2.6): on the
-            // input, after decimation, and the edges T still has, which the
-            // field, the singularity simplifier and the constraints used.
-            const double h = ctx.voxelSize > 0.0 ? ctx.voxelSize : 1.0;
-            DiagnosticRecord record("sharp_edges");
-            record.set("sharp_edge_degrees", ctx.sharpEdgeDegrees);
-            record.set("input_edges", (double)ctx.featureEdges.size());
-            record.set("decimated_edges", (double)run.sharpEdgeStats.decimatedEdges);
-            record.set("decimation_dropped", (double)run.sharpEdgeStats.decimationDropped);
-            record.set("flipped", (double)run.sharpEdgeStats.flipped);
-            record.set("t_carried", (double)run.sharpEdgeStats.carried);
-            record.set("t_restored", (double)run.sharpEdgeStats.restored);
-            record.set("t_edges", (double)run.isotropicFeatureEdges.size());
-            record.set("t_length_rel_h", featureEdgeLength(run.isotropicFeatureEdges, vertices) / h);
-            run.diagnostics.insert(run.diagnostics.begin(), std::move(record));
-        }
 
         if (parameterizeSucceeded) {
             throwIfCancelled();
