@@ -26,8 +26,8 @@ What it does not do well yet, measured on our test meshes ([results](../gallery/
 
 - **Thin parts** (leaves, vines, cloth, blade edges) thinner than one quad can lose their shape or
   pieces. The panel warns about thin and missing parts; raise Target Quads, or thicken the part.
-- **Folded sculpt input** (Twist, Rotate, Pinch brushes) causes nearly all folds, non-quads and
-  holes. **Repair Folds and Re-run** repairs some of these spots, not all.
+- **Folded sculpt input** (Twist, Rotate, Pinch brushes) is where most remaining defects on our test
+  sculpts sit. **Repair Folds and Re-run** repairs some of these spots, not all.
 - **Hard-surface models**: a few triangles or pentagons along sharp rims are normal. No mirror
   symmetry, guide curves or density painting yet.
 - Windows and macOS builds are checked only by automatic tests, not yet on a real desktop. The

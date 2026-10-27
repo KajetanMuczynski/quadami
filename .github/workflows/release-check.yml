@@ -36,7 +36,7 @@ on:
         default: ''
       baseline:
         description: Commit or tag of the previous release for the ratchet (empty skips the ratchet)
-        default: 0e9bec8  # master of 2026-10-22, the 0.1.0 baseline (docs/RELEASING.md)
+        default: 877891d  # #82's merge, the 0.1.0 baseline: its thin-part folds are an accepted trade (docs/RELEASING.md); v0.1.0 after the release
       replicates:
         description: 1-ulp replicates besides the plain input
         default: '5'

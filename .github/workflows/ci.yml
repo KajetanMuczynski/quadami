@@ -33,7 +33,8 @@ jobs:
   # wait in the queue for many minutes), so a pull request that changes only
   # documentation skips it; everything else runs it. Fail-closed: documentation is
   # docs/ and the Markdown files at the top level or directly in addon/, nothing else
-  # (Markdown in thirdparty/ or addon/quadami/ can end up in the zip).
+  # (Markdown in thirdparty/ or addon/quadami/ can end up in the zip); a rename counts
+  # as both its paths. The decision is ci/docs_only.sh, tested in qt-app (ci/tests).
   # Pushes, tags and manual runs always run the macOS job.
   changes:
     name: changes
@@ -59,15 +60,7 @@ jobs:
             exit 0
           fi
           git rev-parse --verify HEAD^2 > /dev/null  # a merge commit, or fail
-          git diff --name-only HEAD^1 HEAD > changed.txt
-          cat changed.txt
-          if grep -v -E '^docs/|^[^/]+\.md$|^addon/[^/]+\.md$' changed.txt; then
-            echo "^ not documentation: the macOS job runs"
-            echo "macos=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "documentation only: the macOS job is skipped"
-            echo "macos=false" >> "$GITHUB_OUTPUT"
-          fi
+          ci/docs_only.sh HEAD^1 HEAD
 
   format:
     name: format (clang-format 23)
@@ -99,12 +92,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # Only what autoremesher.pro uses (QT += core widgets opengl): no Qt tools or SVG.
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential cmake qt5-qmake qtbase5-dev libqt5opengl5-dev qttools5-dev-tools \
-            libqt5svg5-dev libtbb-dev libgl1-mesa-dev
+          ci/apt_install.sh build-essential cmake qt5-qmake qtbase5-dev libqt5opengl5-dev \
+            libtbb-dev libgl1-mesa-dev
           g++ --version | head -n 1; qmake --version | tail -n 1; cmake --version | head -n 1
 
       - name: Build Qt app
@@ -197,14 +189,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install numpy pefile
+          python -m pip install --require-hashes --no-deps -r ci/requirements.txt
           if [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get update
             # The X and GL libraries Blender links even in background mode. No libtbb: the
             # program must not need it.
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-              libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libgl1 libegl1
+            ci/apt_install.sh libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 \
+              libsm6 libgl1 libegl1
           fi
           cmake --version | head -n 1
 

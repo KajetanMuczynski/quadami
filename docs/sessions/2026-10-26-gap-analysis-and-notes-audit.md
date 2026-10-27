@@ -20,3 +20,9 @@
   0 non-manifold edges. Single runs, one shape each.
 - Next: 0.2 ranking in the note §5: sliver fix (2.7), G9 + G10 result data and re-run, thin parts (2.21), G11 scale,
   G12 symmetry, fold repair default (2.20), raw-array hand-over (G2), pre-checks (G13), crease design (2.5).
+- Decided by Kajetan (2026-10-26, in the thread): crumb floor kept and warned about for 0.1; sliver islands dropped in 0.2
+  (#112); byte-identical platforms after 0.1 (2.9b); release gate becomes a per-case sign test (1.16). Recorded in TODO with
+  G9–G11 progress from #110.
+- Added TODO 2.20a after Kajetan's test (head at 35k: Repair Folds closed the holes but flattened small swirls; one run,
+  unconfirmed): the repair radius is 1 % of the diagonal whatever the target (0.55 quad edges at 3k, 1.9 at 35k on the
+  head) and the final projection lands on the repaired copy; measurement and four options recorded there.
