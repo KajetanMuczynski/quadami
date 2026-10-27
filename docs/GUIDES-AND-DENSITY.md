@@ -4,8 +4,9 @@ Design note for TODO 4.4, 5.7, 5.8, G2 and G6 (thread "Assess guide curves and d
 2026-10-27, master `0b0832e`). Nothing here is built or measured; no code before Kajetan agrees on
 the design. It builds on the feature-edge carrier the 2.6 and 5.4 threads are building
 (`FeatureEdgeSet`, below) and on research/sizing-guides-symmetry.md §1.5, §2, §3 (project files).
-Stage-one priorities wait for the sibling report on how ZRemesher guides are used in published work
-(research/guides-in-practice-2026-10-27.md, project files); §5 marks what it can change.
+Priorities follow the sibling report on how ZRemesher and Quad Remesher guides are used in published
+work (research/guides-in-practice-2026-10-27.md, project files; desk research, labelled there); §5.1
+says what it changed.
 
 Labels: **[C]** checked in code at `0b0832e` (file:line), **[I]** inferred or derived here, not
 measured, **[P]** vendor documentation as quoted in research/gap-analysis-zremesher-2026-10-26.md,
@@ -57,9 +58,11 @@ measured, **[P]** vendor documentation as quoted in research/gap-analysis-zremes
    plus little-endian array files written with numpy `tofile`), which also removes the measured
    1-17 s input freeze (TODO G2) [I, §4].
 
-Recommended order (§5): request format (S) → density paint with measurement (S-M) → soft guides on
-curves (S-M) → hard guides on marked edges and face-set borders (S, after 2.6, 5.4, 2.8's extractor
-part, 5.2) → hard guides on curves (M).
+Recommended order (§5): request format (S) → density paint with measurement (S-M) → hard guides on
+marked edges and face-set/material borders (S, after 2.6, 5.4, 2.8's extractor part, 5.2) → hard
+closed-loop guides on curves (M) → soft guides (S-M), last. The guides-in-practice report moved soft
+guides from second to last: artists use region borders most, and want drawn curves as exact loops at
+a few places (eyes, mouth, limb rings), not as soft hints, which is what ZRemesher users complain about.
 
 ## 1. Where the features land today [C]
 
@@ -163,7 +166,10 @@ ZRemesher's guides are soft (Curves Strength; one forum report says they are ign
 strength 100), drawn on the surface with the ZRemesherGuides brush; its hard borders come from
 polygroups (Keep Groups) [P/E, research note §3.1]. Quad Remesher lists curves as "WIP" and takes
 edge loops from materials, face sets, sharp edges and normal splits [P]. So the commercial
-precedent is: soft curves, hard borders from groups and marks.
+precedent is: soft curves, hard borders from groups and marks. In use, borders are the control
+artists rely on (hard surface especially), density paint is the rescue on faces, and soft curves are
+reported ignored or spiralling on eyes and mouths (5 ZRemesher threads, all 2013-2015), while users
+ask for curves as exact closed loops (guides-in-practice report §0, §2).
 
 ### 3.2 Soft guides [I, design]
 - Project each polyline onto its island's T (closest point, facing-side filter), sample every half T
@@ -255,7 +261,8 @@ OBJ and runs `autoremesher-cli -i in.obj -o out.obj --report-json ... --target-q
   object gives the polyline at its resolution) and brought into the source's object space; per-object
   custom properties *Hard* and *Strength*. Curves can be drawn onto the surface with Blender's Curve
   Draw tool (depth: Surface) [U]. Grease Pencil changed its data API in 4.3 [U], so annotation strokes
-  come later, if the sibling report says users draw quick strokes.
+  come later, if at all: the one Blender workflow on record turns a grease pencil stroke into a mesh
+  and Knife Projects it, i.e. wants an exact loop, which stage 3's cut does from a curve object.
 - **Guide edges**: an edge attribute `quadami_guide` with *Mark Guide* / *Clear Guide* operators in
   Edit Mode; sent with the hard bit next to 5.4's marks.
 - The panel says what will be sent ("density: vertex group Face, 12 % painted; 3 guides, 1 hard").
@@ -274,17 +281,34 @@ byte-identical until a decision says otherwise.
 | 1.17 | Bench: `paint` and `guides` sets (procedural meshes with arrays, request files in the corpus), metrics: realised density ratio, poles per border length, guide coverage and angle | G2a | S | metrics bugs in shared code (disprover rule) | — (tooling) |
 | 1 | Density paint: §2.2 (1-5), add-on source and toggle | G2a, 1.17 | S-M | realised ratio short; flips at borders | on the `paint` set at default gradation, 5 replicates: realised log₂ ratio < 0.7 p; or folds/flips within 2 h of borders > 2× the same region unpainted in every replicate; or count outside today's error band. Then 1b before shipping |
 | 1b | Cone placement from K − Δφ* for painted islands; simplifier keeps paint pairs | 1, 3.3 | M | is 4.5 (parked: not better than lower adaptivity on curvature sizing) | realised ratio or border validity not better than stage 1 |
-| 2 | Soft guides on curves: §3.2 | G2a, 1.17 | S-M | weight scale (2.24), more singularities | guide coverage/angle within h of the curve not better than without, 5 replicates; or validity worse beyond noise on the `guides` set |
-| 3 | Hard guides on marked edges and face-set borders | 2.6, 5.4, 2.8 (extractor part), 5.2 | S on top | strips < h/2, libQEx fallbacks | coverage < 0.9 of guide length on resolvable guides; libQEx fallbacks up on the `guides` set |
-| 4 | Hard guides on curves: cut (§3.4 A) | 3 | M | cutting noisy sculpts | slivers or holes on the sculpt/brush sets when guides are present; coverage below stage 3's on the same paths drawn as curves |
+| 2 | Hard guides on marked edges, face-set and material borders (§3.3); a per-run toggle for face sets; border smoothing for noisy sculpt face sets | 2.6, 5.4, 2.8 (extractor part), 5.2 | S on top | strips < h/2, libQEx fallbacks; noisy organic borders | coverage < 0.9 of guide length on resolvable guides at 2k as well as 10k; libQEx fallbacks or folds up on the `guides` set |
+| 3 | Hard closed-loop guides on curves: cut (§3.4 A); mirrored under symmetry (G12) | 2 | M | cutting noisy sculpts | slivers or holes on the sculpt/brush sets when guides are present; coverage below stage 2's on the same paths drawn as curves |
+| 4 | Soft guides on curves (§3.2) | G2a, 1.17 | S-M | weight scale (2.24), more singularities; weak user evidence | guide alignment within h not better than without, 5 replicates; or validity worse beyond noise; or no user asks for a hint once 2-3 exist |
 
 Stage 1 acceptance meshes: procedural sphere, torus and plane with painted caps, stripes and a
 graded ramp (public); Kajetan's sword with the vines painted (private set, metrics only); a head with
 eyes and mouth painted.
 
-What the sibling report can change: the order of 1 and 2 (if published ZRemesher work leans on
-guides far more than on density), whether stage 3's source is marked edges or face sets first, and
-whether annotation strokes are needed in stage 2.
+### 5.1 What the guides-in-practice report changed [its claims are desk research; my reading is I]
+- **Soft guides last.** ZRemesher's soft curves are the most complained-about control on faces;
+  users ask for curves as exact loops. Stage 4 stays only as a hint mode once exact loops exist.
+- **Borders before curves.** Face sets, materials and Mark Sharp/Crease borders are what artists use
+  and what upstream AutoRemesher users asked for; Quad Remesher users fake curve guides with Knife
+  Project + Mark Sharp, which stage 2 serves directly. Read face sets directly (Quad Remesher's
+  face-set-to-material round trip is a known annoyance), behind a toggle (sculptors use face sets for
+  masking), with noise tolerance on organic borders, and a border must not hold density up.
+- **Density paint second in use, first in our order**: it does not depend on 2.5/5.2, and the top
+  complaint in both tools is "it did nothing", so the report's realised-ratio readout (§2.2 item 5)
+  is part of stage 1, not polish. Users paint coarse zones (two or three levels), so gradation is a
+  safety measure, not a feature; black, white and grey must all be neutral, so no fill step is
+  needed (ZBrush's FillObject trap).
+- **Test low counts**: users judge loops around small features at 2-3k quads; every guide A/B
+  sweeps the target down to 2k.
+- **Symmetry from the start**: two reported guide failures were symmetry problems; guides go through
+  G12's half + Mirror run (only the half's guides are used, the others are mirrored, or a mismatch
+  is reported).
+- **Persistence**: curve objects and edge attributes stay in the .blend between runs, which ZBrush
+  users miss; keep it that way (no guide data inside the result only).
 
 ## 6. Measurement needed (TODO 1.17)
 - **Realised density ratio**: median output edge length over quads whose centre has p ≥ 0.9 p_max,

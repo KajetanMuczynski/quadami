@@ -10,5 +10,6 @@
   steps force pole pairs that today's field never places; with Target Quads kept, large painted areas
   mostly coarsen the rest [I].
 - Measured: nothing measured.
-- Next: G2a request PR, then 1.17 and stage 1 (density), after Kajetan agrees on the design; stage
-  order may change with the sibling report on guide use in published ZRemesher work.
+- Next: G2a request PR, then 1.17 and stage 1 (density), after Kajetan agrees on the design. The
+  sibling report on guide use in published work moved soft guides to last and borders (face sets,
+  materials, marks) before drawn curves.
