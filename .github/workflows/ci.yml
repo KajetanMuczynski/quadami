@@ -340,14 +340,15 @@ jobs:
 
       # The panel as Blender draws it, in a window on a virtual X display with
       # software OpenGL: a result with missing thin parts at UI scale 1 and 1.5,
-      # uploaded as panel-linux-x64 for a person to check for cut-off text.
+      # uploaded as panel-linux-x64 for a person to check for cut-off text; the
+      # sidebar's text, read by OCR, is in the log as panel_ocr lines.
       - name: Panel screenshots
         if: runner.os == 'Linux'
         run: |
-          ci/apt_install.sh xvfb xauth libgl1-mesa-dri imagemagick
+          ci/apt_install.sh xvfb xauth libgl1-mesa-dri imagemagick tesseract-ocr
           xvfb-run -a -s "-screen 0 1600x900x24" "$BLENDER" --factory-startup \
-            --python addon/tests/blender_panel_shot.py -- --out build/panel --dump
-          test -s build/panel/panel-1.png && test -s build/panel/panel-1.5.png
+            --python addon/tests/blender_panel_shot.py -- --out build/panel --ocr
+          test -s build/panel/sidebar-1.png && test -s build/panel/sidebar-1.5.png
 
       - name: Upload the panel screenshots
         if: always() && runner.os == 'Linux'

@@ -25,13 +25,13 @@ Linux CI under Xvfb) after the zip is installed:
 It remeshes a sphere with a thin horn and a one-triangle speck beside it at a
 low target, so the report has missing thin parts and a missing piece, shows the
 result in the sidebar, and saves the screen at UI scale 1 and 1.5 as
-panel-<scale>.png (ImageMagick's import; --dump also prints it as base64).
+panel-<scale>.png and the sidebar as sidebar-<scale>.png (ImageMagick; --ocr
+prints the sidebar's text, read by tesseract).
 The script quits Blender with exit status 1 on any error or a blank picture;
 the pictures are for a person to look at (a label too wide for the sidebar is
-cut off with an ellipsis, which the script cannot see).
+cut off with an ellipsis, which shows in the OCR text too).
 """
 
-import base64
 import importlib
 import os
 import subprocess
@@ -136,12 +136,23 @@ def shoot(scale):
     print("panel_shot: %s, %d colours" % (os.path.basename(path), colours))
     if colours < 8:
         raise RuntimeError("the screenshot is blank: nothing was drawn")
-    if "--dump" in args:
-        # The picture in the log (base64), for a look without the artifact.
-        text = base64.b64encode(open(path, "rb").read()).decode()
-        for i in range(0, len(text), 4000):
-            print("panel_dump: " + text[i:i + 4000])
-        print("panel_dump: end")
+    # The sidebar alone, read back with OCR into the log: wrapped lines and
+    # any label cut off with an ellipsis show there without the artifact.
+    # Window coordinates count from the bottom left; the window sits at the
+    # screen's top left under Xvfb with no window manager.
+    crop = os.path.join(out, "sidebar-%g.png" % scale)
+    top = window.height - (region.y + region.height)
+    subprocess.run(["convert", path, "-crop", "%dx%d+%d+%d" % (region.width, region.height, region.x, top),
+                    "+repage", crop], check=True)
+    if "--ocr" in args:
+        large = os.path.join(out, "ocr.png")
+        subprocess.run(["convert", crop, "-resize", "300%", large], check=True)
+        text = subprocess.run(["tesseract", large, "-", "--psm", "4"], check=True,
+                              capture_output=True, text=True).stdout
+        os.remove(large)
+        for line in text.splitlines():
+            if line.strip():
+                print("panel_ocr %g: %s" % (scale, line))
 
 
 def step():
