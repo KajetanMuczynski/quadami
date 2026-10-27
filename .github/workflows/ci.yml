@@ -340,8 +340,8 @@ jobs:
 
       # The panel as Blender draws it, in a window on a virtual X display with
       # software OpenGL: a result with missing thin parts at UI scale 1 and 1.5,
-      # uploaded as panel-linux-x64 for a person to check for cut-off text; the
-      # sidebar's text, read by OCR, is in the log as panel_ocr lines.
+      # uploaded as panel-linux-x64. The sidebar's text, read by OCR, is in the
+      # log as panel_ocr lines; a line of our panel cut off with an ellipsis fails.
       - name: Panel screenshots
         if: runner.os == 'Linux'
         run: |

@@ -164,6 +164,22 @@ def wrap(text, width=WARNING_WIDTH, measure=len):
     return lines
 
 
+def summary_columns(rows, width, space, pad, measure=len):
+    """Lay summary rows out in two columns of a panel row `width` wide, split
+    with `space` between them and `pad` of each label kept for its margin:
+    (factor, [(label lines, value lines, is_problem)]).  The label column is
+    as wide as the widest label, at most 60 %; a value or label wider than its
+    column wraps, so nothing is cut off with an ellipsis."""
+    usable = max(width - space, 1)
+    # One pixel more than the widest label: Blender rounds column widths down.
+    labels = max((measure(label) for label, _, _ in rows), default=0) + pad + 1
+    factor = min(max(labels / usable, 0.2), 0.6)
+    label_width = usable * factor - pad
+    value_width = usable * (1 - factor) - pad
+    return factor, [(wrap(label, label_width, measure) or [""], wrap(value, value_width, measure) or [""], problem)
+                    for label, value, problem in rows]
+
+
 def warning_lines(report, width=WARNING_WIDTH, measure=len):
     """(text, first, is_problem) lines for the report's warnings, wrapped to
     the panel's width; first marks the line that starts a warning or a hint."""

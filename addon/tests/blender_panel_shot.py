@@ -31,9 +31,9 @@ low target, so the report has missing thin parts and a missing piece, shows the
 result in the sidebar, and saves the screen at UI scale 1 and 1.5 as
 panel-<scale>.png and the sidebar as sidebar-<scale>.png (ImageMagick; --ocr
 prints the sidebar's text, read by tesseract).
-The script quits Blender with exit status 1 on any error or a blank picture;
-the pictures are for a person to look at (a label too wide for the sidebar is
-cut off with an ellipsis, which shows in the OCR text too).
+The script quits Blender with exit status 1 on any error, a blank picture or,
+with --ocr, a line of our panel that Blender cut off with an ellipsis because
+it was too wide for the sidebar.  The pictures are for a person to look at.
 """
 
 import importlib
@@ -129,6 +129,13 @@ def shoot(scale):
     region = next(r for r in area.regions if r.type == "UI")
     print("panel_shot: UI scale %.2f, window %d x %d, sidebar %d x %d px at %d, %d"
           % (scale, window.width, window.height, region.width, region.height, region.x, region.y))
+    # The room the panel reckons its text has, against what OCR reads back.
+    addon = sys.modules["bl_ext.user_default." + ID]
+    with bpy.context.temp_override(window=window, area=area, region=region):
+        room = addon._text_room(bpy.context)
+        sample = "Parts thinner than one quad are missing"
+        print("panel_shot: room panel %.1f, box %.1f, icon %d, pad %d, space %d; %r is %.1f px"
+              % (room.panel, room.box, room.icon, room.pad, room.space, sample, room.measure(sample)))
     path = os.path.join(out, "panel-%g.png" % scale)
     with bpy.context.temp_override(window=window, area=area):
         bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
@@ -154,9 +161,16 @@ def shoot(scale):
         text = subprocess.run(["tesseract", large, "-", "--psm", "4"], check=True,
                               capture_output=True, text=True).stdout
         os.remove(large)
+        ours, cut = False, []
         for line in text.splitlines():
             if line.strip():
                 print("panel_ocr %g: %s" % (scale, line))
+                # Blender's other panels above ours are not checked.
+                ours = ours or NAME in line
+                if ours and ("..." in line or "\u2026" in line):
+                    cut.append(line)
+        if cut:
+            raise RuntimeError("labels cut off with an ellipsis at UI scale %g: %s" % (scale, cut))
 
 
 def step():
