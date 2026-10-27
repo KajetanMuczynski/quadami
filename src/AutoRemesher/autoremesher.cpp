@@ -270,6 +270,81 @@ namespace {
     }
 }
 
+namespace {
+    // Conical tips: interior vertices where the angle deficit (2 pi minus the
+    // angle sum) gathered within `radius` reaches `minimumDeficit`. Each tip
+    // is the vertex with the largest own deficit of its cluster.
+    std::vector<size_t> conicalTips(const std::vector<Vector3>& vertices,
+        const std::vector<std::vector<size_t>>& triangles, double radius, double minimumDeficit)
+    {
+        const size_t n = vertices.size();
+        std::vector<double> angleSum(n, 0.0);
+        std::vector<std::vector<size_t>> neighbours(n);
+        std::unordered_map<unsigned long long, int> edgeFaces;
+        const auto key = [](size_t a, size_t b) {
+            return ((unsigned long long)std::min(a, b) << 32) | (unsigned long long)std::max(a, b);
+        };
+        for (const auto& t : triangles) {
+            if (t.size() != 3)
+                continue;
+            for (size_t k = 0; k < 3; ++k) {
+                const size_t a = t[k], b = t[(k + 1) % 3], c = t[(k + 2) % 3];
+                const Vector3 u = vertices[b] - vertices[a], w = vertices[c] - vertices[a];
+                angleSum[a] += std::atan2(Vector3::crossProduct(u, w).length(), Vector3::dotProduct(u, w));
+                ++edgeFaces[key(a, b)];
+                neighbours[a].push_back(b);
+            }
+        }
+        std::vector<char> interior(n, 1);
+        for (const auto& it : edgeFaces)
+            if (it.second != 2)
+                interior[(size_t)(it.first >> 32)] = interior[(size_t)(it.first & 0xffffffffu)] = 0;
+        std::vector<double> deficit(n, 0.0);
+        std::vector<size_t> candidates;
+        const double seedDeficit = 5.0 * M_PI / 180.0;
+        for (size_t v = 0; v < n; ++v) {
+            if (!interior[v] || neighbours[v].empty())
+                continue;
+            deficit[v] = 2.0 * M_PI - angleSum[v];
+            if (deficit[v] >= seedDeficit)
+                candidates.push_back(v);
+        }
+        std::sort(candidates.begin(), candidates.end(), [&](size_t a, size_t b) {
+            return deficit[a] != deficit[b] ? deficit[a] > deficit[b] : a < b;
+        });
+        std::vector<char> taken(n, 0);
+        std::vector<size_t> tips, region;
+        std::vector<char> seen(n, 0);
+        for (const size_t v : candidates) {
+            if (taken[v])
+                continue;
+            region.assign(1, v);
+            seen[v] = 1;
+            double gathered = 0.0;
+            bool open = false;
+            for (size_t i = 0; i < region.size(); ++i) {
+                const size_t u = region[i];
+                if (!interior[u])
+                    open = true;
+                gathered += deficit[u];
+                for (const size_t w : neighbours[u])
+                    if (!seen[w] && (vertices[w] - vertices[v]).length() <= radius) {
+                        seen[w] = 1;
+                        region.push_back(w);
+                    }
+            }
+            for (const size_t u : region)
+                seen[u] = 0;
+            if (open || gathered < minimumDeficit)
+                continue;
+            tips.push_back(v);
+            for (const size_t u : region)
+                taken[u] = 1;
+        }
+        return tips;
+    }
+}
+
 const double AutoRemesher::m_defaultSharpEdgeDegrees = 90;
 
 double AutoRemesher::calculateAverageEdgeLength(const std::vector<Vector3>& vertices,
@@ -822,6 +897,19 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     IsotropicRemesher isotropicRemesher(vertices, triangles);
     if (nullptr != progressHandler && *progressHandler)
         isotropicRemesher.setProgressHandler(*progressHandler);
+    std::vector<size_t> tips;
+    {
+        const char* deg = std::getenv("AR_TIP_DEG");
+        const char* rad = std::getenv("AR_TIP_RADIUS");
+        const double tipDegrees = deg ? std::atof(deg) : 135.0;
+        const double tipRadius = rad ? std::atof(rad) : 0.5;
+        if (tipDegrees > 0.0)
+            tips = conicalTips(vertices, triangles, tipRadius * voxelSize, tipDegrees * M_PI / 180.0);
+        if (std::getenv("AR_TIP_DEBUG"))
+            std::cerr << "conical tips: " << tips.size() << std::endl;
+    }
+    if (!tips.empty())
+        isotropicRemesher.setPinnedVertices(&tips);
     isotropicRemesher.setTargetEdgeLength(voxelSize);
     if (!vertexTargetLengths.empty())
         isotropicRemesher.setVertexTargetEdgeLengths(&vertexTargetLengths);

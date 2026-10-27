@@ -1899,6 +1899,22 @@ void QuadExtractor::smoothAndProject(size_t iterations,
             locked[it.first.second] = true;
         }
     }
+    {
+        // Smoothing pulls a conical tip's valence-2 vertex into the solid.
+        std::vector<size_t> faceCount(m_remeshedVertices.size(), 0);
+        std::vector<double> angleSum(m_remeshedVertices.size(), 0.0);
+        for (const auto& face : m_remeshedPolygons)
+            for (size_t i = 0; i < face.size(); ++i) {
+                const size_t v = face[i];
+                const Vector3 a = m_remeshedVertices[face[(i + face.size() - 1) % face.size()]] - m_remeshedVertices[v];
+                const Vector3 b = m_remeshedVertices[face[(i + 1) % face.size()]] - m_remeshedVertices[v];
+                angleSum[v] += std::atan2(Vector3::crossProduct(a, b).length(), Vector3::dotProduct(a, b));
+                ++faceCount[v];
+            }
+        for (size_t v = 0; v < locked.size(); ++v)
+            if (2 == faceCount[v] && 2 == neighbors[v].size() && angleSum[v] < 1.5 * M_PI)
+                locked[v] = true;
+    }
 
     std::vector<::Vector3> targetVertices;
     targetVertices.reserve(m_vertices->size());
@@ -2726,6 +2742,16 @@ void QuadExtractor::mergeDoubleSharedEdgeQuads()
             const size_t secondApex = secondFace[(secondAt + 2) % 4];
             if (firstApex == secondApex)
                 continue;
+            // A doublet whose two corners leave a large angle deficit is a
+            // conical tip of the surface (a cone's apex), not a defect: the
+            // merged quad would cut the tip off.
+            {
+                const Vector3& m = m_remeshedVertices[middle];
+                const Vector3 a = m_remeshedVertices[previous] - m, b = m_remeshedVertices[next] - m;
+                const double corner = std::atan2(Vector3::crossProduct(a, b).length(), Vector3::dotProduct(a, b));
+                if (2.0 * corner < 1.5 * M_PI)
+                    continue;
+            }
             bool touched = false;
             for (const auto& vertex : { middle, previous, next, firstApex, secondApex }) {
                 if (touchedVertices.end() != touchedVertices.find(vertex)) {

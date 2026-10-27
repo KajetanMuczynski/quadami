@@ -47,6 +47,8 @@ public:
         size_t debugIndex = 0;
         size_t outputIndex = 0;
         bool featured = false;
+        // A conical tip of the input (Quadami): never moved, never collapsed.
+        bool pinned = false;
         double targetEdgeLength = 0.0; // 0 = use global default in split/collapse
         Vertex *_allocLink = nullptr;
     };

@@ -37,9 +37,11 @@ public:
     {
     }
 
-    void setConstraintVertices(const std::unordered_set<size_t>* constraintVertices)
+    // Vertices of the input the remesh keeps where they are (conical tips):
+    // never relaxed, projected or collapsed.
+    void setPinnedVertices(const std::vector<size_t>* pinnedVertices)
     {
-        m_constraintVertices = constraintVertices;
+        m_pinnedVertices = pinnedVertices;
     }
 
     void setVertexTargetEdgeLengths(const std::vector<double>* targetLengths)
@@ -84,7 +86,7 @@ public:
 private:
     std::vector<Vector3> m_vertices;
     std::vector<std::vector<size_t>> m_triangles;
-    const std::unordered_set<size_t>* m_constraintVertices = nullptr;
+    const std::vector<size_t>* m_pinnedVertices = nullptr;
     const std::vector<double>* m_vertexTargetEdgeLengths = nullptr;
     double m_targetEdgeLength = 0;
     double m_sharpEdgeDegrees = 60;

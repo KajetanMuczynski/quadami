@@ -41,6 +41,7 @@ public:
     void setSharpEdgeIncludedAngle(double degrees);
     void setTargetEdgeLength(double edgeLength);
     void setVertexTargetEdgeLengths(const std::vector<double> *targetLengths);
+    void setPinnedVertices(const std::vector<size_t> *pinnedVertices);
     void setTargetTriangleCount(size_t triangleCount);
     void setSmoothNormalDegrees(double degrees);
     // Reports 0..1 across remesh(), which is otherwise a long silent stretch of
@@ -64,6 +65,7 @@ private:
     double m_initialAverageEdgeLength = 0;
     size_t m_targetTriangleCount = 0;
     const std::vector<double> *m_vertexTargetEdgeLengths = nullptr;
+    const std::vector<size_t> *m_pinnedVertices = nullptr;
     double m_smoothNormalDegrees = 0.0;
     std::vector<Vector3> m_smoothVertexNormals; // Per-vertex smooth normals (input)
     std::vector<Vector3> m_smoothVertices;      // Subdivided mesh vertices for AABB tree

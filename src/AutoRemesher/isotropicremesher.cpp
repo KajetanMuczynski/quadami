@@ -40,6 +40,8 @@ bool IsotropicRemesher::remesh()
         remesher.setTargetEdgeLength(m_targetEdgeLength);
     if (m_vertexTargetEdgeLengths != nullptr)
         remesher.setVertexTargetEdgeLengths(m_vertexTargetEdgeLengths);
+    if (m_pinnedVertices != nullptr)
+        remesher.setPinnedVertices(m_pinnedVertices);
     remesher.setSharpEdgeIncludedAngle(180.0 - m_sharpEdgeDegrees);
     remesher.setSmoothNormalDegrees(m_smoothNormalDegrees);
     if (m_progressHandler)
