@@ -350,14 +350,17 @@ namespace {
     // Conical tips (TODO 2.23): interior vertices where the angle deficit
     // (2 pi minus the angle sum) gathered within `radius` is at least
     // `minimumDeficit` and below `maximumDeficit`, the apex of a cone. Each
-    // tip is the vertex with the largest own deficit of its cluster; a
-    // cluster touching a boundary is left out, and so is one whose triangles
-    // do not form a cap (some faces away from their mean normal): a corner of
-    // sharp edges, which the feature edges hold, or folded brush input, whose
-    // angle sums mean nothing (brush_box_relief had 18 such "tips"). The
-    // isotropic remesh keeps tips where they are: it used to collapse and
-    // relax the apex away, so the quads were laid out on a cut cone and their
-    // cap sat about one quad below the tip.
+    // tip is the vertex with the largest own deficit of its cluster, and it
+    // must hold at least half of the gathered deficit: a point, not a rounded
+    // cap smaller than a quad (the fingertips of human_neutral at 10k hold 5
+    // to 27 %, a subdivided cone's apex 75 %). A cluster touching a boundary
+    // is left out, and so is one whose triangles do not form a cap (some
+    // faces away from their mean normal): a corner of sharp edges, which the
+    // feature edges hold, or folded brush input, whose angle sums mean
+    // nothing (brush_box_relief had 18 such "tips"). The isotropic remesh
+    // keeps tips where they are: it used to collapse and relax the apex away,
+    // so the quads were laid out on a cut cone and their cap sat about one
+    // quad below the tip.
     std::vector<size_t> conicalTips(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles, double radius, double minimumDeficit,
         double maximumDeficit)
@@ -437,7 +440,8 @@ namespace {
             }
             for (const size_t u : region)
                 seen[u] = 0;
-            if (open || gathered < minimumDeficit || gathered >= maximumDeficit || !isCap(region))
+            if (open || gathered < minimumDeficit || gathered >= maximumDeficit
+                || deficit[v] < 0.5 * gathered || !isCap(region))
                 continue;
             tips.push_back(v);
             for (const size_t u : region)
