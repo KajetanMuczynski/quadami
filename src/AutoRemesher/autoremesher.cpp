@@ -759,7 +759,8 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     std::atomic<long long>* adaptiveFieldTimeUs,
     const ProgressHandler* progressHandler,
     std::vector<Vector3>* decimatedVerticesOut,
-    std::vector<std::vector<size_t>>* decimatedTrianglesOut)
+    std::vector<std::vector<size_t>>* decimatedTrianglesOut,
+    std::vector<Vector3>* conicalTipsOut)
 {
     auto t_decimateStart = std::chrono::high_resolution_clock::now();
     decimateIfTooDense(vertices, triangles, topology, voxelSize, sharpEdgeDegrees, islandIndex, decimationStats);
@@ -912,6 +913,11 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
         conicalTipRadius * voxelSize, conicalTipDegrees * M_PI / 180.0);
     if (nullptr != decimationStats)
         decimationStats->conicalTips += tips.size();
+    if (nullptr != conicalTipsOut) {
+        conicalTipsOut->clear();
+        for (const size_t v : tips)
+            conicalTipsOut->push_back(vertices[v]);
+    }
     if (!tips.empty())
         isotropicRemesher.setPinnedVertices(&tips);
     isotropicRemesher.setTargetEdgeLength(voxelSize);
@@ -1218,6 +1224,8 @@ bool AutoRemesher::remeshIslands()
         std::vector<std::vector<size_t>> decimatedTriangles;
         std::vector<Vector3> isotropicVertices;
         std::vector<std::vector<size_t>> isotropicTriangles;
+        // Where the isotropic remesh kept conical tips (TODO 2.23).
+        std::vector<Vector3> conicalTips;
         std::vector<std::vector<Vector2>> capturedUvs;
         std::vector<std::vector<Vector2>> capturedOriginalUvs;
         std::vector<uint8_t> capturedExtractedConnectionMoved;
@@ -1249,7 +1257,7 @@ bool AutoRemesher::remeshIslands()
         auto t0 = std::chrono::high_resolution_clock::now();
         resample(ctx.vertices, ctx.triangles, ctx.inputTopology, ctx.voxelSize, ctx.adaptivity, ctx.sharpEdgeDegrees, ctx.smoothNormalDegrees, islandIndex, stats,
             &adaptiveFieldTime, &isotropicProgress,
-            &run.decimatedVertices, &run.decimatedTriangles);
+            &run.decimatedVertices, &run.decimatedTriangles, &run.conicalTips);
         auto t1 = std::chrono::high_resolution_clock::now();
         run.resampleUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
         resampleTime += run.resampleUs;
@@ -1326,6 +1334,7 @@ bool AutoRemesher::remeshIslands()
             QuadExtractor extractor(&vertices, &triangles, uvs.get());
             extractor.setOriginalTriangleUvs(&run.capturedOriginalUvs);
             extractor.setSingularVertices(&run.capturedSingularVertexIndices);
+            extractor.setConicalTips(&run.conicalTips);
             extractor.setInputBoundary(&ctx.inputBoundary);
             extractor.setUseQex(m_useQex);
             extractor.setTargetQuadCount((size_t)std::max(0.0, ctx.targetQuadCount));
