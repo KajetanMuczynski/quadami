@@ -32,7 +32,22 @@ docker run -d --name "$container" --network host -v "$PWD:$PWD" -w "$PWD" ${DOCK
     -e https_proxy -e HTTPS_PROXY -e http_proxy -e HTTP_PROXY -e no_proxy -e NO_PROXY \
     "$IMAGE" sleep infinity > /dev/null
 trap 'docker rm -f "$container" > /dev/null' EXIT
-docker exec "$container" dnf install -y -q gcc-toolset-13-gcc-c++ cmake git make
+# A slow mirror once held this step for 43 min (PR #120's run): dnf drops a mirror below
+# 200 kB/s and tries the next; the download gets 10 min per attempt, 3 attempts (packages
+# already downloaded stay in the cache), then the install runs without a time limit.
+dnf="dnf -y --setopt=fastestmirror=True --setopt=max_parallel_downloads=10 \
+    --setopt=minrate=200k --setopt=timeout=30 --setopt=keepcache=True"
+packages="gcc-toolset-13-gcc-c++ cmake git make"
+attempt=1
+# shellcheck disable=SC2086  # $dnf and $packages hold several words
+until docker exec "$container" timeout 600 $dnf install --downloadonly $packages; do
+    [ "$attempt" -lt 3 ] || { echo "dnf download failed 3 times" >&2; exit 1; }
+    attempt=$((attempt + 1))
+    echo "dnf download failed or took more than 10 min, attempt $attempt" >&2
+    sleep 10
+done
+# shellcheck disable=SC2086
+docker exec "$container" $dnf install $packages
 docker exec -u "$(id -u):$(id -g)" -e HOME=/tmp -e BUILD_ID="$BUILD_ID" -e JOBS="$JOBS" "$container" \
     sh -ec '
         # Not "scl enable gcc-toolset-13 -- sh -c ...": it ran only part of this script.

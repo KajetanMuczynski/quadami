@@ -1,0 +1,13 @@
+# Python packages for the addon job in ci.yml: numpy for the worker tests, pefile for
+# ci/check_dll_imports.py (Windows). Pinned with hashes, per the dependency rule in
+# CLAUDE.md (a release at least 7 days old). The numpy hashes are the CPython 3.12 wheels
+# of the three runners (Linux x86-64, Windows x64, macOS arm64); add the matching wheel
+# when the Python version or a runner changes. Install with:
+#   python -m pip install --require-hashes --no-deps -r ci/requirements.txt
+numpy==2.5.4 \
+    --hash=sha256:fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a \
+    --hash=sha256:a7b1b6353e36a7e50de2973a38d705c88ee93adcf120673cee7f45a4a3fa223a \
+    --hash=sha256:b11e8fda06a7d69f15ebf542660b74466c2e51094800c1fb794f47ad4faeef17 \
+    --hash=sha256:9cb18a327b49c5c337f972b03682f6a49855525faaf3c0d3e9c96cd0fd8880a8
+pefile==2024.8.26 \
+    --hash=sha256:76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f
