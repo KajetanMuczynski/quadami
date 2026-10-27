@@ -18,6 +18,11 @@ on:
     tags:
       - '*'
   workflow_dispatch:
+  # Nightly on master: the one macOS run master gets between tags (merges skip macOS, see
+  # "changes"), so a macOS-only break from two merged PRs shows within a day, and macOS test
+  # builds stay available. 02:17 UTC, off the hour when scheduled runs pile up.
+  schedule:
+    - cron: '17 2 * * *'
 
 # Read-only token for every job; nothing here writes to the repo (artifacts and caches
 # don't need token scopes).
@@ -34,12 +39,13 @@ concurrency:
 
 jobs:
   # Whether the macOS job runs. GitHub's macOS runners are the scarce ones (a job can
-  # wait in the queue for many minutes), so a pull request that changes only
-  # documentation skips it; everything else runs it. Fail-closed: documentation is
-  # docs/ and the Markdown files at the top level or directly in addon/, nothing else
-  # (Markdown in thirdparty/ or addon/quadami/ can end up in the zip); a rename counts
-  # as both its paths. The decision is ci/docs_only.sh, tested in qt-app (ci/tests).
-  # Pushes, tags and manual runs always run the macOS job.
+  # wait in the queue for many minutes), so two kinds of run skip it: a push to master (the
+  # merged PR ran it; the nightly run and tags cover master, Kajetan 2026-10-27), and a pull
+  # request that changes only documentation. Fail-closed: documentation is docs/ and the
+  # Markdown files at the top level or directly in addon/, nothing else (Markdown in
+  # thirdparty/ or addon/quadami/ can end up in the zip); a rename counts as both its paths.
+  # The decision is ci/docs_only.sh, tested in qt-app (ci/tests). Tags, the nightly run and
+  # manual runs always run the macOS job.
   changes:
     name: changes
     runs-on: ubuntu-24.04
@@ -57,7 +63,13 @@ jobs:
         id: diff
         env:
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
         run: |
+          if [ "$EVENT" = push ] && [ "$REF" = refs/heads/master ]; then
+            echo "push to master: macOS runs nightly and on tags, not per merge"
+            echo "macos=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$EVENT" != pull_request ]; then
             echo "$EVENT: run everything"
             echo "macos=true" >> "$GITHUB_OUTPUT"
