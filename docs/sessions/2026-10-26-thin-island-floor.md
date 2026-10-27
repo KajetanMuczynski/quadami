@@ -36,6 +36,6 @@
   stress_ribbon uncovered ×0.05. sculpt dropped 2 → 0, Hausdorff ×0.94. Sword uncovered ×0.71, Hausdorff ×0.76,
   but 3k folds 21 → 50. external dropped 1151 → 1130, non-quads ×0.93, SJ ≤ 0 ×0.95, Hausdorff ×1.08
   (scifihelmet 10k 0.015 → 0.117, corset 3k ×1.7, flighthelmet 3k uncovered ×1.7).
-- Next (v1 and v2): do not ship as is. Payers must stay resolved (only islands far above their own width / minimum pay),
-  plates and straps need the extent filter (note §3.3) or an ask cap, fewer samples for speed; then rerun the
-  same A/B. DO NOT MERGE before the v0.1.0 tag.
+- Next: neither version ships as is. v2 trades most of v1's stress gain for no external loss. Open: why
+  scifihelmet 10k and corset lose fidelity (payers or a thin island misread), the sword's 3k folds, and the
+  sword itself needs the local cap of 4.1 proper (its vines are 56 % of the area). DO NOT MERGE before v0.1.0.
