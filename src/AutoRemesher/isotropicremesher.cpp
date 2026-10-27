@@ -21,6 +21,7 @@
  */
 #include <AutoRemesher/IsotropicRemesher>
 #include <AutoRemesher/Vector3>
+#include <algorithm>
 #include <cstdio>
 
 #include <isotropichalfedgemesh.h>
@@ -42,6 +43,8 @@ bool IsotropicRemesher::remesh()
         remesher.setVertexTargetEdgeLengths(m_vertexTargetEdgeLengths);
     remesher.setSharpEdgeIncludedAngle(180.0 - m_sharpEdgeDegrees);
     remesher.setSmoothNormalDegrees(m_smoothNormalDegrees);
+    if (m_markedEdges != nullptr && !m_markedEdges->empty())
+        remesher.setMarkedEdges(*m_markedEdges);
     if (m_progressHandler)
         remesher.setProgressHandler(m_progressHandler);
     remesher.remesh(m_remeshIterations);
@@ -67,7 +70,17 @@ bool IsotropicRemesher::remesh()
             face->halfedge->previousHalfedge->startVertex->outputIndex,
             face->halfedge->startVertex->outputIndex,
             face->halfedge->nextHalfedge->startVertex->outputIndex });
+        IsotropicHalfedgeMesh::Halfedge* halfedge = face->halfedge;
+        do {
+            // Each marked edge once, from the half that runs low to high.
+            const size_t from = halfedge->startVertex->outputIndex;
+            const size_t to = halfedge->nextHalfedge->startVertex->outputIndex;
+            if (halfedge->marked && from < to)
+                m_remeshedMarkedEdges.emplace_back(from, to);
+            halfedge = halfedge->nextHalfedge;
+        } while (halfedge != face->halfedge);
     }
+    std::sort(m_remeshedMarkedEdges.begin(), m_remeshedMarkedEdges.end());
 
     return true;
 }

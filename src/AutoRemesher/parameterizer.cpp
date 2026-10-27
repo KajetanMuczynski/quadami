@@ -287,13 +287,25 @@ bool Parameterizer::parameterize()
         return false;
     }
 
+    // Per corner: whether its edge is marked.
+    std::vector<char> markedCorners;
+    if (nullptr != m_markedEdges && !m_markedEdges->empty()) {
+        markedCorners.assign(topology.cornerCount(), 0);
+        for (size_t c = 0; c < topology.cornerCount(); ++c) {
+            const size_t a = topology.cornerVertex(c), b = topology.cornerVertex(topology.nextCorner(c));
+            markedCorners[c] = std::binary_search(m_markedEdges->begin(), m_markedEdges->end(),
+                std::make_pair(std::min(a, b), std::max(a, b)));
+        }
+    }
+    const std::vector<char>* marked = markedCorners.empty() ? nullptr : &markedCorners;
+
     report(0.03f, "Solving frame field");
     // Topology, field, and quad cover form the complete active path.
     std::vector<Vector3> field;
     if (nullptr != m_triangleFieldVectors) {
         field = *m_triangleFieldVectors;
     } else if (!FrameField::create(topology, m_sharpEdgeDegrees,
-                   &field, &m_diagnostics)) {
+                   &field, &m_diagnostics, marked)) {
         std::cerr << "Frame field solve failed" << std::endl;
         return false;
     }
@@ -306,6 +318,7 @@ bool Parameterizer::parameterize()
     if (m_singularitySimplification) {
         report(0.17f, "Simplifying singularities");
         simplifier.setSharpEdgeDegrees(m_sharpEdgeDegrees);
+        simplifier.setMarkedCorners(marked);
         simplifier.setMaximumPairDistance(m_maximumSingularityPairDistance);
         simplifier.simplify();
         {
@@ -347,7 +360,7 @@ bool Parameterizer::parameterize()
     const bool coverSolved = QuadParameterizer::parameterize(*m_vertices, *m_triangles,
         &field, m_scaling * baseEdgeLength, m_sharpEdgeDegrees, &cover,
         &faceScalingField, &faceScalingU, &faceScalingV,
-        coverProgress ? &coverProgress : nullptr);
+        coverProgress ? &coverProgress : nullptr, marked);
     for (auto& record : cover.diagnostics)
         m_diagnostics.push_back(std::move(record));
     if (!coverSolved) {

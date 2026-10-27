@@ -305,8 +305,12 @@ void IsotropicHalfedgeMesh::breakEdge(IsotropicHalfedgeMesh::Halfedge *halfedge)
     
     Vertex *breakPointVertex = newVertex();
 
-    // Use PN Triangle edge midpoint if both endpoints have smooth normals
-    if (!halfedge->startVertex->_smoothNormal.isZero() &&
+    // A marked edge is split on its line, so the new vertex stays on it.
+    if (halfedge->marked) {
+        breakPointVertex->position = (halfedge->startVertex->position +
+            halfedge->nextHalfedge->startVertex->position) * 0.5;
+        breakPointVertex->marked = true;
+    } else if (!halfedge->startVertex->_smoothNormal.isZero() &&
             !halfedge->nextHalfedge->startVertex->_smoothNormal.isZero()) {
         const Vector3 &p1 = halfedge->startVertex->position;
         const Vector3 &p2 = halfedge->nextHalfedge->startVertex->position;
@@ -348,7 +352,10 @@ void IsotropicHalfedgeMesh::breakEdge(IsotropicHalfedgeMesh::Halfedge *halfedge)
             rightNewFaceHalfedges, rightOldFaceHalfedges);
         linkHalfedgePair(leftOldFaceHalfedges[1], rightNewFaceHalfedges[1]);
         linkHalfedgePair(leftNewFaceHalfedges[1], rightOldFaceHalfedges[1]);
+        rightNewFaceHalfedges[1]->marked = oppositeHalfedge->marked;
     }
+    // The second half of the split edge; the halves across are new edges.
+    leftNewFaceHalfedges[1]->marked = halfedge->marked;
 }
 
 void IsotropicHalfedgeMesh::collectVerticesAroundVertex(Vertex *vertex,
@@ -566,6 +573,8 @@ bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge)
 {
     if (nullptr == halfedge->oppositeHalfedge)
         return false;
+    if (halfedge->marked)
+        return false;
         
     Vertex *topVertex = halfedge->previousHalfedge->startVertex;
     Vertex *bottomVertex = halfedge->oppositeHalfedge->previousHalfedge->startVertex;
@@ -671,7 +680,7 @@ bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge)
     return true;
 }
 
-bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared)
+bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared, const Vector3 *target)
 {   
     // Collapsing a boundary edge would need the face on the other side, which
     // a boundary edge does not have.
@@ -679,7 +688,7 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
         return false;
 
     Halfedge *opposite = halfedge->oppositeHalfedge;
-    
+
     Vertex *topVertex = halfedge->previousHalfedge->startVertex;
     Vertex *bottomVertex = opposite->previousHalfedge->startVertex;
     
@@ -693,7 +702,9 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
         return false;
     
     Vector3 collapseTo;
-    if (!halfedge->startVertex->_smoothNormal.isZero() &&
+    if (nullptr != target) {
+        collapseTo = *target;
+    } else if (!halfedge->startVertex->_smoothNormal.isZero() &&
             !halfedge->nextHalfedge->startVertex->_smoothNormal.isZero()) {
         const Vector3 &p1 = halfedge->startVertex->position;
         const Vector3 &p2 = halfedge->nextHalfedge->startVertex->position;
@@ -764,10 +775,27 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
         bottomVertex->firstHalfedge = opposite->nextHalfedge->oppositeHalfedge;
     }
     
+    // Each triangle's two other sides become one edge.  It is marked if
+    // either was: the caller keeps a marked vertex where it is, so a marked
+    // side keeps its place (collapseShortEdges).
+    const bool topMarked = halfedge->previousHalfedge->marked || halfedge->nextHalfedge->marked;
+    const bool bottomMarked = opposite->previousHalfedge->marked || opposite->nextHalfedge->marked;
     linkHalfedgePair(halfedge->previousHalfedge->oppositeHalfedge,
         halfedge->nextHalfedge->oppositeHalfedge);
     linkHalfedgePair(opposite->previousHalfedge->oppositeHalfedge,
         opposite->nextHalfedge->oppositeHalfedge);
+    const auto mark = [](Halfedge *side) {
+        if (nullptr != side)
+            side->marked = true;
+    };
+    if (topMarked) {
+        mark(halfedge->previousHalfedge->oppositeHalfedge);
+        mark(halfedge->nextHalfedge->oppositeHalfedge);
+    }
+    if (bottomMarked) {
+        mark(opposite->previousHalfedge->oppositeHalfedge);
+        mark(opposite->nextHalfedge->oppositeHalfedge);
+    }
     
     rightVertex->position = collapseTo;
     
@@ -776,6 +804,46 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
     bottomFace->removed = true;
 
     return true;
+}
+
+void IsotropicHalfedgeMesh::markEdges(const std::vector<std::pair<size_t, size_t>> &edges)
+{
+    std::vector<Vertex *> vertices;
+    for (Vertex *vertex = m_firstVertex; nullptr != vertex; vertex = vertex->nextVertex)
+        vertices.push_back(vertex);
+    std::set<std::pair<Vertex *, Vertex *>> marked;
+    for (const auto &edge: edges) {
+        if (edge.first >= vertices.size() || edge.second >= vertices.size())
+            continue;
+        marked.insert({vertices[edge.first], vertices[edge.second]});
+        marked.insert({vertices[edge.second], vertices[edge.first]});
+    }
+    for (Face *face = m_firstFace; nullptr != face; face = face->nextFace) {
+        if (face->removed)
+            continue;
+        Halfedge *halfedge = face->halfedge;
+        do {
+            // A boundary edge is kept anyway (featureBoundaries).
+            if (nullptr != halfedge->oppositeHalfedge &&
+                    marked.count({halfedge->startVertex, halfedge->nextHalfedge->startVertex})) {
+                halfedge->marked = true;
+                halfedge->startVertex->marked = true;
+            }
+            halfedge = halfedge->nextHalfedge;
+        } while (halfedge != face->halfedge);
+    }
+}
+
+bool IsotropicHalfedgeMesh::isStraightMarkedChainVertex(Vertex *vertex)
+{
+    std::vector<Vector3> directions;
+    iterateVertexHalfedges(vertex, [&](Halfedge *halfedge) {
+        if (halfedge->marked)
+            directions.push_back((halfedge->nextHalfedge->startVertex->position - vertex->position).normalized());
+        return true;
+    });
+    // cos 150 degrees
+    return 2 == directions.size() && Vector3::dotProduct(directions[0], directions[1]) <= -0.8660254;
 }
 
 void IsotropicHalfedgeMesh::updateVertexValences()

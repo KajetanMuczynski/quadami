@@ -62,6 +62,20 @@ public:
         m_smoothNormalDegrees = degrees;
     }
 
+    // Vertex pairs of the input edges to keep as edges of the result
+    // (marked edges): split along their line, never flipped, collapsed only
+    // along it.
+    void setMarkedEdges(const std::vector<std::pair<size_t, size_t>>* edges)
+    {
+        m_markedEdges = edges;
+    }
+
+    // The result's edges on the marked ones, as vertex pairs.
+    const std::vector<std::pair<size_t, size_t>>& remeshedMarkedEdges()
+    {
+        return m_remeshedMarkedEdges;
+    }
+
     void setProgressHandler(ProgressHandler progressHandler)
     {
         m_progressHandler = std::move(progressHandler);
@@ -86,6 +100,8 @@ private:
     std::vector<std::vector<size_t>> m_triangles;
     const std::unordered_set<size_t>* m_constraintVertices = nullptr;
     const std::vector<double>* m_vertexTargetEdgeLengths = nullptr;
+    const std::vector<std::pair<size_t, size_t>>* m_markedEdges = nullptr;
+    std::vector<std::pair<size_t, size_t>> m_remeshedMarkedEdges;
     double m_targetEdgeLength = 0;
     double m_sharpEdgeDegrees = 60;
     double m_smoothNormalDegrees = 0.0;

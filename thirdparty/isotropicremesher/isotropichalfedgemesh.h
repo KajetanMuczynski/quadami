@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <set>
 #include <functional>
+#include <utility>
+#include <vector>
 #include "vector3.h"
 #include <cstdint>
 
@@ -47,6 +49,9 @@ public:
         size_t debugIndex = 0;
         size_t outputIndex = 0;
         bool featured = false;
+        // On an edge the user marked (markEdges): never moved or removed
+        // except by a collapse along the marked line.
+        bool marked = false;
         double targetEdgeLength = 0.0; // 0 = use global default in split/collapse
         Vertex *_allocLink = nullptr;
     };
@@ -70,6 +75,9 @@ public:
         Halfedge *previousHalfedge = nullptr;
         Halfedge *oppositeHalfedge = nullptr;
         int featureState = -1;
+        // Both halves of a marked edge carry it; splits pass it on, flips
+        // and collapses never remove it.
+        bool marked = false;
         size_t debugIndex = 0;
         Halfedge *_allocLink = nullptr;
     };
@@ -80,7 +88,13 @@ public:
     
     double averageEdgeLength();
     void breakEdge(Halfedge *halfedge);
-    bool collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared);
+    // collapseTo: where the kept vertex goes; nullptr = the edge's midpoint.
+    bool collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared, const Vector3 *collapseTo=nullptr);
+    // Marks the interior edges between the given input vertex pairs.
+    void markEdges(const std::vector<std::pair<size_t, size_t>> &edges);
+    // On exactly two marked edges that meet at 150 degrees or more: a point
+    // of a marked line that a collapse along the line may remove.
+    bool isStraightMarkedChainVertex(Vertex *vertex);
     bool flipEdge(Halfedge *halfedge);
     void relaxVertex(Vertex *vertex);
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);

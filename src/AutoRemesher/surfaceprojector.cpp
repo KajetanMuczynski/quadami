@@ -351,7 +351,8 @@ Vector3 closestPointOnSegment(const Vector3& p, const Vector3& a, const Vector3&
 }
 
 SurfaceProjector::SurfaceProjector(const std::vector<Vector3>* vertices,
-    const std::vector<std::vector<size_t>>* triangles, double sharpEdgeDegrees)
+    const std::vector<std::vector<size_t>>* triangles, double sharpEdgeDegrees,
+    const std::vector<std::pair<size_t, size_t>>* markedEdges)
     : m_vertices(vertices)
     , m_triangles(triangles)
 {
@@ -392,6 +393,8 @@ SurfaceProjector::SurfaceProjector(const std::vector<Vector3>* vertices,
             ++j;
         if (1 == j - i)
             m_boundary.edges.push_back(edges[i].first);
+        else if (nullptr != markedEdges && std::binary_search(markedEdges->begin(), markedEdges->end(), edges[i].first))
+            m_creases.edges.push_back(edges[i].first);
         else if (2 == j - i && findCreases) {
             const Vector3& a = m_triangleNormals[edges[i].second];
             const Vector3& b = m_triangleNormals[edges[i + 1].second];

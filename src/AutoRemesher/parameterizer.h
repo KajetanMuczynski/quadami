@@ -86,6 +86,13 @@ public:
         m_sharpEdgeDegrees = degrees;
     }
 
+    // Vertex pairs of the edges the user marked, kept as creases whatever
+    // their angle.
+    void setMarkedEdges(const std::vector<std::pair<size_t, size_t>>* edges)
+    {
+        m_markedEdges = edges;
+    }
+
     void setAnisotropy(double anisotropy)
     {
         m_anisotropy = anisotropy;
@@ -127,6 +134,7 @@ private:
     double m_targetQuadCount = 0.0;
     double m_adaptivity = 0.5;
     double m_sharpEdgeDegrees = 90.0;
+    const std::vector<std::pair<size_t, size_t>>* m_markedEdges = nullptr;
     double m_anisotropy = 1.0;
     double m_maxAspectRatio = 2.3;
     bool m_singularitySimplification = true;

@@ -35,9 +35,12 @@ namespace AutoRemesher {
 class FrameField {
 public:
     // When `diagnostics` is given, appends a "frame_field" record to it.
+    // `markedCorners`, per corner, locks the field to that corner's edge
+    // whatever its angle (marked edges).
     static bool create(const SurfaceMesh& mesh, double sharpEdgeDegrees,
         std::vector<Vector3>* field,
-        std::vector<DiagnosticRecord>* diagnostics = nullptr);
+        std::vector<DiagnosticRecord>* diagnostics = nullptr,
+        const std::vector<char>* markedCorners = nullptr);
 
     // The angle a cross field asks the map to have around an interior
     // vertex, in quarter turns: 4 at a regular vertex, 3 at a valence-3

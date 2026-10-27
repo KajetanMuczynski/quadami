@@ -112,6 +112,31 @@ public:
         m_sharpEdgeDegrees = degrees;
     }
 
+    // As RemeshRequest::featureEdges: input vertex pairs the user marked,
+    // kept as creases whatever their angle.
+    void setMarkedEdges(std::vector<std::pair<size_t, size_t>> edges)
+    {
+        m_markedEdges = std::move(edges);
+    }
+
+    // Marked pairs that are not an edge of the cleaned input, so ignored.
+    size_t ignoredMarkedEdgeCount() const
+    {
+        return m_ignoredMarkedEdgeCount;
+    }
+    // Islands whose marked edges were dropped: the run that followed them
+    // folded more quads than the run without them.
+    size_t markedEdgesDroppedIslandCount() const
+    {
+        return m_markedEdgesDroppedIslandCount;
+    }
+    // Islands whose marks were not used: more than a quarter of the planned
+    // quad edges would have to lie on them.
+    size_t markedEdgesTooDenseIslandCount() const
+    {
+        return m_markedEdgesTooDenseIslandCount;
+    }
+
     void setAnisotropy(double anisotropy)
     {
         m_anisotropy = anisotropy;
@@ -408,6 +433,11 @@ private:
     double m_adaptivity = 0.5;
     double m_anisotropy = 1.0;
     double m_sharpEdgeDegrees = m_defaultSharpEdgeDegrees;
+    // Sorted, low index first, no duplicates once remesh() has checked them.
+    std::vector<std::pair<size_t, size_t>> m_markedEdges;
+    size_t m_ignoredMarkedEdgeCount = 0;
+    size_t m_markedEdgesDroppedIslandCount = 0;
+    size_t m_markedEdgesTooDenseIslandCount = 0;
     double m_smoothNormalDegrees = 0.0;
     bool m_useQex = true;
     bool m_repairInputFolds = false;
@@ -434,7 +464,8 @@ private:
         double voxelSize,
         double sharpEdgeDegrees,
         size_t islandIndex,
-        DecimationStats* stats);
+        DecimationStats* stats,
+        std::vector<std::pair<size_t, size_t>>* markedEdges = nullptr);
     static void resample(std::vector<Vector3>& vertices,
         std::vector<std::vector<size_t>>& triangles,
         const SurfaceTopology& topology,
@@ -447,7 +478,8 @@ private:
         std::atomic<long long>* adaptiveFieldTimeUs,
         const ProgressHandler* progressHandler,
         std::vector<Vector3>* decimatedVerticesOut,
-        std::vector<std::vector<size_t>>* decimatedTrianglesOut);
+        std::vector<std::vector<size_t>>* decimatedTrianglesOut,
+        std::vector<std::pair<size_t, size_t>>* markedEdges = nullptr);
     static double calculateMeshArea(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles);
 };

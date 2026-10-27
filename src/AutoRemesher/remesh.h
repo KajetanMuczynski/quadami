@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 9;
+const int InterfaceVersionMinor = 10;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -112,9 +112,15 @@ struct RemeshRequest {
     // a0 b0 c0 a1 b1 c1 ..., indices into positions.  Triangles only.
     std::vector<uint32_t> triangles;
     RemeshParameters parameters;
+    // Since 1.10.  Edges the user marked (Blender's Sharp marks), as vertex
+    // pairs a0 b0 a1 b1 ..., indices into positions.  The output keeps a row
+    // of edges along them whatever their angle.  A pair that is not an edge
+    // of the triangles is ignored and counted (report warning).  Empty: only
+    // the dihedral test of sharpEdgeDegrees finds creases, as before.
+    std::vector<uint32_t> featureEdges;
     // Planned optional inputs, each empty by default so that leaving it out
-    // keeps today's behaviour: vertexDensity, featureEdges, faceGroups,
-    // guideCurves, symmetry (see INTERFACE.md in the project docs).
+    // keeps today's behaviour: vertexDensity, faceGroups, guideCurves,
+    // symmetry (see INTERFACE.md in the project docs).
 };
 
 // Lets another thread stop a running remesh().  The core checks it at every
@@ -170,6 +176,10 @@ const double LostPartQuadWidths = 3.0;
 struct QualityReport {
     size_t inputVertexCount = 0;
     size_t inputTriangleCount = 0;
+    // Since 1.10.  Pairs in RemeshRequest::featureEdges, and how many of
+    // them were ignored because they are not an edge of the cleaned input.
+    size_t inputFeatureEdgeCount = 0;
+    size_t ignoredFeatureEdgeCount = 0;
     size_t vertexCount = 0;
     size_t faceCount = 0;
     size_t quadCount = 0;

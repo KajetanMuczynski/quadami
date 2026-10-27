@@ -54,7 +54,10 @@ public:
         const std::vector<double>* faceScalingV = nullptr,
         // Reports 0..1 across the quad cover solve, which is the single longest
         // step of the whole pipeline and would otherwise be one silent block.
-        const ProgressHandler* progressHandler = nullptr);
+        const ProgressHandler* progressHandler = nullptr,
+        // Per corner: the corner's edge is marked, so a hard edge whatever
+        // its angle.
+        const std::vector<char>* markedCorners = nullptr);
 };
 
 }

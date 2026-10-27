@@ -153,6 +153,20 @@ class RemeshSettings(bpy.types.PropertyGroup):
         default="laplacian",
         description="How the quads are evened out after they are found")
 
+    # Not a CLI parameter: which marks go to the remesher as marked edges
+    # (`l` lines of the input OBJ, RemeshRequest::featureEdges).
+    follow_marks: EnumProperty(
+        name="Follow Marks",
+        items=(
+            ("SHARP", "Sharp", "Edges marked Sharp"),
+            ("CREASE", "Crease", "Edges with a subdivision crease"),
+            ("SEAM", "Seam", "UV seams"),
+        ),
+        options={"ENUM_FLAG"},
+        default={"SHARP"},
+        description="Marked edges the result keeps a row of edges along, whatever their "
+                    "angle (Sharp Edge decides only for unmarked edges)")
+
     # Not a remesh parameter: a choice next to Repair Folds and Re-run.
     flatten_spikes: BoolProperty(
         name="Also Flatten Needle Spikes", default=False,
@@ -185,9 +199,28 @@ ADVANCED_PARAMETERS = ("resolution", "anisotropy", "edge_scaling", "smooth_norma
 KEEP_OPTIONS = ("keep_attributes", "keep_uvs")
 
 
-def _mesh_arrays(context, obj):
+def _edge_vertices(mesh):
+    edges = np.empty(len(mesh.edges) * 2, dtype=np.int32)
+    mesh.edges.foreach_get("vertices", edges)
+    return edges.reshape(-1, 2)
+
+
+def _marked_pairs(mesh, kinds):
+    """Vertex pairs (E, 2) of the mesh's edges that carry any of the marks
+    in kinds (follow_marks values)."""
+    marks = transfer.marked_edges(mesh)
+    wanted = np.zeros(len(mesh.edges), dtype=bool)
+    for kind in kinds:
+        values = marks.get(kind.lower())
+        if values is not None:
+            wanted |= values > 0
+    return _edge_vertices(mesh)[wanted]
+
+
+def _mesh_arrays(context, obj, follow_marks=()):
     """Vertex positions and triangles of the evaluated mesh, in object space,
-    and whether most of its faces are smooth shaded."""
+    whether most of its faces are smooth shaded, and the vertex pairs of the
+    edges carrying the marks in follow_marks."""
     depsgraph = context.evaluated_depsgraph_get()
     evaluated = obj.evaluated_get(depsgraph)
     mesh = evaluated.to_mesh()
@@ -199,10 +232,19 @@ def _mesh_arrays(context, obj):
         mesh.loop_triangles.foreach_get("vertices", triangles)
         smooth_faces = np.empty(len(mesh.polygons), dtype=bool)
         mesh.polygons.foreach_get("use_smooth", smooth_faces)
+        marked = np.empty((0, 2), dtype=np.int32)
+        if follow_marks:
+            # Smooth by Angle (Shade Auto Smooth) marks every edge above its
+            # angle Sharp on the evaluated mesh. Where the modifiers keep the
+            # edges as they are, the user's own marks are the original's.
+            base = obj.data
+            same = len(base.vertices) == len(mesh.vertices) and np.array_equal(
+                _edge_vertices(base), _edge_vertices(mesh))
+            marked = _marked_pairs(base if same else mesh, follow_marks)
     finally:
         evaluated.to_mesh_clear()
     smooth = bool(smooth_faces.size) and 2 * np.count_nonzero(smooth_faces) >= smooth_faces.size
-    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth
+    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth, marked
 
 
 def _source(obj):
@@ -369,16 +411,17 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         elif self.repair_folds:
             self.report({"ERROR"}, "The original object is gone; select it and remesh again")
             return {"CANCELLED"}
-        positions, triangles, self._smooth = _mesh_arrays(context, obj)
+        settings = _settings(context)
+        positions, triangles, self._smooth, marked = _mesh_arrays(context, obj, settings.follow_marks)
         if len(triangles) == 0:
             self.report({"ERROR"}, "The mesh has no faces")
             return {"CANCELLED"}
-        parameters = _settings(context).parameters()
+        parameters = settings.parameters()
         if self.repair_folds:
             parameters["repair_folds"] = True
             if self.flatten_spikes:
                 parameters["flatten_spikes"] = True
-        job = worker.RemeshJob(executable, positions, triangles, parameters)
+        job = worker.RemeshJob(executable, positions, triangles, parameters, marked)
         try:
             job.start()
         except (OSError, ValueError) as error:
@@ -499,6 +542,10 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         column.enabled = _job is None
         for name in MAIN_PARAMETERS:
             column.prop(settings, name)
+        row = layout.row(align=True)
+        row.enabled = _job is None
+        row.label(text="Follow Marks")
+        row.prop(settings, "follow_marks")
         header, body = layout.panel(ID + "_advanced", default_closed=True)
         header.label(text="Advanced")
         if body is not None:

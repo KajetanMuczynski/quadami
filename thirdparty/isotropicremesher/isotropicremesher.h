@@ -43,6 +43,9 @@ public:
     void setVertexTargetEdgeLengths(const std::vector<double> *targetLengths);
     void setTargetTriangleCount(size_t triangleCount);
     void setSmoothNormalDegrees(double degrees);
+    // Input vertex pairs of edges to keep as edges (IsotropicHalfedgeMesh::markEdges).
+    // Call after construction, before remesh().
+    void setMarkedEdges(const std::vector<std::pair<size_t, size_t>> &edges);
     // Reports 0..1 across remesh(), which is otherwise a long silent stretch of
     // the pipeline. `name` labels the pass that is starting.
     void setProgressHandler(std::function<void(float, const char *)> handler)

@@ -35,6 +35,8 @@ public:
         std::vector<Vector3>* faceField);
     void setMaximumPairDistance(size_t hops) { m_maximumPairDistance = hops; }
     void setSharpEdgeDegrees(double degrees) { m_sharpEdgeDegrees = degrees; }
+    // Per corner: the corner's edge is marked, so sharp whatever its angle.
+    void setMarkedCorners(const std::vector<char>* corners) { m_markedCorners = corners; }
     void simplify();
     // Per vertex the cone's charge in quarter turns, exact (not mod 4):
     // 1 at a valence-3 cone, -1 at a valence-5 one, 4 where the field asks
@@ -50,6 +52,7 @@ private:
     std::vector<Vector3>* m_field;
     size_t m_maximumPairDistance = 6, m_maximumRounds = 4, m_regionMargin = 6;
     double m_sharpEdgeDegrees = 90.0;
+    const std::vector<char>* m_markedCorners = nullptr;
     size_t m_singularityCountBefore = 0, m_singularityCountAfter = 0, m_cancelledPairCount = 0;
     std::vector<double> m_angles, m_connection;
     std::vector<bool> m_sharpCorner;

@@ -81,3 +81,7 @@ add_test(NAME thin_parts COMMAND thin_parts_test)
 add_executable(quad_smoothing_test quad_smoothing_test.cpp)
 target_link_libraries(quad_smoothing_test PRIVATE autoremesher_core)
 add_test(NAME quad_smoothing COMMAND quad_smoothing_test)
+
+add_executable(marked_edges_test marked_edges_test.cpp)
+target_link_libraries(marked_edges_test PRIVATE autoremesher_core)
+add_test(NAME marked_edges COMMAND marked_edges_test)

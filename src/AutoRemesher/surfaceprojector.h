@@ -64,7 +64,10 @@ public:
     // relax(); 0 (or 180 and more) means no creases.
     SurfaceProjector(const std::vector<Vector3>* vertices,
         const std::vector<std::vector<size_t>>* triangles,
-        double sharpEdgeDegrees = 0.0);
+        double sharpEdgeDegrees = 0.0,
+        // Vertex pairs (sorted, low first) of marked edges: creases whatever
+        // their angle; those that are not an edge of `triangles` are skipped.
+        const std::vector<std::pair<size_t, size_t>>* markedEdges = nullptr);
     ~SurfaceProjector();
 
     struct Result {

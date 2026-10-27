@@ -85,7 +85,8 @@ namespace {
 }
 
 bool FrameField::create(const SurfaceMesh& mesh, double sharpEdgeDegrees,
-    std::vector<Vector3>* field, std::vector<DiagnosticRecord>* diagnostics)
+    std::vector<Vector3>* field, std::vector<DiagnosticRecord>* diagnostics,
+    const std::vector<char>* markedCorners)
 {
     if (nullptr == field || mesh.faceCount() == 0)
         return false;
@@ -102,7 +103,8 @@ bool FrameField::create(const SurfaceMesh& mesh, double sharpEdgeDegrees,
     for (size_t faceIndex = 0; faceIndex < faces; ++faceIndex)
         for (size_t cornerIndex = 3 * faceIndex; cornerIndex < 3 * faceIndex + 3; ++cornerIndex) {
             const size_t oppositeCornerIndex = mesh.oppositeCorner(cornerIndex);
-            if (oppositeCornerIndex != SurfaceMesh::npos && std::fabs(mesh.normalAngle(cornerIndex)) <= sharpRadians)
+            if (oppositeCornerIndex != SurfaceMesh::npos && std::fabs(mesh.normalAngle(cornerIndex)) <= sharpRadians
+                && (nullptr == markedCorners || !(*markedCorners)[cornerIndex]))
                 continue;
             const double fieldAngle = kSymmetry * tangentAngle(mesh.edgeVector(cornerIndex), facetBases[faceIndex]);
             periodic[2 * faceIndex] = std::cos(fieldAngle);

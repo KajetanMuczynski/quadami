@@ -43,6 +43,11 @@ void IsotropicRemesher::setTargetEdgeLength(double edgeLength)
     m_targetEdgeLength = edgeLength;
 }
 
+void IsotropicRemesher::setMarkedEdges(const std::vector<std::pair<size_t, size_t>> &edges)
+{
+    m_halfedgeMesh->markEdges(edges);
+}
+
 void IsotropicRemesher::setSmoothNormalDegrees(double degrees)
 {
     m_smoothNormalDegrees = degrees;
@@ -438,9 +443,22 @@ void IsotropicRemesher::collapseShortEdges(double minEdgeLengthSquared, double m
                 edgeMaxLenSq = std::pow(4.0 / 3.0 * edgeTarget, 2);
             }
             if (lengthSquared < edgeMinLenSq) {
-                if (!halfedge->startVertex->featured && !nextHalfedge->startVertex->featured) {
-                    if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq)) {
-                        break;
+                IsotropicHalfedgeMesh::Vertex *from = halfedge->startVertex;
+                IsotropicHalfedgeMesh::Vertex *to = nextHalfedge->startVertex;
+                if (!from->featured && !to->featured) {
+                    if (!from->marked && !to->marked) {
+                        if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq)) {
+                            break;
+                        }
+                    } else if (!from->marked ||
+                            (halfedge->marked && m_halfedgeMesh->isStraightMarkedChainVertex(from))) {
+                        // Onto a marked vertex, which stays where it is: an
+                        // unmarked neighbour, or the next vertex along a
+                        // nearly straight marked line (not at a corner, an
+                        // end or a crossing).
+                        if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq, &to->position)) {
+                            break;
+                        }
                     }
                 }
             }
@@ -482,6 +500,8 @@ void IsotropicRemesher::shiftVertices()
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
         //if (vertex->featured)
         //    continue;
+        if (vertex->marked)
+            continue;
         m_halfedgeMesh->relaxVertex(vertex);
     }
 }
@@ -496,7 +516,7 @@ void IsotropicRemesher::projectVertices()
     for (IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr);
             nullptr != vertex;
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
-        if (vertex->featured)
+        if (vertex->featured || vertex->marked)
             continue;
 
         const auto &startHalfedge = vertex->firstHalfedge;

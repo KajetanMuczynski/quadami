@@ -79,6 +79,18 @@ class ObjTest(unittest.TestCase):
         self.assertTrue((sizes == 3).all())
         np.testing.assert_array_equal(indices.reshape(-1, 3), triangles)
 
+    def test_marked_edges_are_lines(self):
+        positions, triangles = uv_sphere(4, 8)
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "mesh.obj")
+            worker.write_obj(path, positions, triangles, np.array([[1, 2], [2, 3]]))
+            with open(path) as f:
+                lines = [line.strip() for line in f if line.startswith("l ")]
+            # read_obj reads faces only, as the CLI's output has no lines.
+            _, sizes, _ = worker.read_obj(path)
+        self.assertEqual(lines, ["l 2 3", "l 3 4"])
+        self.assertEqual(len(sizes), len(triangles))
+
 
 class NamesTest(unittest.TestCase):
     @unittest.skipIf(sys.version_info < (3, 11), "needs tomllib")
@@ -371,6 +383,19 @@ class CliTest(unittest.TestCase):
                                 {"target_quads": 500, "quad_smoothing": "tangential"})
         self.assertEqual(outcome.status, "ok", outcome.message + "\n" + outcome.log)
         self.assertEqual(outcome.report["parameters"]["quad_smoothing"], "tangential")
+
+    def test_marked_edges(self):
+        # The equator of uv_sphere() (64 rings, 128 segments): ring 32.
+        segments = 128
+        first = 1 + 31 * segments
+        ring = [(first + j, first + (j + 1) % segments) for j in range(segments)]
+        outcome = worker.remesh(EXECUTABLE, self.positions.astype(np.float32), self.triangles,
+                                {"target_quads": 500}, marked_edges=np.array(ring + [(0, first)]))
+        self.assertEqual(outcome.status, "ok", outcome.message + "\n" + outcome.log)
+        # (0, first) is not an edge of the sphere: ignored and said so.
+        self.assertEqual(outcome.report["input"]["feature_edges"], segments + 1)
+        self.assertEqual(outcome.report["input"]["ignored_feature_edges"], 1)
+        self.assertTrue(any("marked edge" in w for w in outcome.report["warnings"]), outcome.report["warnings"])
 
     def test_target_above_maximum(self):
         positions, triangles = uv_sphere(16, 32)
