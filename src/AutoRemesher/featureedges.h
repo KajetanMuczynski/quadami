@@ -77,7 +77,7 @@ FeatureEdgeSet classifySharpEdges(const std::vector<Vector3>& vertices,
 // latter.  The input's other sharp edges are not carried: the remesher's
 // smoothing moves their vertices off the crease and bends them, and the
 // field and isolines constrained to a bent edge fold the parameterization
-// (TODO 2.6 measurements: continuous UV flips x4.5 on the cad set), where
+// (TODO 2.6, cad set: continuous UV flips x2.2 summed, SJ p1 0.62 -> 0.47), where
 // the edges sharp on T are the creases T really has.
 FeatureEdgeSet reclassifyFeatureEdges(const FeatureEdgeSet& carried,
     const std::vector<Vector3>& vertices,

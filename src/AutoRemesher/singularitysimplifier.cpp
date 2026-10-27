@@ -258,7 +258,7 @@ void SingularitySimplifier::buildFramesAndConnection()
         // Concave sharp edges only (normalAngle > 0), as before the set:
         // freezing the convex ones too keeps cones from reaching the convex
         // corners they belong to (inferred), and measured worse (TODO 2.6:
-        // cad SJ p1 x0.82, UV flips x1.25).
+        // cad set: SJ p1 0.61 -> 0.59, UV flips x1.3 summed).
         m_sharpCorner[c] = 0 != sharpCorners[c] && m_mesh.normalAngle(c) > 0.0;
     }
 }
