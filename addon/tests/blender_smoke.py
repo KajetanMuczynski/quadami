@@ -79,6 +79,26 @@ try:
     source.rotation_mode = "XYZ"
     source.rotation_euler = (0.1, 0.2, 0.3)
     source.delta_location = (0.0, 0.5, 0.0)
+    # Data the result copies (transfer.py): two materials split at the
+    # equator, which is also marked sharp, crease and seam; a vertex group
+    # and a colour attribute that grow with x; the sphere's own UV map.
+    mesh = source.data
+    for name in ("Top", "Bottom"):
+        mesh.materials.append(bpy.data.materials.new(name))
+    for polygon in mesh.polygons:
+        polygon.material_index = int(polygon.center.z < 0)
+    weights = source.vertex_groups.new(name="Weights")
+    for vertex in mesh.vertices:
+        weights.add([vertex.index], max(vertex.co.x, 0.0), "REPLACE")
+    density = mesh.color_attributes.new("Density", "FLOAT_COLOR", "POINT")
+    for vertex in mesh.vertices:
+        density.data[vertex.index].color = (max(vertex.co.x, 0.0), 0.0, 0.0, 1.0)
+    # Each layer written right after it is looked up: adding a layer (the
+    # first use_seam adds one) can move the others in Blender 4.2.
+    equator = [all(abs(mesh.vertices[v].co.z) < 1e-4 for v in edge.vertices) for edge in mesh.edges]
+    mesh.edges.foreach_set("use_seam", equator)
+    mesh.attributes.new("sharp_edge", "BOOLEAN", "EDGE").data.foreach_set("value", equator)
+    mesh.attributes.new("crease_edge", "FLOAT", "EDGE").data.foreach_set("value", [0.5 * e for e in equator])
     bpy.context.view_layer.update()
 
     positions, triangles, smooth = addon._mesh_arrays(bpy.context, source)
@@ -131,6 +151,44 @@ try:
     assert len(addon._mesh_arrays(bpy.context, source)[1]) == len(triangles)
     flat, _ = addon._build_object(bpy.context, source, outcome, False)
     assert not any(polygon.use_smooth for polygon in flat.data.polygons)
+
+    # Keep from Original: everything, UVs included.
+    settings.keep_uvs = True
+    addon._keep(bpy.context, source, obj, final_report, settings)
+    kept = final_report["kept"]
+    assert kept["materials"] == 2 and kept["vertex_groups"] == 1 and kept["colors"] == 1, kept
+    assert kept["uv_maps"] == 1 and kept["sharp"] == kept["seam"] == kept["crease"] > 0, kept
+    result_mesh = obj.data
+    assert [m.name for m in result_mesh.materials] == ["Top", "Bottom"]
+    group = obj.vertex_groups["Weights"]
+    for polygon in result_mesh.polygons:
+        if abs(polygon.center.z) > 0.1:
+            assert polygon.material_index == int(polygon.center.z < 0), polygon.center
+    for vertex in result_mesh.vertices:
+        weight = next((g.weight for g in vertex.groups if g.group == group.index), 0.0)
+        assert abs(weight - max(vertex.co.x, 0.0)) < 0.02, (vertex.co, weight)
+        color = result_mesh.color_attributes["Density"].data[vertex.index].color[0]
+        assert abs(color - max(vertex.co.x, 0.0)) < 0.02, (vertex.co, color)
+    # The equator seam comes back as one closed line: it cuts the sphere in two.
+    seams = {edge.key for edge in result_mesh.edges if edge.use_seam}
+    owner, parent = {}, list(range(len(result_mesh.polygons)))
+
+    def root(i):
+        while parent[i] != i:
+            i = parent[i]
+        return i
+
+    for polygon in result_mesh.polygons:
+        for key in polygon.edge_keys:
+            if key not in seams:
+                if key in owner:
+                    parent[root(polygon.index)] = root(owner[key])
+                owner.setdefault(key, polygon.index)
+    halves = {root(i) for i in range(len(parent))}
+    assert len(halves) == 2, len(halves)
+    for vertex_index in {v for key in seams for v in key}:
+        assert abs(result_mesh.vertices[vertex_index].co.z) < 0.1, result_mesh.vertices[vertex_index].co
+    assert result_mesh.uv_layers.active.name == "UVMap"
     for label, value, problem in report.summary_rows(final_report):
         print("  %-20s %s%s" % (label, value, "  <-" if problem else ""))
     for text, first, problem in report.warning_lines(final_report):
@@ -158,7 +216,8 @@ try:
         addon.VIEW3D_PT_remesh_quads.draw(types.SimpleNamespace(layout=Layout(labels)), bpy.context)
         return " ".join(labels)
 
-    assert "test warning" in panel_labels()
+    labels = panel_labels()
+    assert "test warning" in labels and "Copied from the original" in labels, labels
     bpy.context.view_layer.objects.active = source
     source.scale = (1.0, 1.0, 3.0)
     bpy.context.view_layer.update()

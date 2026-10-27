@@ -372,6 +372,12 @@ class CliTest(unittest.TestCase):
         self.assertIs(outcome.report["parameters"]["flatten_spikes"], True)
         self.assertEqual(outcome.report["diagnostics"]["input_fold_spikes"], 0)
 
+    def test_quad_smoothing_flag(self):
+        outcome = worker.remesh(EXECUTABLE, self.positions.astype(np.float32), self.triangles,
+                                {"target_quads": 500, "quad_smoothing": "tangential"})
+        self.assertEqual(outcome.status, "ok", outcome.message + "\n" + outcome.log)
+        self.assertEqual(outcome.report["parameters"]["quad_smoothing"], "tangential")
+
     def test_target_above_maximum(self):
         positions, triangles = uv_sphere(16, 32)
         outcome = worker.remesh(EXECUTABLE, positions, triangles,

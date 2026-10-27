@@ -128,6 +128,13 @@ public:
         m_smoothNormalDegrees = degrees;
     }
 
+    // As RemeshParameters::quadSmoothing: smooth the extracted quads along the
+    // surface only (QuadExtractor::setTangentialSmoothing).
+    void setTangentialQuadSmoothing(bool tangential)
+    {
+        m_tangentialQuadSmoothing = tangential;
+    }
+
     // Untangle folded-over input triangles before remeshing (FoldRepair).
     void setRepairInputFolds(bool repair)
     {
@@ -423,6 +430,7 @@ private:
     bool m_useQex = true;
     bool m_repairInputFolds = false;
     bool m_flattenSpikes = false;
+    bool m_tangentialQuadSmoothing = false;
     ModelType m_modelType = ModelType::Organic;
     AutoRemesherProgressHandler m_progressHandler = nullptr;
     void* m_tag = nullptr;

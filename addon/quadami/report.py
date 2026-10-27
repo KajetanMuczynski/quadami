@@ -132,6 +132,29 @@ def summary_rows(report):
     return rows
 
 
+# What the add-on copied from the original onto the result (report["kept"]):
+# (singular, plural) for counted kinds, one word for edge marks.
+KEPT_TEXT = (
+    ("materials", ("material", "materials")),
+    ("vertex_groups", ("vertex group", "vertex groups")),
+    ("colors", ("colour attribute", "colour attributes")),
+    ("uv_maps", ("UV map", "UV maps")),
+    ("sharp", "sharp edges"),
+    ("crease", "creases"),
+    ("seam", "seams"),
+)
+
+
+def kept_text(kept):
+    """"2 materials, 1 vertex group, seams" for report["kept"]."""
+    parts = []
+    for key, words in KEPT_TEXT:
+        count = int(kept.get(key, 0))
+        if count:
+            parts.append("%d %s" % (count, words[count != 1]) if isinstance(words, tuple) else words)
+    return ", ".join(parts)
+
+
 def wrap(text, width=WARNING_WIDTH):
     """A panel text wrapped to the panel's width."""
     return textwrap.wrap(text, width)
@@ -148,6 +171,8 @@ def warning_lines(report, width=WARNING_WIDTH):
 
     for warning in report.get("warnings", []):
         add(warning, True)
+    if report.get("kept"):
+        add("Copied from the original: %s." % kept_text(report["kept"]), False)
     if report.get("status") == "ok" and report.get("islands", {}).get("holes", 0):
         add("Another Target Quads value may close them. To see the holes: Tab into "
             "Edit Mode, press 1 for vertex select, then Select > Select All by Trait "

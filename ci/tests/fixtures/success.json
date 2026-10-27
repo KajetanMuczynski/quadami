@@ -6,7 +6,7 @@
   "conclusion": "success",
   "run_attempt": 1,
   "head_sha": "f11462a7dd82927006ad13e996659452fcd42a16",
-  "head_branch": "claude/project-thread-9egfhk"
+  "head_branch": "feat/success"
  },
  "pull_requests": [
   {
