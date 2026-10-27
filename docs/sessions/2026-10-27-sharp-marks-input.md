@@ -1,7 +1,8 @@
 # 2026-10-27 · Claude (cloud) · Follow Blender's marked edges (TODO 5.4)
 - Repos/commits: core on `feat/sharp-marks-input` (base master `fca96dc`).
 - Did: interface 1.10 `RemeshRequest::featureEdges`; the CLI reads OBJ `l` lines; the add-on's
-  Follow Marks (Sharp, Crease, Seam; off by default) with a mark count in the panel. Hard edges in
+  Follow Marks (Sharp, Crease, Seam; Sharp on by default, Kajetan's call) with a mark count in the
+  panel; a mark on most edges of a mesh over 1000 edges is not sent (import floods). Hard edges in
   the triangle remesher (split on the line, never flipped, collapsed only along a straight marked
   chain or onto a marked vertex, marked vertices not relaxed or projected), decimation locks them,
   and the field lock, singularity simplifier, isoline constraint and projection snap take them.

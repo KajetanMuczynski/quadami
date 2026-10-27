@@ -163,9 +163,10 @@ class RemeshSettings(bpy.types.PropertyGroup):
             ("SEAM", "Seam", "UV seams"),
         ),
         options={"ENUM_FLAG"},
-        # Off: an FBX or OBJ import often marks nearly every edge Sharp
-        # (93 % of the edges of a sculpt checked); the panel shows the counts.
-        default=set(),
+        # On (Kajetan, 2026-10-27). An FBX or OBJ import often marks nearly
+        # every edge Sharp (93 % of a sculpt's edges checked): such floods are
+        # not sent (_flooded_marks) and the panel shows the counts.
+        default={"SHARP"},
         description="Marked edges the result keeps a row of edges along, whatever their "
                     "angle (Sharp Edge decides only for unmarked edges)")
 
@@ -219,27 +220,51 @@ def _marked_pairs(mesh, kinds):
     return _edge_vertices(mesh)[wanted]
 
 
-def _mark_counts(obj):
+MARK_NAMES = (("sharp", "Sharp"), ("crease", "Crease"), ("seam", "Seam"))
+
+
+def _mark_counts(mesh):
+    """{kind: number of edges} of mesh's marks, marked kinds only."""
+    marks = transfer.marked_edges(mesh) if len(mesh.edges) else {}
+    return {kind: int(np.count_nonzero(values > 0)) for kind, values in marks.items()}
+
+
+def _flooded_marks(mesh, counts, kinds):
+    """The followed kinds (follow_marks values) that mark most edges of a
+    mesh of over 1000 edges: an import's marks rather than edges to keep.
+    A cube or cylinder has most of its edges marked too, but few edges."""
+    edges = len(mesh.edges)
+    return [kind for kind in kinds if edges > 1000 and 2 * counts.get(kind.lower(), 0) > edges]
+
+
+def _flood_warning(flooded):
+    if not flooded:
+        return None
+    labels = dict((kind.upper(), label) for kind, label in MARK_NAMES)
+    return ("Follow Marks left out %s: more than half of the edges carry it, as after an FBX or OBJ "
+            "import, rather than the edges to keep" % " and ".join(labels[kind] for kind in flooded))
+
+
+def _mark_line(obj, kinds):
     """Panel line with how many edges of obj carry each mark, and whether
-    most edges are marked (an import's marks rather than the user's)."""
-    if obj is None or obj.type != "MESH" or not len(obj.data.edges):
+    a followed mark floods the mesh."""
+    if obj is None or obj.type != "MESH":
         return None
-    marks = transfer.marked_edges(obj.data)
-    if not marks:
+    counts = _mark_counts(obj.data)
+    if not counts:
         return None
-    names = (("sharp", "Sharp"), ("crease", "Crease"), ("seam", "Seam"))
-    counts = {kind: int(np.count_nonzero(marks[kind] > 0)) for kind, _ in names if kind in marks}
-    text = "Marked: " + ", ".join("%s %d" % (label, counts[kind]) for kind, label in names if kind in counts)
-    flood = len(obj.data.edges) > 1000 and max(counts.values()) * 2 > len(obj.data.edges)
+    text = "Marked: " + ", ".join("%s %d" % (label, counts[kind]) for kind, label in MARK_NAMES if kind in counts)
+    flood = bool(_flooded_marks(obj.data, counts, kinds))
     if flood:
-        text += " (most edges: an import's marks?)"
+        text += " (most edges: not followed)"
     return text, flood
 
 
 def _mesh_arrays(context, obj, follow_marks=()):
     """Vertex positions and triangles of the evaluated mesh, in object space,
-    whether most of its faces are smooth shaded, and the vertex pairs of the
-    edges carrying the marks in follow_marks."""
+    whether most of its faces are smooth shaded, the vertex pairs of the
+    edges carrying the marks in follow_marks, and the marks left out because
+    they flood the mesh (_flooded_marks)."""
     depsgraph = context.evaluated_depsgraph_get()
     evaluated = obj.evaluated_get(depsgraph)
     mesh = evaluated.to_mesh()
@@ -252,6 +277,7 @@ def _mesh_arrays(context, obj, follow_marks=()):
         smooth_faces = np.empty(len(mesh.polygons), dtype=bool)
         mesh.polygons.foreach_get("use_smooth", smooth_faces)
         marked = np.empty((0, 2), dtype=np.int32)
+        flooded = []
         if follow_marks:
             # Smooth by Angle (Shade Auto Smooth) marks every edge above its
             # angle Sharp on the evaluated mesh. Where the modifiers keep the
@@ -259,11 +285,13 @@ def _mesh_arrays(context, obj, follow_marks=()):
             base = obj.data
             same = len(base.vertices) == len(mesh.vertices) and np.array_equal(
                 _edge_vertices(base), _edge_vertices(mesh))
-            marked = _marked_pairs(base if same else mesh, follow_marks)
+            source = base if same else mesh
+            flooded = _flooded_marks(source, _mark_counts(source), follow_marks)
+            marked = _marked_pairs(source, [kind for kind in follow_marks if kind not in flooded])
     finally:
         evaluated.to_mesh_clear()
     smooth = bool(smooth_faces.size) and 2 * np.count_nonzero(smooth_faces) >= smooth_faces.size
-    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth, marked
+    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth, marked, flooded
 
 
 def _source(obj):
@@ -431,7 +459,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             self.report({"ERROR"}, "The original object is gone; select it and remesh again")
             return {"CANCELLED"}
         settings = _settings(context)
-        positions, triangles, self._smooth, marked = _mesh_arrays(context, obj, settings.follow_marks)
+        positions, triangles, self._smooth, marked, flooded = _mesh_arrays(context, obj, settings.follow_marks)
         if len(triangles) == 0:
             self.report({"ERROR"}, "The mesh has no faces")
             return {"CANCELLED"}
@@ -451,7 +479,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         _cancel_from_panel = False
         _last_status, _last_message, _last_report = "running", "", None
         self._source_name = obj.name
-        self._warnings = [w for w in (_uneven_scale_warning(obj),) if w]
+        self._warnings = [w for w in (_uneven_scale_warning(obj), _flood_warning(flooded)) if w]
         self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
         self._status_text(context)
@@ -565,11 +593,11 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         row.enabled = _job is None
         row.label(text="Follow Marks")
         row.prop(settings, "follow_marks")
-        counts = _mark_counts(context.active_object)
-        if counts:
+        line = _mark_line(context.active_object, settings.follow_marks)
+        if line:
             row = layout.row()
             row.enabled = _job is None
-            row.label(text=counts[0], icon="ERROR" if counts[1] else "NONE")
+            row.label(text=line[0], icon="ERROR" if line[1] else "NONE")
         header, body = layout.panel(ID + "_advanced", default_closed=True)
         header.label(text="Advanced")
         if body is not None:
