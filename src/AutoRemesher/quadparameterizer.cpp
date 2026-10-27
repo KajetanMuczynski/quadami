@@ -324,6 +324,40 @@ namespace {
         return cornerConstraints;
     }
 
+    // What became of T's hard edges (|beta| >= hardEdgeDegrees, interior only): an isoline
+    // constraint, none because the field is more than 10 deg off the edge, or none because
+    // the edge was re-rounded. Lengths relative to T's mean edge (`features` diagnostics,
+    // research/crease-preservation-2026-10-26.md).
+    DiagnosticRecord creaseConstraintRecord(const SurfaceMesh& mesh, double hardEdgeDegrees,
+        const std::vector<signed char>& cornerConstraints, const std::vector<char>& rerounded)
+    {
+        double hard = 0.0, constrained = 0.0, misaligned = 0.0, droppedRerounded = 0.0;
+        size_t hardEdges = 0;
+        for (size_t c = 0; c < mesh.cornerCount(); ++c) {
+            const size_t opposite = mesh.oppositeCorner(c);
+            if (opposite == SurfaceMesh::npos || opposite < c
+                || std::fabs(mesh.normalAngle(c)) * 180.0 / M_PI < hardEdgeDegrees)
+                continue;
+            const double length = mesh.edgeVector(c).length();
+            ++hardEdges;
+            hard += length;
+            if (cornerConstraints[c] == ConstraintNone && cornerConstraints[opposite] == ConstraintNone)
+                misaligned += length;
+            else if (rerounded[c] || rerounded[opposite])
+                droppedRerounded += length;
+            else
+                constrained += length;
+        }
+        const double edge = mesh.averageEdgeLength() > 0.0 ? mesh.averageEdgeLength() : 1.0;
+        DiagnosticRecord record("crease_constraints");
+        record.set("hard_edges", (double)hardEdges);
+        record.set("hard_rel_edge", hard / edge);
+        record.set("constrained_rel_edge", constrained / edge);
+        record.set("misaligned_rel_edge", misaligned / edge);
+        record.set("rerounded_rel_edge", droppedRerounded / edge);
+        return record;
+    }
+
     void applyDirectionalSwaps(const SurfaceMesh& mesh, const std::vector<Vector3>& fieldBeforeBrush,
         const std::vector<Vector3>& field, const std::vector<Vector3>& normals,
         std::vector<double>* scalingU, std::vector<double>* scalingV)
@@ -1493,6 +1527,7 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     std::vector<char> rerounded;
     const size_t reroundedEdges = raiseSmallConeAngles(mesh, result->field, normals, cornerConstraints,
         &rotation, &rerounded);
+    result->diagnostics.push_back(creaseConstraintRecord(mesh, hardEdgeDegrees, cornerConstraints, rerounded));
     // A hard edge's constraint follows the field, which a re-rounded edge
     // no longer does: on that edge the two faces could ask for different
     // isolines and collapse it.

@@ -272,6 +272,68 @@ namespace {
             vertexLock[(size_t)(edges[i].first & 0xffffffffu)] |= meshopt_SimplifyVertex_Priority;
         }
     }
+
+    // Crease length of one stage's triangle mesh around the sharp-edge angle, for the
+    // `features` record (diagnostics only; research/crease-preservation-2026-10-26.md).
+    // The stages test the dihedral differently (|beta| > theta, >= theta, signed),
+    // so a right angle can count or not by float noise: nearTheta counts the edges
+    // within 1 deg of theta, geThetaMinus1 the length a test at theta - 1 deg keeps.
+    struct CreaseLengths {
+        double geTheta = 0.0;
+        double gtTheta = 0.0;
+        double geThetaMinus1 = 0.0;
+        size_t nearTheta = 0;
+    };
+
+    CreaseLengths creaseLengths(const std::vector<Vector3>& vertices,
+        const std::vector<std::vector<size_t>>& triangles, double thetaDegrees)
+    {
+        CreaseLengths lengths;
+        if (vertices.size() > (size_t)std::numeric_limits<unsigned int>::max())
+            return lengths;
+        // As markSharpEdgeVertices: (edge key, face) pairs, sorted, so this
+        // never needs more memory than the decimation that follows.
+        std::vector<std::pair<uint64_t, unsigned int>> edges;
+        edges.reserve(triangles.size() * 3);
+        for (size_t i = 0; i < triangles.size(); ++i) {
+            const auto& t = triangles[i];
+            if (3 != t.size())
+                continue;
+            for (size_t j = 0; j < 3; ++j) {
+                const auto ends = std::minmax(t[j], t[(j + 1) % 3]);
+                edges.push_back({ ((uint64_t)ends.first << 32) | ends.second, (unsigned int)i });
+            }
+        }
+        tbb::parallel_sort(edges.begin(), edges.end());
+        const auto normal = [&](unsigned int f) {
+            const auto& t = triangles[f];
+            return Vector3::normal(vertices[t[0]], vertices[t[1]], vertices[t[2]]);
+        };
+        for (size_t i = 0; i + 1 < edges.size(); ++i) {
+            // Only manifold edges: two faces, no third.
+            if (edges[i].first != edges[i + 1].first
+                || (i > 0 && edges[i - 1].first == edges[i].first)
+                || (i + 2 < edges.size() && edges[i + 2].first == edges[i].first))
+                continue;
+            const Vector3 first = normal(edges[i].second);
+            const Vector3 second = normal(edges[i + 1].second);
+            if (first.isZero() || second.isZero()) // a zero-area triangle has no dihedral
+                continue;
+            const double degrees = Vector3::angle(first, second) * (180.0 / M_PI);
+            const double length = (vertices[(size_t)(edges[i].first >> 32)]
+                - vertices[(size_t)(edges[i].first & 0xffffffffu)])
+                                      .length();
+            if (degrees >= thetaDegrees)
+                lengths.geTheta += length;
+            if (degrees > thetaDegrees)
+                lengths.gtTheta += length;
+            if (degrees >= thetaDegrees - 1.0)
+                lengths.geThetaMinus1 += length;
+            if (std::fabs(degrees - thetaDegrees) < 1.0)
+                ++lengths.nearTheta;
+        }
+        return lengths;
+    }
 }
 
 const double AutoRemesher::m_defaultSharpEdgeDegrees = 90;
@@ -1256,6 +1318,7 @@ bool AutoRemesher::remeshIslands()
         std::vector<Vector3> remeshedVertices;
         std::vector<std::vector<size_t>> remeshedQuads;
         std::vector<DiagnosticRecord> diagnostics;
+        DiagnosticRecord features; // crease length per stage, set by resampleIsland
         // Of the island after decimation and after isotropic remeshing.
         SurfaceTopology decimatedTopology;
         SurfaceTopology isotropicTopology;
@@ -1275,6 +1338,7 @@ bool AutoRemesher::remeshIslands()
         const ProgressHandler isotropicProgress = makeStageProgress(islandIndex,
             0.0f, islandResampleEnd, -1.0f);
 
+        const CreaseLengths inputCreases = creaseLengths(ctx.vertices, ctx.triangles, ctx.sharpEdgeDegrees);
         auto t0 = std::chrono::high_resolution_clock::now();
         resample(ctx.vertices, ctx.triangles, ctx.inputTopology, ctx.voxelSize, ctx.adaptivity, ctx.sharpEdgeDegrees, ctx.smoothNormalDegrees, islandIndex, stats,
             &adaptiveFieldTime, &isotropicProgress,
@@ -1287,6 +1351,22 @@ bool AutoRemesher::remeshIslands()
         run.isotropicTriangles = ctx.triangles;
         run.decimatedTopology = surfaceTopology(run.decimatedTriangles, run.decimatedVertices.size());
         run.isotropicTopology = surfaceTopology(run.isotropicTriangles, run.isotropicVertices.size());
+
+        // Crease length (relative to the target edge) that each stage still has.
+        const double h = ctx.voxelSize > 0.0 ? ctx.voxelSize : 1.0;
+        const CreaseLengths decimatedCreases = creaseLengths(run.decimatedVertices, run.decimatedTriangles, ctx.sharpEdgeDegrees);
+        const CreaseLengths isotropicCreases = creaseLengths(run.isotropicVertices, run.isotropicTriangles, ctx.sharpEdgeDegrees);
+        run.features = DiagnosticRecord("features");
+        run.features.set("sharp_edge_degrees", ctx.sharpEdgeDegrees);
+        run.features.set("input_ge_theta_rel_h", inputCreases.geTheta / h);
+        run.features.set("input_gt_theta_rel_h", inputCreases.gtTheta / h);
+        run.features.set("input_ge_theta_minus1_rel_h", inputCreases.geThetaMinus1 / h);
+        run.features.set("input_near_theta_edges", (double)inputCreases.nearTheta);
+        run.features.set("decimated_ge_theta_rel_h", decimatedCreases.geTheta / h);
+        run.features.set("isotropic_ge_theta_rel_h", isotropicCreases.geTheta / h);
+        run.features.set("isotropic_gt_theta_rel_h", isotropicCreases.gtTheta / h);
+        run.features.set("isotropic_ge_theta_minus1_rel_h", isotropicCreases.geThetaMinus1 / h);
+        run.features.set("isotropic_near_theta_edges", (double)isotropicCreases.nearTheta);
 
         updateProgress(islandIndex, islandResampleEnd);
     };
@@ -1955,6 +2035,10 @@ bool AutoRemesher::remeshIslands()
             m_diagnostics.push_back(std::move(record));
         }
         for (size_t i = 0; i < islandRuns.size(); ++i) {
+            if (!islandRuns[i].features.values.empty()) {
+                m_diagnostics.push_back(islandRuns[i].features);
+                m_diagnostics.back().island = i;
+            }
             for (const auto& record : islandRuns[i].diagnostics) {
                 m_diagnostics.push_back(record);
                 m_diagnostics.back().island = i;
