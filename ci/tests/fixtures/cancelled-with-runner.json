@@ -6,7 +6,7 @@
   "conclusion": "cancelled",
   "run_attempt": 1,
   "head_sha": "a90b220fe6e644db29d7e287a538f1492b1671bd",
-  "head_branch": "claude/project-thread-sbqlya"
+  "head_branch": "fix/cancelled-with-runner"
  },
  "pull_requests": [],
  "jobs": [

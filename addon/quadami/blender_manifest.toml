@@ -6,7 +6,7 @@ id = "quadami"
 version = "0.1.0"
 name = "Quadami"
 tagline = "Automatic quad remeshing in a separate process"
-maintainer = "Quadami contributors"
+maintainer = "Quadami contributors <quadami.contact@gmail.com>"
 type = "add-on"
 website = "https://github.com/KajetanMuczynski/quadami"
 tags = ["Mesh", "Modeling"]
@@ -14,6 +14,22 @@ tags = ["Mesh", "Modeling"]
 blender_version_min = "4.2.0"
 
 license = ["SPDX:GPL-3.0-or-later"]
+# Everyone whose code is compiled into bin/autoremesher-cli (extensions.blender.org
+# terms 1.3), as "Year Name" or "Year-Year Name"; the licenses are in licenses/.
+# A library added to the install(... DESTINATION licenses) list in CMakeLists.txt
+# goes here too.
+copyright = [
+  "2026 Quadami contributors",
+  "2026 Dust3D Project",
+  "2020-2021 Jeremy Hu",
+  "2013 Hans-Christian Ebke",
+  "2013 Computer Graphics Group, RWTH Aachen University",
+  "2001-2022 RWTH-Aachen University",
+  "2005-2023 Intel Corporation",
+  "2001-2025 Eigen authors",
+  "2016-2026 Arseny Kapoulkine",
+  "2012-2018 Syoyo Fujita and many contributors",
+]
 
 [permissions]
 files = "Exchanges the mesh with the remesher through a temporary folder"

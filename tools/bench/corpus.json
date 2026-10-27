@@ -1,5 +1,5 @@
 {
- "_comment": "Mesh sets for run_corpus.py (set corpus) and ab.py (any set). 'file' is relative to the meshes folder: downloads/ from fetch_meshes.sh, synthetic/ from make_synthetic.py, suzanne/ from make_suzanne.py, primitives/ from make_primitives.py, sculpt/ from make_sculpt.py, external/ from fetch_external.py (external.json: license, author, SHA-256). 'set' defaults to corpus. sym = mirror plane for symmetry metrics (axis, center); 'auto' center = input bbox centre on that axis. sets: default targets and resolutions per set for ab.py. The gallery set (tools/gallery/gallery.py, docs/gallery/) holds public-license or procedural meshes only; its entries carry their own target, cli_args, up (file up axis, default Y), view (camera direction, Blender axes) and title, and the empty set default makes ab.py need --targets.",
+ "_comment": "Mesh sets for run_corpus.py (set corpus) and ab.py (any set). 'file' is relative to the meshes folder: downloads/ from fetch_meshes.sh, synthetic/ from make_synthetic.py, suzanne/ from make_suzanne.py, primitives/ from make_primitives.py, sculpt/ from make_sculpt.py, external/ and external_thin/ from fetch_external.py (external.json, external_thin.json: license, author, SHA-256; external_thin has no default targets, so ab.py lane skips it and runs need --targets). 'set' defaults to corpus. sym = mirror plane for symmetry metrics (axis, center); 'auto' center = input bbox centre on that axis. sets: default targets and resolutions per set for ab.py. The gallery set (tools/gallery/gallery.py, docs/gallery/) holds public-license or procedural meshes only; its entries carry their own target, cli_args, up (file up axis, default Y), view (camera direction, Blender axes) and title, and the empty set default makes ab.py need --targets.",
  "sets": {
   "corpus": {"targets": [2000, 10000], "resolutions": ["fast", "quality"]},
   "closed": {"targets": [150, 500, 2000], "resolutions": ["fast", "quality"]},
@@ -8,7 +8,9 @@
   "brush": {"targets": [2000, 5000], "resolutions": ["quality"]},
   "gallery": {"targets": [], "resolutions": ["quality"]},
   "external": {"targets": [3000, 10000], "resolutions": ["quality"]},
-  "primitives": {"targets": [1000, 5000], "resolutions": ["quality"]}
+  "cad": {"targets": [1000, 4000], "resolutions": ["fast", "quality"]},
+  "primitives": {"targets": [1000, 5000], "resolutions": ["quality"]},
+  "external_thin": {"targets": [], "resolutions": ["quality"]}
  },
  "meshes": [
   {"id": "spot", "file": "downloads/spot.obj", "category": "organic, clean, genus 0"},
@@ -113,6 +115,18 @@
   {"id": "ext_sheencloth", "file": "external/ext_sheencloth.obj", "category": "cloth: draped fabric sheet", "set": "external"},
   {"id": "ext_flighthelmet", "file": "external/ext_flighthelmet.obj", "category": "prop: leather helmet, goggles, straps, stand (hard surface meets organic, many parts)", "set": "external"},
   {"id": "ext_scifihelmet", "file": "external/ext_scifihelmet.obj", "category": "hard-surface armor prop", "set": "external"},
-  {"id": "ext_watch", "file": "external/ext_watch.obj", "category": "hard surface: watch with strap, many small parts", "set": "external"}
+  {"id": "ext_watch", "file": "external/ext_watch.obj", "category": "hard surface: watch with strap, many small parts", "set": "external"},
+  {"id": "cad_box", "file": "synthetic/cad_box.obj", "set": "cad", "category": "CAD: box, 12 triangles, exact 90 deg edges"},
+  {"id": "cad_box_rot", "file": "synthetic/cad_box_rot.obj", "set": "cad", "category": "CAD: the box rotated (23, 37, 11) deg, right angles 90 +- 1e-7 deg"},
+  {"id": "cad_chamfer_box", "file": "synthetic/cad_chamfer_box.obj", "set": "cad", "category": "CAD: box with 45 deg chamfers, no crease at 90 deg"},
+  {"id": "cad_cylinder", "file": "synthetic/cad_cylinder.obj", "set": "cad", "category": "CAD: cylinder, 128 segments, two circular 90 deg rims"},
+  {"id": "cad_wedge", "file": "synthetic/cad_wedge.obj", "set": "cad", "category": "CAD: prism with 30, 60, 90 deg wedge angles"},
+  {"id": "cad_csg_bracket_rot", "file": "synthetic/cad_csg_bracket_rot.obj", "set": "cad", "category": "CAD: csg_bracket rotated (23, 37, 11) deg"},
+  {"id": "ext_nemetona", "file": "external_thin/ext_nemetona.obj", "category": "sculpted figure with wolf: bow with a hair-thin string, horns, bead necklaces and jewellery, cloth strips, wolf tail, branch base; open, non-manifold", "set": "external_thin"},
+  {"id": "ext_tarisland_dragon", "file": "external_thin/ext_tarisland_dragon.obj", "category": "creature: membrane wings (thin open shells), horns, spikes, claws, tail", "set": "external_thin"},
+  {"id": "ext_bee", "file": "external_thin/ext_bee.obj", "category": "insect: thin legs, antennae, single-sheet wings; many open parts", "set": "external_thin"},
+  {"id": "ext_clothfolds", "file": "external_thin/ext_clothfolds.obj", "category": "single-sided cloth draped over a sphere and a floor: one open sheet, folds", "set": "external_thin"},
+  {"id": "ext_vaseflowers", "file": "external_thin/ext_vaseflowers.obj", "category": "two vases with flowers: thin stems, single-sheet leaves and petals (coarse input)", "set": "external_thin"},
+  {"id": "ext_yenching", "file": "external_thin/ext_yenching.obj", "category": "guardian-lion scan: curled mane relief, carved base, small attached cub and ball", "set": "external_thin"}
  ]
 }

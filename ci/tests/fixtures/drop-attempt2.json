@@ -6,7 +6,7 @@
   "conclusion": "failure",
   "run_attempt": 2,
   "head_sha": "d9dc2854c18d01f225c5fc954f517563cafe50d4",
-  "head_branch": "claude/project-thread-opbh5l"
+  "head_branch": "ci/drop-attempt2"
  },
  "pull_requests": [
   {

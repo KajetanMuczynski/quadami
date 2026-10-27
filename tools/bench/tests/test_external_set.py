@@ -13,8 +13,9 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-"""The external set (external.json, fetch_external.py): public licenses only, pinned sources, and
-readers that turn OBJ, PLY and glb into the same triangle mesh."""
+"""The external sets (external.json, external_thin.json, fetch_external.py): public licenses only,
+pinned sources, and readers that turn OBJ, PLY and glb (plain, quantized, Draco) into the same
+triangle mesh."""
 import json
 import os
 import re
@@ -38,43 +39,59 @@ V = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=np.float64)
 F = np.array([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
 
 
-def glb_bytes(v, f):
-    """One mesh node, positions and uint32 indices in one buffer."""
-    pos = v.astype("<f4").tobytes()
+def glb_bytes(v, f, quantized=False):
+    """One mesh node, positions and uint32 indices in one buffer. quantized: positions as
+    normalized int16 with the dequantizing scale on the node (KHR_mesh_quantization)."""
+    pos = (v * 32767).round().astype("<i2") if quantized else v.astype("<f4")
+    pos = pos.tobytes()
+    pos += b"\0" * (-len(pos) % 4)
     idx = f.astype("<u4").tobytes()
-    doc = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],
-           "nodes": [{"mesh": 0, "translation": [0, 0, 0]}],
+    node = {"mesh": 0, "translation": [0, 0, 0]}
+    position = {"bufferView": 0, "componentType": 5126, "count": len(v), "type": "VEC3"}
+    if quantized:
+        node["scale"] = [2, 2, 2]
+        position.update(componentType=5122, normalized=True)
+    doc = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [node],
            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
            "buffers": [{"byteLength": len(pos) + len(idx)}],
            "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(pos)},
                            {"buffer": 0, "byteOffset": len(pos), "byteLength": len(idx)}],
-           "accessors": [{"bufferView": 0, "componentType": 5126, "count": len(v), "type": "VEC3"},
+           "accessors": [position,
                          {"bufferView": 1, "componentType": 5125, "count": f.size, "type": "SCALAR"}]}
+    return glb_wrap(doc, pos + idx)
+
+
+def glb_wrap(doc, binary):
     js = json.dumps(doc).encode()
     js += b" " * (-len(js) % 4)
-    binary = pos + idx
+    binary += b"\0" * (-len(binary) % 4)
     chunks = struct.pack("<II", len(js), 0x4E4F534A) + js + struct.pack("<II", len(binary), 0x004E4942) + binary
     return struct.pack("<III", 0x46546C67, 2, 12 + len(chunks)) + chunks
 
 
 class Manifest(unittest.TestCase):
     def test_public_and_pinned(self):
-        manifest = json.load(open(os.path.join(BENCH, "external.json")))
         corpus = json.load(open(os.path.join(BENCH, "corpus.json")))
-        ids = [m["id"] for m in manifest["meshes"]]
-        self.assertEqual(len(ids), len(set(ids)))
-        for m in manifest["meshes"]:
-            self.assertTrue(m["public"], m["id"])
-            self.assertIn(m["license"], PUBLIC_LICENSES, m["id"])
-            for key in ("author", "source", "category"):
-                self.assertTrue(m.get(key), f"{m['id']}: {key}")
-            for src in m["files"]:
-                self.assertRegex(src["url"], PINNED_URL, m["id"])
-                self.assertRegex(src["sha256"], r"^[0-9a-f]{64}$", m["id"])
-        external = {m["id"]: m["file"] for m in corpus["meshes"] if m.get("set") == "external"}
-        self.assertEqual(sorted(external), sorted(ids))
-        for mid, f in external.items():
-            self.assertEqual(f, f"external/{mid}.obj")
+        all_ids = []
+        for name, setname in (("external.json", "external"), ("external_thin.json", "external_thin")):
+            manifest = json.load(open(os.path.join(BENCH, name)))
+            ids = [m["id"] for m in manifest["meshes"]]
+            all_ids += ids
+            for m in manifest["meshes"]:
+                self.assertTrue(m["public"], m["id"])
+                self.assertIn(m["license"], PUBLIC_LICENSES, m["id"])
+                for key in ("author", "source", "category"):
+                    self.assertTrue(m.get(key), f"{m['id']}: {key}")
+                for src in m["files"]:
+                    self.assertRegex(src["url"], PINNED_URL, m["id"])
+                    self.assertRegex(src["sha256"], r"^[0-9a-f]{64}$", m["id"])
+            in_set = {m["id"]: m["file"] for m in corpus["meshes"] if m.get("set") == setname}
+            self.assertEqual(sorted(in_set), sorted(ids))
+            for mid, f in in_set.items():
+                self.assertEqual(f, f"{setname}/{mid}.obj")
+        self.assertEqual(len(all_ids), len(set(all_ids)))
+        # Opt-in until the thin-part work decides: no default targets, so ab.py lane skips it.
+        self.assertEqual(corpus["sets"]["external_thin"]["targets"], [])
 
 
 class Readers(unittest.TestCase):
@@ -115,6 +132,35 @@ class Readers(unittest.TestCase):
             p = os.path.join(d, "m.glb")
             with open(p, "wb") as fp:
                 fp.write(glb_bytes(v_split, f_split))
+            v, f = fx.read_gltf(p)
+        self.assert_tetra(v, f)
+
+    def test_glb_quantized_positions(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "m.glb")
+            with open(p, "wb") as fp:
+                fp.write(glb_bytes(V * 0.5, F, quantized=True))
+            v, f = fx.read_gltf(p)
+        self.assert_tetra(v, f)
+        np.testing.assert_allclose(np.sort(v, axis=0), np.sort(V, axis=0), atol=1e-4)
+
+    def test_glb_draco(self):
+        try:
+            import DracoPy
+        except ImportError:
+            self.skipTest("DracoPy not installed")
+        data = DracoPy.encode(V[F.ravel()].astype(np.float32), np.arange(12, dtype=np.uint32))
+        doc = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+               "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "extensions": {
+                   "KHR_draco_mesh_compression": {"bufferView": 0, "attributes": {"POSITION": 0}}}}]}],
+               "buffers": [{"byteLength": len(data) + (-len(data) % 4)}],
+               "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(data)}],
+               "accessors": [{"componentType": 5126, "count": 12, "type": "VEC3"},
+                             {"componentType": 5125, "count": 12, "type": "SCALAR"}]}
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "m.glb")
+            with open(p, "wb") as fp:
+                fp.write(glb_wrap(doc, data))
             v, f = fx.read_gltf(p)
         self.assert_tetra(v, f)
 
