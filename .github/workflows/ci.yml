@@ -344,7 +344,7 @@ jobs:
       - name: Panel screenshots
         if: runner.os == 'Linux'
         run: |
-          ci/apt_install.sh xvfb xauth libgl1-mesa-dri
+          ci/apt_install.sh xvfb xauth libgl1-mesa-dri imagemagick
           xvfb-run -a -s "-screen 0 1600x900x24" "$BLENDER" --factory-startup \
             --python addon/tests/blender_panel_shot.py -- --out build/panel --dump
           test -s build/panel/panel-1.png && test -s build/panel/panel-1.5.png
