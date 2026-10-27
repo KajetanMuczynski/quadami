@@ -167,6 +167,26 @@ def metrics_cache(work):
     return os.path.join(work, "inputs", "metrics")
 
 
+_TOOL = []
+
+
+def metrics_tool():
+    """What measures the runs: metrics.py's content and the packages its numbers depend on. Stored in
+    each record, so `compare` can tell when A and B were measured by different code (a metrics.py
+    change, or another numpy/scipy/libigl) instead of mixing them silently."""
+    if not _TOOL:
+        from importlib import metadata
+
+        def version(pkg):
+            try:
+                return metadata.version(pkg)
+            except metadata.PackageNotFoundError:
+                return None
+        _TOOL.append({"metrics_py": file_hash(METRICS)[:12],
+                      **{pkg: version(pkg) for pkg in ("numpy", "scipy", "libigl")}})
+    return _TOOL[0]
+
+
 def prepare_input(src, work):
     """Fills metrics.py's input cache once per mesh, so runs started together don't each fill it."""
     subprocess.call([sys.executable, METRICS, "--input", src, "--input-cache", metrics_cache(work), "--prepare-input"],
@@ -174,6 +194,10 @@ def prepare_input(src, work):
 
 
 def measure(rec, d, mesh, target, src, work):
+    """metrics.json of one run into rec["metrics"]. A failure (seen: out of memory with several large
+    inputs measured at once) is tried once more; if that fails too, rec["metrics"] is None and
+    rec["metrics_error"] holds the end of metrics.py's error output, and the next `run` measures it
+    again instead of reusing the record without metrics."""
     mj = os.path.join(d, "metrics.json")
     cmd = [sys.executable, METRICS, "--input", src, "--output", os.path.join(d, "out.obj"),
            "--target-quads", str(target), "--samples", "100000", "--json", mj, "--input-cache", metrics_cache(work)]
@@ -187,13 +211,20 @@ def measure(rec, d, mesh, target, src, work):
     args = rec.get("cli_args") or []
     if "--sharp-edge" in args[:-1]:  # A1theta and bent quads at the run's own sharp-edge angle
         cmd += ["--sharp-degrees", args[args.index("--sharp-edge") + 1]]
-    if os.path.exists(mj):  # a failed --remeasure must not leave the old metrics in place
-        os.remove(mj)
-    subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        rec["metrics"] = json.load(open(mj))
-    except (OSError, ValueError):
-        rec["metrics"] = None
+    error = ""
+    for _ in range(2):
+        if os.path.exists(mj):  # a failed --remeasure must not leave the old metrics in place
+            os.remove(mj)
+        p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            rec["metrics"] = json.load(open(mj))
+            rec["metrics_tool"] = metrics_tool()
+            rec.pop("metrics_error", None)
+            return
+        except (OSError, ValueError):
+            error = f"exit {p.returncode}: " + p.stderr.decode(errors="replace")[-500:]
+    rec["metrics"] = None
+    rec["metrics_error"] = error
 
 
 LOG_CAP = 8 << 20
@@ -249,8 +280,9 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
     if os.path.exists(record_path):
         rec = json.load(open(record_path))
         # A finished run is never repeated, but its metrics can be recomputed after metrics.py changed,
-        # and are added to a run made with --no-metrics (e.g. by `lane`) once a run asks for them.
-        if (remeasure or (metrics and "metrics" not in rec)) and rec["rc"] == 0 \
+        # and are added to a run made with --no-metrics (e.g. by `lane`), or whose measurement failed,
+        # once a run asks for them.
+        if (remeasure or (metrics and rec.get("metrics") is None)) and rec["rc"] == 0 \
                 and os.path.exists(os.path.join(d, "out.obj")):
             measure(rec, d, mesh, target, src, work)
             with open(record_path, "w") as fp:
@@ -313,7 +345,7 @@ def t_topology(stages):
 
 def has_metrics(d):
     try:
-        return "metrics" in json.load(open(os.path.join(d, "record.json")))
+        return json.load(open(os.path.join(d, "record.json"))).get("metrics") is not None
     except (OSError, ValueError):
         return False
 
@@ -449,6 +481,12 @@ COUNTS = ["flips_cont", "flips_round", "flips", "degenerate", "non_quads", "sj_l
           "flipped_off_folds", "flipped_over_folds"]
 MEANS = ["area_uncovered", "area_wrong_side", "irregular_1k", "in_out_p99", "hausdorff", "in_out_mean", "normal_dev", "vertex_dist", "sj_p1",
          "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel", "count_err", "energy_ratio", "time", "peak_rss_mb"]
+# Rows computed by metrics.py (the rest come from the CLI's own report and stage records).
+FROM_METRICS = {"sj_le_0", "flipped_vs_input", "flipped_vs_raw", "flipped_off_folds", "flipped_over_folds",
+                "folded_faces", "holes_added", "holes_closed", "handles_lost", "handles_added", "islands_dropped",
+                "islands_merged", "area_uncovered", "area_wrong_side", "nm_vertices", "islands_changed",
+                "irregular_1k", "hausdorff", "in_out_mean", "in_out_p99", "vertex_dist", "normal_dev", "sj_p1",
+                "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel"}
 # Rows where a higher value is the better one (for "runs B better / worse").
 HIGHER_IS_BETTER = {"sj_p1", "crease_cov", "crease_cov_theta", "marked_cov"}
 
@@ -493,8 +531,33 @@ def cmd_compare(a):
             print(f"**{side} has {old} replicate-runs measured by an older metrics.py** (flipped_vs_input against the "
                   f"raw input, no validity rows): `ab.py run <ref> --remeasure` with the same flags updates {p}.\n")
 
+    # Which metrics.py (and packages) measured each side: rows are comparable only when it is the same.
+    tools = {"A": set(), "B": set()}
+    for side, D in (("A", A), ("B", B)):
+        for k in keys:
+            for u in reps:
+                if D[k][u].get("metrics"):
+                    t = D[k][u].get("metrics_tool")
+                    tools[side].add(json.dumps(t, sort_keys=True) if t else "unrecorded")
+    if len(set().union(*tools.values()) - {"unrecorded"}) > 1:
+        print("**A and B were measured by different metrics code** (metrics.py content or numpy/scipy/libigl); "
+              "metric rows can differ for that reason alone. `ab.py run <ref> --remeasure` with the same flags "
+              "measures a side again with this checkout:")
+        for side in sorted(tools):
+            print(f"- {side}: " + "; ".join(sorted(tools[side])))
+        print()
+    # A replicate-run without metrics on one side (metrics.py failed, or a --no-metrics run) is left out
+    # of the metric rows on both sides, so no row averages different replicates on A and B.
+    unmeasured = {(k, u) for k in keys for u in reps if any(D[k][u].get("metrics") is None for D in (A, B))}
+    failed_metrics = sorted(f"{side} {k[0]} {k[1]} {k[2]} u{u}" for k in keys for u in reps for side, D in (("A", A), ("B", B))
+                            if "metrics" in D[k][u] and D[k][u]["metrics"] is None)
+    if failed_metrics:
+        print(f"**{len(failed_metrics)} replicate-runs completed but metrics.py failed on them** (left out of the "
+              "metric rows on both sides; the next `ab.py run` of that side measures them again): "
+              + ", ".join(failed_metrics) + "\n")
+
     def mean_over(D, k, metric):
-        xs = [value(D[k][u], metric) for u in reps]
+        xs = [value(D[k][u], metric) for u in reps if metric not in FROM_METRICS or (k, u) not in unmeasured]
         xs = [x for x in xs if x is not None]
         return st.mean(xs) if xs else None
 
