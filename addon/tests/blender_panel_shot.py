@@ -102,9 +102,16 @@ def setup():
 
     window, area = view3d()
     area.spaces.active.show_region_ui = True
-    for region in area.regions:
-        if region.type == "UI":
-            region.active_panel_category = NAME
+    region = next(r for r in area.regions if r.type == "UI")
+    try:
+        region.active_panel_category = NAME
+    except AttributeError:
+        # Read-only in Blender 4.2: show the panel in the
+        # sidebar's first tab instead, which a fresh window opens on.
+        panel = addon.VIEW3D_PT_remesh_quads
+        bpy.utils.unregister_class(panel)
+        panel.bl_category = "Item"
+        bpy.utils.register_class(panel)
     with bpy.context.temp_override(window=window, area=area):
         bpy.ops.view3d.view_all()
 
