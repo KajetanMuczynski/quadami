@@ -1,5 +1,5 @@
 {
- "_comment": "Mesh sets for run_corpus.py (set corpus) and ab.py (any set). 'file' is relative to the meshes folder: downloads/ from fetch_meshes.sh, synthetic/ from make_synthetic.py, suzanne/ from make_suzanne.py, sculpt/ from make_sculpt.py, external/ from fetch_external.py (external.json: license, author, SHA-256). 'set' defaults to corpus. sym = mirror plane for symmetry metrics (axis, center); 'auto' center = input bbox centre on that axis. sets: default targets and resolutions per set for ab.py. The gallery set (tools/gallery/gallery.py, docs/gallery/) holds public-license or procedural meshes only; its entries carry their own target, cli_args, up (file up axis, default Y), view (camera direction, Blender axes) and title, and the empty set default makes ab.py need --targets.",
+ "_comment": "Mesh sets for run_corpus.py (set corpus) and ab.py (any set). 'file' is relative to the meshes folder: downloads/ from fetch_meshes.sh, synthetic/ from make_synthetic.py, suzanne/ from make_suzanne.py, primitives/ from make_primitives.py, sculpt/ from make_sculpt.py, external/ from fetch_external.py (external.json: license, author, SHA-256). 'set' defaults to corpus. sym = mirror plane for symmetry metrics (axis, center); 'auto' center = input bbox centre on that axis. sets: default targets and resolutions per set for ab.py. The gallery set (tools/gallery/gallery.py, docs/gallery/) holds public-license or procedural meshes only; its entries carry their own target, cli_args, up (file up axis, default Y), view (camera direction, Blender axes) and title, and the empty set default makes ab.py need --targets.",
  "sets": {
   "corpus": {"targets": [2000, 10000], "resolutions": ["fast", "quality"]},
   "closed": {"targets": [150, 500, 2000], "resolutions": ["fast", "quality"]},
@@ -7,7 +7,8 @@
   "sculpt": {"targets": [2000, 5000, 15000], "resolutions": ["fast", "quality"]},
   "brush": {"targets": [2000, 5000], "resolutions": ["quality"]},
   "gallery": {"targets": [], "resolutions": ["quality"]},
-  "external": {"targets": [3000, 10000], "resolutions": ["quality"]}
+  "external": {"targets": [3000, 10000], "resolutions": ["quality"]},
+  "primitives": {"targets": [1000, 5000], "resolutions": ["quality"]}
  },
  "meshes": [
   {"id": "spot", "file": "downloads/spot.obj", "category": "organic, clean, genus 0"},
@@ -44,6 +45,23 @@
   {"id": "suzanne_sub1", "file": "suzanne/suzanne_sub1.obj", "category": "Blender Suzanne + Subdivision, open (eyes)", "set": "suzanne"},
   {"id": "suzanne_sub2", "file": "suzanne/suzanne_sub2.obj", "category": "Blender Suzanne + Subdivision, open (eyes)", "set": "suzanne"},
   {"id": "suzanne_sub3", "file": "suzanne/suzanne_sub3.obj", "category": "Blender Suzanne + Subdivision, open (eyes)", "set": "suzanne"},
+  {"id": "prim_cube", "file": "primitives/cube.obj", "category": "Blender default cube (12 triangles), 90 deg edges, 8 corners", "set": "primitives"},
+  {"id": "prim_uvsphere", "file": "primitives/uvsphere.obj", "category": "Blender default UV sphere (32 x 16), flat shaded", "set": "primitives"},
+  {"id": "prim_icosphere_s1", "file": "primitives/icosphere_s1.obj", "category": "Blender icosphere, subdivisions 1 (20 triangles)", "set": "primitives"},
+  {"id": "prim_icosphere", "file": "primitives/icosphere.obj", "category": "Blender default icosphere (subdivisions 2, 80 triangles): 'weird loops'", "set": "primitives"},
+  {"id": "prim_icosphere_s3", "file": "primitives/icosphere_s3.obj", "category": "Blender icosphere, subdivisions 3", "set": "primitives"},
+  {"id": "prim_icosphere_s5", "file": "primitives/icosphere_s5.obj", "category": "Blender icosphere, subdivisions 5 (5120 triangles)", "set": "primitives"},
+  {"id": "prim_icosphere_subsurf1", "file": "primitives/icosphere_subsurf1.obj", "category": "default icosphere + Subdivision Surface level 1", "set": "primitives"},
+  {"id": "prim_icosphere_subsurf2", "file": "primitives/icosphere_subsurf2.obj", "category": "default icosphere + Subdivision Surface level 2", "set": "primitives"},
+  {"id": "prim_cone", "file": "primitives/cone.obj", "category": "Blender default cone (32 segments, n-gon base): apex 199 deg deficit, base rim 117 deg", "set": "primitives"},
+  {"id": "prim_cone_v64", "file": "primitives/cone_v64.obj", "category": "Blender cone, 64 segments", "set": "primitives"},
+  {"id": "prim_cone_trifan", "file": "primitives/cone_trifan.obj", "category": "Blender cone, triangle-fan base", "set": "primitives"},
+  {"id": "prim_cone_open", "file": "primitives/cone_open.obj", "category": "Blender cone without base (no rim)", "set": "primitives"},
+  {"id": "prim_cone_frustum", "file": "primitives/cone_frustum.obj", "category": "Blender cone, top radius 0.5 (no apex)", "set": "primitives"},
+  {"id": "prim_cylinder", "file": "primitives/cylinder.obj", "category": "Blender default cylinder (32 segments, n-gon caps): two 90 deg rims", "set": "primitives"},
+  {"id": "prim_cylinder_v64", "file": "primitives/cylinder_v64.obj", "category": "Blender cylinder, 64 segments", "set": "primitives"},
+  {"id": "prim_cylinder_trifan", "file": "primitives/cylinder_trifan.obj", "category": "Blender cylinder, triangle-fan caps", "set": "primitives"},
+  {"id": "prim_cylinder_open", "file": "primitives/cylinder_open.obj", "category": "Blender cylinder without caps (no rims)", "set": "primitives"},
   {"id": "sculpt_voxel", "file": "sculpt/sculpt_voxel.obj", "category": "sculpt, voxel remesh (0.45M tris, uniform)", "set": "sculpt"},
   {"id": "sculpt_steps", "file": "sculpt/sculpt_steps.obj", "category": "sculpt, voxel terraces (0.13M tris)", "set": "sculpt"},
   {"id": "sculpt_degenerate", "file": "sculpt/sculpt_degenerate.obj", "category": "sculpt_steps before cleanup: 21 % zero-area tris", "set": "sculpt"},
