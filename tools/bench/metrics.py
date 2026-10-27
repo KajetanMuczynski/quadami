@@ -72,16 +72,23 @@ except ImportError:  # pragma: no cover
 
 
 def read_obj(path):
-    """Positions and polygon faces (position indices, 0-based), like tinyobj without triangulation."""
+    """Positions and polygon faces (position indices, 0-based), like tinyobj without triangulation.
+
+    Only the first three numbers of a `v` line are the position: exporters that write vertex colours
+    (MeshLab, ZBrush, Blender with colours on) add three more, which must not become extra vertices.
+    Negative face indices count back from the last vertex read, as the OBJ format defines them."""
     with open(path) as f:
         lines = f.read().splitlines()
-    vlines = [l[2:] for l in lines if l.startswith("v ")]
-    V = np.array(" ".join(vlines).split(), dtype=float).reshape(-1, 3) if vlines else np.zeros((0, 3))
-    faces = []
+    V, faces = [], []
     for l in lines:
-        if l.startswith("f "):
-            faces.append([int(t.split("/")[0]) - 1 for t in l.split()[1:]])
-    return V, faces
+        t = l.split()
+        if not t:
+            continue
+        if t[0] == "v":
+            V.append(t[1:4])
+        elif t[0] == "f":
+            faces.append([i - 1 if i > 0 else len(V) + i for i in (int(x.split("/")[0]) for x in t[1:])])
+    return (np.array(V, dtype=float) if V else np.zeros((0, 3))), faces
 
 
 def triangulate(faces):
@@ -240,7 +247,12 @@ def input_folds(V, F, radius=None, faces=None, tree=None, adj=None):
         return out
     tree = cKDTree(C) if tree is None else tree
     # Euclidean candidates first (a superset on the same sheet), then the geodesic test on those only.
-    cand = [i for i, nb in zip(faces, tree.query_ball_point(C[faces], radius)) if n[i] @ A[nb].sum(0) < 0]
+    # In chunks: one query over all faces holds every neighbour list at once (12-16 GB on a
+    # 394k-triangle sculpt at 3k quads, research/hand-failures-2026-10-26.md F1).
+    cand = []
+    for s in range(0, len(faces), 1024):
+        chunk = faces[s:s + 1024]
+        cand += [i for i, nb in zip(chunk, tree.query_ball_point(C[chunk], radius)) if n[i] @ A[nb].sum(0) < 0]
     if not cand:
         return out
     if adj is None:
