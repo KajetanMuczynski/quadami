@@ -26,3 +26,4 @@
 - Added TODO 2.20a after Kajetan's test (head at 35k: Repair Folds closed the holes but flattened small swirls; one run,
   unconfirmed): the repair radius is 1 % of the diagonal whatever the target (0.55 quad edges at 3k, 1.9 at 35k on the
   head) and the final projection lands on the repaired copy; measurement and four options recorded there.
+- 2026-10-27: added TODO G12a (keep the source's Mirror modifier: remesh the half, re-add the Mirror; Kajetan's 0.2 ask).
