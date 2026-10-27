@@ -277,8 +277,6 @@ namespace {
             int quarters = minimumConeQuarters;
             if (!FrameField::coneQuarters(mesh, vertex, residual, &quarters))
                 continue;
-            if (std::getenv("AR_TIP_DEBUG") && quarters < minimumConeQuarters)
-                std::cerr << "raise vertex " << vertex << " quarters " << quarters << std::endl;
             while (quarters < minimumConeQuarters) {
                 size_t best = SurfaceMesh::npos;
                 bool bestHard = true;
@@ -1408,8 +1406,6 @@ namespace {
             }
             if (!boundary && sum != 0)
                 result->singularVertices.push_back(vertex);
-            if (std::getenv("AR_TIP_DEBUG") && !boundary && sum != 0 && mesh.position(vertex).z() > 0.8)
-                std::cerr << "singular " << vertex << " sum " << sum << " at " << mesh.position(vertex).x() << " " << mesh.position(vertex).y() << " " << mesh.position(vertex).z() << std::endl;
         }
         result->triangleUvs.assign(mesh.faceCount(), std::vector<Vector2>(3));
         for (size_t f = 0; f < mesh.faceCount(); ++f)

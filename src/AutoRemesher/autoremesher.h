@@ -362,6 +362,8 @@ public:
         std::atomic<size_t> islandsConsidered { 0 };
         std::atomic<size_t> trianglesBefore { 0 };
         std::atomic<size_t> trianglesAfter { 0 };
+        // Conical tips the isotropic remesh kept in place (TODO 2.23).
+        std::atomic<size_t> conicalTips { 0 };
     };
 
 private:

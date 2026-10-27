@@ -96,6 +96,15 @@ namespace {
 
     const double triangleAreaPerSquaredEdge = 0.86602540378 * 0.5;
 
+    // A conical tip asks the quads for round(deficit / 90 degrees) quarter
+    // turns at its apex; from 135 degrees on that is two, a valence-2 vertex
+    // (Blender's default cone: 199 degrees). Below, a single valence-3 cone
+    // (a box corner, 90 degrees) does not need the apex kept to look right.
+    // The deficit is gathered within half a target edge of T, so a tip
+    // rounded off below that scale in a dense input still counts.
+    const double conicalTipDegrees = 135.0;
+    const double conicalTipRadius = 0.5;
+
     // Rounds of tangential smoothing after the surface projection (TODO 2.8),
     // the extractor's own count.
     const size_t surfaceRelaxIterations = 5;
@@ -268,12 +277,14 @@ namespace {
             vertexLock[(size_t)(edges[i].first & 0xffffffffu)] |= meshopt_SimplifyVertex_Priority;
         }
     }
-}
 
-namespace {
-    // Conical tips: interior vertices where the angle deficit (2 pi minus the
-    // angle sum) gathered within `radius` reaches `minimumDeficit`. Each tip
-    // is the vertex with the largest own deficit of its cluster.
+    // Conical tips (TODO 2.23): interior vertices where the angle deficit
+    // (2 pi minus the angle sum) gathered within `radius` reaches
+    // `minimumDeficit`, the apex of a cone. Each tip is the vertex with the
+    // largest own deficit of its cluster; a cluster touching a boundary is
+    // left out. The isotropic remesh keeps tips where they are: it used to
+    // collapse and relax the apex away, so the quads were laid out on a cut
+    // cone and their cap sat about one quad below the tip.
     std::vector<size_t> conicalTips(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles, double radius, double minimumDeficit)
     {
@@ -897,17 +908,10 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     IsotropicRemesher isotropicRemesher(vertices, triangles);
     if (nullptr != progressHandler && *progressHandler)
         isotropicRemesher.setProgressHandler(*progressHandler);
-    std::vector<size_t> tips;
-    {
-        const char* deg = std::getenv("AR_TIP_DEG");
-        const char* rad = std::getenv("AR_TIP_RADIUS");
-        const double tipDegrees = deg ? std::atof(deg) : 135.0;
-        const double tipRadius = rad ? std::atof(rad) : 0.5;
-        if (tipDegrees > 0.0)
-            tips = conicalTips(vertices, triangles, tipRadius * voxelSize, tipDegrees * M_PI / 180.0);
-        if (std::getenv("AR_TIP_DEBUG"))
-            std::cerr << "conical tips: " << tips.size() << std::endl;
-    }
+    const std::vector<size_t> tips = conicalTips(vertices, triangles,
+        conicalTipRadius * voxelSize, conicalTipDegrees * M_PI / 180.0);
+    if (nullptr != decimationStats)
+        decimationStats->conicalTips += tips.size();
     if (!tips.empty())
         isotropicRemesher.setPinnedVertices(&tips);
     isotropicRemesher.setTargetEdgeLength(voxelSize);
@@ -1735,6 +1739,7 @@ bool AutoRemesher::remeshIslands()
         run.set("decimated_triangles_before", (double)decimationStats.trianglesBefore.load());
         run.set("decimated_triangles_after", (double)decimationStats.trianglesAfter.load());
         run.set("undecimated_islands", (double)decimationStats.islandsKeptUndecimated.load());
+        run.set("conical_tips", (double)decimationStats.conicalTips.load());
         run.set("input_merged_vertices", (double)cleanup.mergedVertices);
         run.set("input_dropped_triangles", (double)cleanup.droppedTriangles);
         run.set("input_cleanup_kept_parts", (double)cleanup.keptParts);

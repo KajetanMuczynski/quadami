@@ -49,6 +49,20 @@
 
 namespace AutoRemesher {
 
+namespace {
+    // A valence-2 vertex whose two corners sum to less than this leaves an
+    // angle deficit of more than 90 degrees: the apex of a cone (TODO 2.23),
+    // not a doublet of the extraction. Merging its two quads or smoothing it
+    // cuts the tip off.
+    const double conicalTipAngleSum = 1.5 * M_PI;
+
+    double cornerAngle(const Vector3& at, const Vector3& previous, const Vector3& next)
+    {
+        const Vector3 a = previous - at, b = next - at;
+        return std::atan2(Vector3::crossProduct(a, b).length(), Vector3::dotProduct(a, b));
+    }
+}
+
 bool QuadExtractor::extract()
 {
     // libQEx extracts the faces (TODO 6.1b); an island it can't take, or one
@@ -1900,19 +1914,21 @@ void QuadExtractor::smoothAndProject(size_t iterations,
         }
     }
     {
-        // Smoothing pulls a conical tip's valence-2 vertex into the solid.
+        // A conical tip stays where the extraction put it (TODO 2.23).
         std::vector<size_t> faceCount(m_remeshedVertices.size(), 0);
         std::vector<double> angleSum(m_remeshedVertices.size(), 0.0);
-        for (const auto& face : m_remeshedPolygons)
+        for (const auto& face : m_remeshedPolygons) {
+            if (std::any_of(face.begin(), face.end(), [&](size_t v) { return v >= angleSum.size(); }))
+                continue;
             for (size_t i = 0; i < face.size(); ++i) {
-                const size_t v = face[i];
-                const Vector3 a = m_remeshedVertices[face[(i + face.size() - 1) % face.size()]] - m_remeshedVertices[v];
-                const Vector3 b = m_remeshedVertices[face[(i + 1) % face.size()]] - m_remeshedVertices[v];
-                angleSum[v] += std::atan2(Vector3::crossProduct(a, b).length(), Vector3::dotProduct(a, b));
-                ++faceCount[v];
+                angleSum[face[i]] += cornerAngle(m_remeshedVertices[face[i]],
+                    m_remeshedVertices[face[(i + face.size() - 1) % face.size()]],
+                    m_remeshedVertices[face[(i + 1) % face.size()]]);
+                ++faceCount[face[i]];
             }
+        }
         for (size_t v = 0; v < locked.size(); ++v)
-            if (2 == faceCount[v] && 2 == neighbors[v].size() && angleSum[v] < 1.5 * M_PI)
+            if (2 == faceCount[v] && 2 == neighbors[v].size() && angleSum[v] < conicalTipAngleSum)
                 locked[v] = true;
     }
 
@@ -2742,16 +2758,9 @@ void QuadExtractor::mergeDoubleSharedEdgeQuads()
             const size_t secondApex = secondFace[(secondAt + 2) % 4];
             if (firstApex == secondApex)
                 continue;
-            // A doublet whose two corners leave a large angle deficit is a
-            // conical tip of the surface (a cone's apex), not a defect: the
-            // merged quad would cut the tip off.
-            {
-                const Vector3& m = m_remeshedVertices[middle];
-                const Vector3 a = m_remeshedVertices[previous] - m, b = m_remeshedVertices[next] - m;
-                const double corner = std::atan2(Vector3::crossProduct(a, b).length(), Vector3::dotProduct(a, b));
-                if (2.0 * corner < 1.5 * M_PI)
-                    continue;
-            }
+            if (2.0 * cornerAngle(m_remeshedVertices[middle], m_remeshedVertices[previous], m_remeshedVertices[next])
+                < conicalTipAngleSum)
+                continue;
             bool touched = false;
             for (const auto& vertex : { middle, previous, next, firstApex, secondApex }) {
                 if (touchedVertices.end() != touchedVertices.find(vertex)) {
