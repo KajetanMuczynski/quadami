@@ -347,7 +347,7 @@ bool Parameterizer::parameterize()
     const bool coverSolved = QuadParameterizer::parameterize(*m_vertices, *m_triangles,
         &field, m_scaling * baseEdgeLength, m_sharpEdgeDegrees, &cover,
         &faceScalingField, &faceScalingU, &faceScalingV,
-        coverProgress ? &coverProgress : nullptr);
+        coverProgress ? &coverProgress : nullptr, &topology);
     for (auto& record : cover.diagnostics)
         m_diagnostics.push_back(std::move(record));
     if (!coverSolved) {
