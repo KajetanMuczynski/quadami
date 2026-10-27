@@ -254,5 +254,37 @@ int main()
         check(0 == result.report.boundaryEdgeCount && 0 == result.report.nonManifoldEdgeCount,
             "box soup remesh: output closed and manifold");
     }
+    {
+        // A lone ribbon 1 long: at 5e-4 wide it has the whole budget and a
+        // quad fits across, so it is remeshed; at 1e-6 it is a sliver.
+        const auto ribbon = [](double width) {
+            AutoRemesher::RemeshRequest request;
+            for (size_t i = 0; i <= 400; ++i) {
+                for (size_t j = 0; j <= 2; ++j) {
+                    request.positions.push_back((double)i / 400.0);
+                    request.positions.push_back(width * (double)j / 2.0);
+                    request.positions.push_back(0.0);
+                }
+            }
+            for (uint32_t i = 0; i < 400; ++i) {
+                for (uint32_t j = 0; j < 2; ++j) {
+                    const uint32_t a = i * 3 + j, b = a + 3, c = b + 1, d = a + 1;
+                    request.triangles.insert(request.triangles.end(), { a, b, c, a, c, d });
+                }
+            }
+            request.parameters.targetQuadCount = 2000;
+            return AutoRemesher::remesh(request);
+        };
+        const auto slivers = [](const AutoRemesher::RemeshResult& result) {
+            for (const auto& item : result.report.diagnostics) {
+                if (item.first == "input_sliver_islands")
+                    return item.second;
+            }
+            return -1.0;
+        };
+        const AutoRemesher::RemeshResult wide = ribbon(5e-4);
+        check(AutoRemesher::RemeshStatus::Ok == wide.status && 0 == slivers(wide), "ribbon 5e-4 wide: remeshed");
+        check(1 == slivers(ribbon(1e-6)), "ribbon 1e-6 wide: left out as a sliver");
+    }
     return failures ? 1 : 0;
 }

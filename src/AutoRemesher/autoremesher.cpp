@@ -121,23 +121,26 @@ namespace {
     const size_t maximumIslandRetries = 4;
     const double maximumRetriedIslandTriangleCount = 1024.0;
 
-    // An island with almost no area for its extent is a sliver: a strip of
-    // zero width that a bmesh bisect at zero threshold plus Mirror leaves
-    // (area 3e-7 of its bounding diagonal squared).  There is nothing to put
-    // quads on, and the isotropic remesh cannot shape a strip of zero width:
-    // sized by area its voxel came out thousands of times shorter than the
-    // island and the run took minutes and gigabytes; sized by extent it
-    // still grew T until the parametrization ran out of memory
-    // (research/input-sanitizer-2026-10-26.md).  Such an island is left out
-    // and counted.  The bound comes from lone flat ribbons of length 1 and
-    // width w (the ratio is about w), at 2,000 and 8,000 quads: w = 5e-4
-    // remeshes well; 1e-4 and 5e-5 come out clean at 8,000 only; 2e-5 gives
-    // a broken strip in minutes; 1e-5 and below a broken strip or nothing,
-    // with 2-13 GB.  The thinnest real islands of every test set are at
-    // 0.0086 (a single scan triangle) and 0.012 (the stress set's capsule of
-    // radius 0.002 and length 1).  Parts between the bound and about 1e-3
-    // stay in and are the thin-part warning's business.
-    const double minimumAreaPerSquaredDiagonal = 1e-5;
+    // A sliver is a strip-shaped island (area below 1e-3 of its bounding
+    // diagonal squared) whose mean width, area over diagonal, is under half
+    // the edge length T asks of it: there is no quad to put across it, and
+    // the isotropic remesh cannot shape it.  Such islands come from a bmesh
+    // bisect at zero threshold plus Mirror (area 3e-7 to 1e-3 of the diagonal
+    // squared); sized by area their T edge came out far shorter than the
+    // island and the run took minutes and gigabytes or crashed, sized by
+    // extent T still grew until the parametrization ran out of memory
+    // (research/input-sanitizer-2026-10-26.md).  They are left out and
+    // counted.  The width bound comes from lone flat ribbons of length 1 at
+    // 2,000 and 8,000 quads, Quality (width over T edge in brackets):
+    // 5e-4 (1.4, 2.8) and 1e-4 at 8,000 (1.25) remesh well, 5e-5 at 8,000
+    // (0.88) nearly; 1e-4 at 2,000 (0.62) gives a broken strip in a minute,
+    // 2e-5 at 8,000 (0.56) takes over ten; below 0.5 every ribbon came out
+    // broken, or not at all with 2-13 GB.  A sliver beside a larger body gets
+    // the small-island floor, so its T edge is long against its width (under
+    // 0.25 for the bisect slivers).  Ribbons between 0.5 and about 1 stay in
+    // and are the thin-part warning's business.
+    const double maximumSliverAreaPerSquaredDiagonal = 1e-3;
+    const double maximumSliverWidthPerEdge = 0.5;
 
     using SurfaceTopology = AutoRemesher::SurfaceTopology;
 
@@ -1139,7 +1142,8 @@ bool AutoRemesher::remeshIslands()
     m_leftOutVertices.clear();
     for (size_t i = 0; i < islandContexes.size(); ++i) {
         auto& context = islandContexes[i];
-        if (!(context.area < minimumAreaPerSquaredDiagonal * context.diagonal * context.diagonal))
+        if (!(context.area < maximumSliverAreaPerSquaredDiagonal * context.diagonal * context.diagonal)
+            || !(context.area < maximumSliverWidthPerEdge * context.voxelSize * context.diagonal))
             continue;
         for (const auto& triangle : trianglesIslands[i])
             m_leftOutVertices.insert(m_leftOutVertices.end(), triangle.begin(), triangle.end());
