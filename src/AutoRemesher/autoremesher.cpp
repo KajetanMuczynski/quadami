@@ -100,9 +100,11 @@ namespace {
     // turns at its apex; from 135 degrees on that is two, a valence-2 vertex
     // (Blender's default cone: 199 degrees). Below, a single valence-3 cone
     // (a box corner, 90 degrees) does not need the apex kept to look right.
+    // The threshold stays off 135 and 150 degrees, which CAD corners hit
+    // exactly (45 and 30 degree prisms), so float noise does not decide.
     // The deficit is gathered within half a target edge of T, so a tip
     // rounded off below that scale in a dense input still counts.
-    const double conicalTipDegrees = 135.0;
+    const double conicalTipDegrees = 140.0;
     const double conicalTipRadius = 0.5;
 
     // Rounds of tangential smoothing after the surface projection (TODO 2.8),
