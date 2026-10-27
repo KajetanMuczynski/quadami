@@ -95,6 +95,50 @@ void adjustOutgoingHalfedgeBounded(MeshT& m, typename MeshT::VertexHandle v, con
     throw Abort(std::string("vertex rotation does not close ") + where);
 }
 
+// The outgoing halfedges of v in the order of OpenMesh's vertex circulator
+// (h -> next(opposite(h)) from v's halfedge). Throws when the rotation does not
+// return to its start; the circulator then never ended (ext_watch at 1462
+// quads, in create_faces after OpenMesh's add_face).
+template <class MeshT>
+std::vector<typename MeshT::HalfedgeHandle> outgoingHalfedgesBounded(const MeshT& m,
+    typename MeshT::VertexHandle v, const char* where)
+{
+    std::vector<typename MeshT::HalfedgeHandle> outgoing;
+    const auto h0 = m.halfedge_handle(v);
+    auto h = h0;
+    while (h.is_valid()) {
+        if (outgoing.size() > m.n_halfedges())
+            throw Abort(std::string("vertex rotation does not close ") + where);
+        outgoing.push_back(h);
+        h = m.next_halfedge_handle(m.opposite_halfedge_handle(h));
+        if (h == h0)
+            break;
+    }
+    return outgoing;
+}
+
+// Throws unless every handle a vertex or halfedge keeps (outgoing halfedge,
+// next halfedge, to-vertex, face) is invalid or inside the mesh's arrays.
+// garbage_collection() indexes its maps with them: a vertex whose outgoing
+// halfedge lay past the halfedges after the n-gon merge made it read out of
+// bounds (ASan, ext_watch at 2000 quads; a segfault in some runs, garbage
+// connectivity in the others). O(#vertices + #halfedges).
+template <class MeshT>
+void checkHandlesInRange(const MeshT& m, const char* where)
+{
+    const auto bad = [&](int idx, size_t size) { return idx < -1 || (idx >= 0 && (size_t)idx >= size); };
+    for (size_t v = 0; v < m.n_vertices(); ++v)
+        if (bad(m.halfedge_handle(typename MeshT::VertexHandle((int)v)).idx(), m.n_halfedges()))
+            throw Abort(std::string("vertex halfedge out of range ") + where);
+    for (size_t h = 0; h < m.n_halfedges(); ++h) {
+        const typename MeshT::HalfedgeHandle hh((int)h);
+        if (bad(m.next_halfedge_handle(hh).idx(), m.n_halfedges())
+                || bad(m.to_vertex_handle(hh).idx(), m.n_vertices())
+                || bad(m.face_handle(hh).idx(), m.n_faces()))
+            throw Abort(std::string("halfedge handle out of range ") + where);
+    }
+}
+
 // Throws unless every vertex rotation h -> next(opposite(h)) and every face
 // loop h -> next(h) of the polygon mesh returns to its start, which OpenMesh's
 // circulators assume. O(#halfedges).

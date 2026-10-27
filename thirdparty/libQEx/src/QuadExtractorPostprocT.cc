@@ -17,7 +17,7 @@
  * You should have received a copy of the GNU General Public License
  * along with QEx.  If not, see <http://www.gnu.org/licenses/>.
  *
- * Modified by the Quadami fork, 2026-10-21 (TODO 6.1b): connectivity checks before vertex deletion and before each merged face is rebuilt (Guards.hh); no log output.
+ * Modified by the Quadami fork, 2026-10-21 (TODO 6.1b): connectivity checks before vertex deletion and before each merged face is rebuilt, bounded vertex circulation in create_faces (Guards.hh); no log output.
  * See thirdparty/libQEx/PATCHES.md.
  */
 
@@ -649,16 +649,16 @@ size_t QuadExtractorPostprocT<MeshT>::create_faces(std::vector<std::vector<std::
                 break;
             }
 
+            // Quadami fork: bounded circulation, see outgoingHalfedgesBounded.
             if (!mesh_.is_isolated(v0)) {
-                for (typename MeshT::VOHIter voh_it = mesh_.voh_begin(v0), voh_end = mesh_.voh_end(v0);
-                        voh_it != voh_end; ++voh_it) {
-                    if (mesh_.status(*voh_it).deleted()) continue;
-                    if (mesh_.to_vertex_handle(*voh_it) == v1 &&
-                            !mesh_.is_boundary(*voh_it)) {
+                for (const auto voh : outgoingHalfedgesBounded(mesh_, v0, "while creating merged faces")) {
+                    if (mesh_.status(voh).deleted()) continue;
+                    if (mesh_.to_vertex_handle(voh) == v1 &&
+                            !mesh_.is_boundary(voh)) {
                         skip = true;
     #ifndef NDEBUG
                         // Highlight perpetrators.
-                        mesh_.set_color(mesh_.face_handle(*voh_it), typename MeshT::Color(1.0, 0.0, 0.0, 1.0));
+                        mesh_.set_color(mesh_.face_handle(voh), typename MeshT::Color(1.0, 0.0, 0.0, 1.0));
     #endif
     #ifdef NDEBUG
                         break;
@@ -696,6 +696,7 @@ size_t QuadExtractorPostprocT<MeshT>::create_faces(std::vector<std::vector<std::
             /*
              * Redundant boundary check.
              */
+#ifndef NDEBUG
             if (!mesh_.is_isolated(v0)) {
                 for (typename MeshT::VOHIter voh_it = mesh_.voh_begin(v0), voh_end = mesh_.voh_end(v0); voh_it != voh_end; ++voh_it) {
                     assert(voh_it->is_valid());
@@ -704,6 +705,7 @@ size_t QuadExtractorPostprocT<MeshT>::create_faces(std::vector<std::vector<std::
                     }
                 }
             }
+#endif
         }
 #ifndef NDEBUG
         if (!skip && edge_count != f_it->size()) {
@@ -839,6 +841,10 @@ void QuadExtractorPostprocT<MeshT>::ngons_to_quads() {
         facesDeleted = remove_double_faces(newFaces);
         deletedVertices_cleanup += remove_isolated_vertices(newFaces);
     }
+    // Quadami fork: deleting double faces can leave a vertex rotation that does
+    // not close; create_faces then circulated it forever (ext_watch at 1462
+    // quads).
+    checkCirculatorsTerminate(mesh_, "after removing double faces");
 
 #ifndef NDEBUG
     size_t skippedFaces =
