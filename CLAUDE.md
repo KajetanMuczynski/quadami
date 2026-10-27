@@ -8,8 +8,8 @@ Notes for Claude working in this repository.
   isotropic remesh, frame field, singularity simplification, mixed-integer quad parameterization
   (Eigen `SimplicialLDLT` + own rounding), quad extraction. Parallelism via TBB.
 - GUI (`src/*.cpp`, Qt 5.15 or Qt 6 + OpenGL) wraps the core; built with qmake (`autoremesher.pro`).
-- Vendored in `thirdparty/`: eigen, tbb (2017-era), isotropicremesher, meshoptimizer, QtAwesome,
-  QtWaitingSpinner. Upstream README mentions Geogram/libigl, but the `.pro` uses neither.
+- Vendored in `thirdparty/`: eigen, tbb (2017-era), isotropicremesher, meshoptimizer, libQEx (patched,
+  default extractor), OpenMesh (used by libQEx), QtAwesome, QtWaitingSpinner. Upstream README mentions Geogram/libigl, but the `.pro` uses neither.
 - `origin` = Kajetan's fork (github.com/KajetanMuczynski/quadami), `upstream` = huxingyi. Never push upstream.
 
 ## License policy
@@ -120,6 +120,15 @@ Running the binary with no args opens the GUI. The core needs `setTargetTriangle
   a run that fails or recovers), repeat those runs on both sides with `--replicates 5` (1-ulp perturbed
   inputs) and claim only what every replicate agrees on. Aggregates over a whole set need no replicates.
 - A change that can move topology also runs `--set closed`.
+- Evidence rule (Kajetan, 2026-10-26; the crease note's "folds 6 -> 38" was 5 -> 9 after replicates):
+  - A number from one replicate is labelled *unconfirmed* and stays out of conclusions and result tables.
+  - A big effect (more than about 2x or 30 %), a named cause or "this fixes it" is re-checked before it is
+    reported: `--replicates 5` on both sides plus a second independent route (another set, an intervention
+    that switches the cause off, or separate metric code).
+  - Headline claims also get a fresh worker whose only task is to disprove them with the original script
+    and data (errors in shared code such as `metrics.py` are invisible to the author).
+  - Every claim is labelled measured, checked or inferred; every report ends with "what would falsify this"
+    and "what I did not re-check".
 - Test lanes (Kajetan, 2026-10-22; tools/bench/README "Test lanes"): `ab.py lane <merge-base> HEAD` decides,
   never the PR's size or the author. **none** (nothing compiled changed): CI only. **light** (compiled code
   changed, `out.obj` byte-identical on every public set with default targets, 265 runs since the `external` set, plain + one float32 replicate): paste the

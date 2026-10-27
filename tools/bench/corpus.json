@@ -74,7 +74,7 @@
   {"id": "brush_box_relief_repair", "file": "brush/brush_box_relief.obj", "category": "brush_box_relief with --fold-repair on", "set": "gallery", "target": 2000, "cli_args": ["--fold-repair=on"], "up": "Z", "view": [1, -1, 0.5], "title": "Same box, Repair Folds on"},
   {"id": "sword", "file": "downloads/sword.obj", "category": "thin shell, closed (blade), scan", "set": "gallery", "target": 1000, "view": [1, -1, 0.5], "title": "Arming sword at 1,000 quads (thin parts)"},
   {"id": "sword_3k", "file": "downloads/sword.obj", "category": "thin shell, closed (blade), scan", "set": "gallery", "target": 3000, "view": [1, -1, 0.5], "title": "Same sword at 3,000 quads"},
-  {"id": "cat", "file": "downloads/cat.obj", "category": "organic sculpt, dense (1.7M tris)", "set": "gallery", "target": 3000, "view": [1, -1, 0.5], "title": "Cat (dense sculpt, 1.7M triangles)"},
+  {"id": "cat", "file": "downloads/cat.obj", "category": "organic sculpt, dense (1.7M tris)", "set": "gallery", "target": 3000, "view": [-1, -1, 0.4], "title": "Cat (dense sculpt, 1.7M triangles)"},
   {"id": "hammer", "file": "downloads/hammer.obj", "category": "noisy raw scan", "set": "gallery", "target": 3000, "view": [0.5, -1, 1.2], "title": "Hammer (raw scan)"},
   {"id": "plane", "file": "downloads/plane.obj", "category": "thin shell, closed (wings)", "set": "gallery", "target": 3000, "up": "Z", "view": [1, -1, 0.6], "title": "Plane (thin wings)"},
   {"id": "ext_makehuman", "file": "external/ext_makehuman.obj", "category": "full human body, hands with fingers, ears; clean quad base mesh, closed", "set": "external"},
