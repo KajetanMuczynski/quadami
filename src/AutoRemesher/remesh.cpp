@@ -81,6 +81,8 @@ namespace {
             return "resolution must be fast or quality";
         if (Extractor::Qex != parameters.extractor && Extractor::Trace != parameters.extractor)
             return "extractor must be qex or trace";
+        if (QuadSmoothing::Laplacian != parameters.quadSmoothing && QuadSmoothing::Tangential != parameters.quadSmoothing)
+            return "quad smoothing must be laplacian or tangential";
         return nullptr;
     }
 
@@ -487,6 +489,22 @@ bool parseExtractor(const std::string& text, Extractor* extractor)
     return true;
 }
 
+const char* toString(QuadSmoothing smoothing)
+{
+    return QuadSmoothing::Tangential == smoothing ? "tangential" : "laplacian";
+}
+
+bool parseQuadSmoothing(const std::string& text, QuadSmoothing* smoothing)
+{
+    if ("laplacian" == text)
+        *smoothing = QuadSmoothing::Laplacian;
+    else if ("tangential" == text)
+        *smoothing = QuadSmoothing::Tangential;
+    else
+        return false;
+    return true;
+}
+
 RemeshResult remeshWithPreview(const RemeshRequest& request,
     const RemeshCallbacks& callbacks,
     RemeshPreview* preview)
@@ -531,6 +549,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     engine.setUseQex(Extractor::Qex == parameters.extractor);
     engine.setRepairInputFolds(parameters.repairFolds);
     engine.setFlattenSpikes(parameters.flattenSpikes);
+    engine.setTangentialQuadSmoothing(QuadSmoothing::Tangential == parameters.quadSmoothing);
     engine.setTrianglesPerQuad(MeshResolution::Fast == parameters.resolution
             ? ::AutoRemesher::FastTrianglesPerQuad
             : ::AutoRemesher::QualityTrianglesPerQuad);
@@ -712,6 +731,7 @@ std::string toJson(const RemeshResult& result)
         << ", \"repair_folds\": " << (parameters.repairFolds ? "true" : "false")
         << ", \"flatten_spikes\": " << (parameters.flattenSpikes ? "true" : "false")
         << ", \"extractor\": " << jsonString(toString(parameters.extractor))
+        << ", \"quad_smoothing\": " << jsonString(toString(parameters.quadSmoothing))
         << "},\n";
     out << "  \"input\": {"
         << "\"vertices\": " << jsonCount(report.inputVertexCount)

@@ -64,6 +64,7 @@ PARAMETER_FLAGS = {
     "sharp_edge_degrees": "--sharp-edge",
     "smooth_normal_degrees": "--smooth-normal",
     "resolution": "--resolution",
+    "quad_smoothing": "--quad-smoothing",
 }
 
 # Options of one run that are not panel settings -> CLI flag.  repair_folds
