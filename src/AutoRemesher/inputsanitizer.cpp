@@ -40,6 +40,10 @@ const double seamWeldRelativeTolerance = 1e-5;
 
 namespace {
 
+    // Two boundary sides whose triangles open less than 5 degrees apart lie
+    // on the same side of their edge (weldSeams()).
+    const double sameSideCosine = 0.9961946980917455;
+
     const size_t none = std::numeric_limits<size_t>::max();
 
     struct UnionFind {
@@ -252,9 +256,26 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
     std::vector<size_t> partner(boundary.size(), none);
     std::vector<unsigned char> reversed(boundary.size(), 0);
     std::vector<size_t> nearFrom;
+    // Seen from the edge, the direction in which a side's triangle lies.
+    const auto across = [&](const Side& side, const Vector3& from, const Vector3& along) {
+        const auto& t = triangles[side.triangle];
+        size_t opposite = t[0];
+        for (const size_t v : t) {
+            if (v != side.from && v != side.to)
+                opposite = v;
+        }
+        const Vector3 d = vertices[opposite] - from;
+        const Vector3 out = d - along * Vector3::dotProduct(d, along);
+        // Not normalized(): its zero test is absolute, and a tiny model's
+        // triangles are tiny.
+        const double length = out.length();
+        return length > 0.0 ? out / length : Vector3();
+    };
     for (size_t s = 0; s < boundary.size(); ++s) {
         const Side& side = boundary[s];
         const double length = (vertices[side.from] - vertices[side.to]).length();
+        const Vector3 along = length > 0.0 ? (vertices[side.to] - vertices[side.from]) / length : Vector3();
+        const Vector3 ownSide = across(side, vertices[side.from], along);
         near(side.from, nearFrom);
         size_t found = none;
         bool foundReversed = false;
@@ -266,6 +287,12 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
             const double limit = std::min(tolerance, 0.1 * std::min(length, otherLength));
             if ((vertices[u] - vertices[side.from]).lengthSquared() > limit * limit
                 || (vertices[w] - vertices[side.to]).lengthSquared() > limit * limit)
+                return;
+            // Two triangles on the same side of the edge are the two faces of
+            // a sheet exported double-sided with its own vertices (or a fold
+            // pressed flat), not the two halves of a seam: welding their rims
+            // would close the sheet into a pillow of zero thickness.
+            if (Vector3::dotProduct(ownSide, across(boundary[k], vertices[side.from], along)) > sameSideCosine)
                 return;
             if (none != found && found != k)
                 ambiguous = true;

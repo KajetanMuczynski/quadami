@@ -148,6 +148,36 @@ int main()
         check(0 == stats.weldedEdges && before == mesh.triangles, "three sheets on one line: unchanged");
     }
     {
+        // An open sheet exported double-sided, with its own vertices per
+        // side: the rims coincide but both faces lie on the same side of
+        // them, so they stay apart instead of closing into a flat pillow.
+        Mesh mesh = grid(4);
+        const size_t n = mesh.vertices.size();
+        const size_t m = mesh.triangles.size();
+        for (size_t v = 0; v < n; ++v)
+            mesh.vertices.push_back(mesh.vertices[v]);
+        for (size_t t = 0; t < m; ++t) {
+            const auto& f = mesh.triangles[t];
+            mesh.triangles.push_back({ f[0] + n, f[2] + n, f[1] + n });
+        }
+        const auto before = mesh.triangles;
+        const auto stats = AutoRemesher::weldSeams(mesh.vertices, mesh.triangles, tolerance);
+        check(0 == stats.weldedEdges && before == mesh.triangles, "double-sided sheet, own vertices: unchanged");
+    }
+    {
+        // A sheet folded flat onto itself along an unwelded edge: same side,
+        // not welded; the same edge opened to 90 degrees is a seam.
+        Mesh flat;
+        flat.vertices = { { 0, 0, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 0, 0, 0 }, { 0, 1, 0 }, { 0.5, 0.3, 0 } };
+        flat.triangles = { { 0, 2, 1 }, { 3, 4, 5 } };
+        check(0 == AutoRemesher::weldSeams(flat.vertices, flat.triangles, tolerance).weldedEdges,
+            "sheet folded flat: unchanged");
+        Mesh crease = flat;
+        crease.vertices[5] = Vector3(0, 0.3, 0.5);
+        check(1 == AutoRemesher::weldSeams(crease.vertices, crease.triangles, tolerance).weldedEdges,
+            "seam at a right angle: welded");
+    }
+    {
         // A sliver edge shorter than ten times the gap is not welded across.
         Mesh mesh;
         mesh.vertices = { { 0, 0, 0 }, { 1e-5, 0, 0 }, { 0, 1, 0 }, { 0, 2e-6, 0 }, { 1e-5, 2e-6, 0 }, { 0, -1, 0 } };

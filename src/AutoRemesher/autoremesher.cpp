@@ -129,12 +129,15 @@ namespace {
     // island and the run took minutes and gigabytes; sized by extent it
     // still grew T until the parametrization ran out of memory
     // (research/input-sanitizer-2026-10-26.md).  Such an island is left out
-    // and counted.  The thinnest real islands of every test set are at
+    // and counted.  The bound comes from lone flat ribbons of length 1 and
+    // width w (the ratio is about w), at 2,000 and 8,000 quads: w = 5e-4
+    // remeshes well; 1e-4 and 5e-5 come out clean at 8,000 only; 2e-5 gives
+    // a broken strip in minutes; 1e-5 and below a broken strip or nothing,
+    // with 2-13 GB.  The thinnest real islands of every test set are at
     // 0.0086 (a single scan triangle) and 0.012 (the stress set's capsule of
-    // radius 0.002 and length 1), so the threshold leaves them alone; a part
-    // that thin is lost at any count anyway (thin parts vanish below about
-    // 0.8 quad widths).
-    const double minimumAreaPerSquaredDiagonal = 1e-3;
+    // radius 0.002 and length 1).  Parts between the bound and about 1e-3
+    // stay in and are the thin-part warning's business.
+    const double minimumAreaPerSquaredDiagonal = 1e-5;
 
     using SurfaceTopology = AutoRemesher::SurfaceTopology;
 

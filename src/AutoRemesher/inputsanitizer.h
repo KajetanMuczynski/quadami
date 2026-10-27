@@ -58,7 +58,9 @@ extern const double seamWeldRelativeTolerance;
 // Two boundary edges (edges of one triangle) are welded when their ends
 // pairwise lie within min(tolerance, a tenth of the shorter edge) of each
 // other and neither has another such partner, so three sheets meeting along
-// a line and a slit wider than the tolerance stay as they are.  Only the
+// a line and a slit wider than the tolerance stay as they are.  Two edges
+// whose triangles lie on the same side of them (within 5 degrees) are the two
+// faces of a double-sided sheet, not a seam, and are never welded.  Only the
 // triangles' corners change: a welded vertex takes the lowest index of its
 // group.  A connected part where the welds would make an edge
 // non-manifold is left as it was, whole.

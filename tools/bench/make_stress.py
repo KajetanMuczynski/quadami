@@ -415,7 +415,8 @@ def fam_selfint(ctx):
 
 def split_vertices_along(V, F, cut):
     """Unweld the edges where cut[f] is True on one face and False on the other: each vertex gets one copy
-    per side, at the same position (what Edge Split or an export without merge leaves)."""
+    per side, at the same position (what Edge Split or an export without merge leaves). Also returns the
+    indices of the copies on the seam (those whose original the uncut faces still use)."""
     F = F.copy()
     copy = {}
     for fi in np.nonzero(cut)[0]:
@@ -432,7 +433,8 @@ def split_vertices_along(V, F, cut):
     keep = np.ones(len(V2), bool)
     keep[:len(V)] = used_uncut
     remap = np.cumsum(keep) - 1
-    return V2[keep], remap[F]
+    seam = np.array([remap[copy[v]] for v in order if used_uncut[v]], dtype=np.int64)
+    return V2[keep], remap[F], seam
 
 
 def fam_sanitize(ctx):
@@ -441,13 +443,18 @@ def fam_sanitize(ctx):
     rng = np.random.default_rng(27)
     C = V[F].mean(1)
     # Unwelded along a closed seam (a plane cut): two open pieces whose boundaries coincide.
-    Vs, Fs = split_vertices_along(V, F, C[:, 0] > 0.05)
+    Vs, Fs, seam = split_vertices_along(V, F, C[:, 0] > 0.05)
     yield "san_seam", (Vs, Fs), {"kind": "spot unwelded along one plane cut (two coincident boundaries)"}, None
-    # Unwelded along a seam with a gap of 1e-5 of the diagonal, as a float32 round trip or a sloppy merge leaves.
+    # The seam's copies moved by a fixed distance in random directions: 2e-6 of the diagonal (a float32 round trip
+    # or six decimals; within the weld tolerance of 1e-5) and 1e-4 (a slit wider than it, which must stay open).
     diag = float(np.linalg.norm(V.max(0) - V.min(0)))
-    Vg = Vs.copy()
-    Vg[len(V):] += rng.normal(size=(len(Vs) - len(V), 3)) * 1e-5 * diag
-    yield "san_seam_gap", (Vg, Fs), {"kind": "spot unwelded along one plane cut, 1e-5 diagonal gap"}, None
+    rng.normal(size=(len(Vs) - len(V), 3))  # the draw of an earlier version: keeps the meshes below as they were
+    gap_rng = np.random.default_rng(28)
+    for name, gap in (("san_seam_gap", 2e-6), ("san_seam_wide", 1e-4)):
+        d = gap_rng.normal(size=(len(seam), 3))
+        Vg = Vs.copy()
+        Vg[seam] += d / np.linalg.norm(d, axis=1, keepdims=True) * gap * diag
+        yield name, (Vg, Fs), {"kind": f"spot unwelded along one plane cut, seam copies moved {gap:g} of the diagonal"}, None
     # Edge Split by angle on a CAD part: every flat region its own island.
     Vb, Fb = read_obj(os.path.join(os.path.dirname(ctx.downloads.rstrip("/")), "synthetic", "csg_bracket.obj"))
     Vb, Fb = edge_split(Vb, Fb, 30.0)
@@ -486,6 +493,25 @@ def fam_sanitize(ctx):
         Fk = np.concatenate([np.stack([i, i + 1, n + i], 1), np.stack([i + 1, n + i + 1, n + i], 1)])
         parts.append((np.concatenate([a, b]), Fk))
     yield "san_sliver_islands", merge(*parts), {"kind": "spot plus 12 strips 0.2 x 1e-7"}, None
+    # A lone ribbon 1 long and w wide (400 x 2 quads, split): thin, but the whole budget is its own. The sliver
+    # rule must keep the widths the remesher handles and leave out only those that blow T up.
+    for w in (5e-4, 1e-4, 5e-5, 2e-5, 1e-5, 3e-6, 1e-6):
+        x, y = np.meshgrid(np.linspace(0.0, 1.0, 401), np.linspace(0.0, w, 3), indexing="ij")
+        Vr = np.stack([x.ravel(), y.ravel(), np.zeros(x.size)], 1)
+        idx = np.arange(x.size).reshape(x.shape)
+        a, b, c, d = idx[:-1, :-1].ravel(), idx[1:, :-1].ravel(), idx[1:, 1:].ravel(), idx[:-1, 1:].ravel()
+        Fr = np.concatenate([np.stack([a, b, c], 1), np.stack([a, c, d], 1)])
+        yield f"san_ribbon_{w:g}", (Vr, Fr), {"kind": f"lone open ribbon 1 x {w:g}"}, None
+    # An open sheet exported double-sided with its own vertices per side: the two rims coincide, but they are two
+    # sides of one sheet, not a seam, so welding them would make a zero-thickness closed pillow.
+    keep = C[:, 0] > 0.05
+    used = np.unique(F[keep])
+    remap = np.full(len(V), -1)
+    remap[used] = np.arange(len(used))
+    Vh, Fh = V[used], remap[F[keep]]
+    yield "san_open_half", (Vh, Fh), {"kind": "open part of spot (control for san_double_sided_open)"}, None
+    yield "san_double_sided_open", (np.concatenate([Vh, Vh]), np.concatenate([Fh, Fh[:, ::-1] + len(Vh)])), \
+        {"kind": "open part of spot, each face twice in opposite winding, separate vertices per side"}, None
     # Loose vertices far away inflate the bounding box.
     for far in (1e3, 1e5):
         yield f"san_loose_vertex_{far:g}", (np.concatenate([V, [[far, 0.0, 0.0]]]), F), \
