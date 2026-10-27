@@ -418,6 +418,8 @@ def value(r, k):
     if k == "sj_p1": return (m.get("quads") or {}).get("sj_p1")
     if k == "skew_p95": return (m.get("quads") or {}).get("skew_p95")
     if k == "crease_cov": return (m.get("creases") or {}).get("coverage")
+    if k == "marked_cov": return (m.get("marked") or {}).get("coverage")
+    if k == "marked_bevel": return (m.get("marked") or {}).get("bevel_median")
     if k == "count_err": return abs(o["quads"] / r["target"] - 1) if o.get("quads") else None
     if k == "energy_ratio":
         e = [(c["continuous_energy"], c["rounded_energy"]) for c in r.get("cover") or []
@@ -441,9 +443,9 @@ COUNTS = ["flips_cont", "flips_round", "flips", "degenerate", "non_quads", "sj_l
           # V3's split (2026-10-23): flips over folded input vs the rest
           "flipped_off_folds", "flipped_over_folds"]
 MEANS = ["area_uncovered", "area_wrong_side", "irregular_1k", "in_out_p99", "hausdorff", "in_out_mean", "normal_dev", "vertex_dist", "sj_p1",
-         "skew_p95", "crease_cov", "count_err", "energy_ratio", "time", "peak_rss_mb"]
+         "skew_p95", "crease_cov", "marked_cov", "marked_bevel", "count_err", "energy_ratio", "time", "peak_rss_mb"]
 # Rows where a higher value is the better one (for "runs B better / worse").
-HIGHER_IS_BETTER = {"sj_p1", "crease_cov"}
+HIGHER_IS_BETTER = {"sj_p1", "crease_cov", "marked_cov"}
 
 
 def resolve(spec, work):
