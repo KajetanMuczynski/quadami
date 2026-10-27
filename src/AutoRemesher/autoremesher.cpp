@@ -1829,15 +1829,18 @@ bool AutoRemesher::remeshIslands()
             record.set("thin_spots", (double)thinParts[i].spots);
             m_diagnostics.push_back(std::move(record));
         }
+        // Moved, not copied: on inputs with thousands of islands the records
+        // take hundreds of MB, and a copy doubled them at the peak.
         for (size_t i = 0; i < islandRuns.size(); ++i) {
             if (!islandRuns[i].features.values.empty()) {
-                m_diagnostics.push_back(islandRuns[i].features);
+                m_diagnostics.push_back(std::move(islandRuns[i].features));
                 m_diagnostics.back().island = i;
             }
-            for (const auto& record : islandRuns[i].diagnostics) {
-                m_diagnostics.push_back(record);
+            for (auto& record : islandRuns[i].diagnostics) {
+                m_diagnostics.push_back(std::move(record));
                 m_diagnostics.back().island = i;
             }
+            std::vector<DiagnosticRecord>().swap(islandRuns[i].diagnostics);
         }
     }
 

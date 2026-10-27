@@ -304,6 +304,14 @@ public:
         return m_diagnostics;
     }
 
+    // Hands the records over and leaves diagnostics() empty.
+    std::vector<DiagnosticRecord> takeDiagnostics()
+    {
+        std::vector<DiagnosticRecord> records;
+        records.swap(m_diagnostics);
+        return records;
+    }
+
     // What cleanInput() changed in the input.
     struct InputCleanupStats {
         // Vertices merged into another across an edge no longer than the

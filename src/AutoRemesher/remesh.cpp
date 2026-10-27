@@ -573,7 +573,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
 
     if (nullptr != preview)
         preview->phaseReport = engine.phaseReport();
-    result.stageDiagnostics = engine.diagnostics();
+    result.stageDiagnostics = engine.takeDiagnostics();
     if (!result.stageDiagnostics.empty())
         report.diagnostics = summarizeDiagnostics(result.stageDiagnostics);
     if (engine.cancelled())
