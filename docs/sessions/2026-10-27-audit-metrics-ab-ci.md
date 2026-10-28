@@ -7,8 +7,8 @@
   release_gate fails on lost baseline runs, OBJ vertex colours and negative indices, chunked `input_folds`,
   `tests/test_metrics_basics.py`.
 - Found: exact topology counts agree across the three routes on 150 runs (closed + corpus) [M].
-  `distance.in_to_out_mean`/`p99` mix area samples with up to 100k input vertices, so dense tessellation
-  weighs more (reported/area-only up to ×1.67 mean, ×2.54 p99 on the corpus) [M]; a vertex-coloured OBJ
+  `distance.in_to_out_mean`/`p99` mix area samples with up to 100k input vertices, which sit
+  farther from the output than average (polyhedron corners) and weigh dense regions more (reported/area-only up to ×1.67 mean, ×2.54 p99 on the corpus) [M]; a vertex-coloured OBJ
   doubled the vertices, negative indices crashed [M]; touching islands give false flips and wrong-side
   area (TODO 1.13 F3) [M]; a degenerate quad counts in V2 and V4 [M]; release_gate passed with baseline
   runs missing from the candidate [C]. CI: Windows add-on job is the critical path (~15.5 min), mostly
@@ -19,3 +19,7 @@
   research/measurement-audit-2026-10-27.md (project files).
 - Next: metric changes (area-only distance keys, F3, degenerate vs folded) only at a coordinated metrics
   freeze; CI speed (test link), runner and pip pinning, output-gate mutation cases as separate PRs.
+- Follow-up (same session): an independent re-check confirmed the distance bias (vertices added to area
+  samples reproduce the reported values) and corrected its cause: density explains a median 36 % on the
+  corpus. #131 merged; next PR gives every master push its own CI concurrency group (6 of 30 merges
+  #98-#129 had their run cancelled by the next merge).

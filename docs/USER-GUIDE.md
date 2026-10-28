@@ -73,6 +73,8 @@ release. Use one only when asked to try a fix, and send its [build line](#which-
    and click the newest run where the job for your system (**addon (linux-x64)**,
    **addon (windows-x64)** or **addon (macos-arm64)**) has a green tick. The run as a whole may be red
    only because the macOS job never got a computer; the Linux and Windows zips are still there *(CI)*.
+   Linux and Windows are built for every merge; macOS only in the nightly run (event `schedule`), so
+   a macOS test build can be up to a day behind.
 3. Scroll to **Artifacts** at the bottom and click `addon-linux-x64`, `addon-windows-x64` or
    `addon-macos-arm64`.
 4. GitHub wraps the add-on in a zip of its own. Unpack that outer zip once (Linux: `unzip`;
