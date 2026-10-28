@@ -45,6 +45,7 @@ MixedIntegerLeastSquares::MixedIntegerLeastSquares(size_t size)
     , m_m0(size)
     , m_period(size, 0)
     , m_initialPeriod(size, 0)
+    , m_constraintStart(1, 0)
 {
     for (size_t i = 0; i < size; ++i)
         m_m0[i] = i;
@@ -157,12 +158,8 @@ void MixedIntegerLeastSquares::recordConstraint()
     normalize(&m_constraintScratch);
     if (m_constraintScratch.empty())
         return;
-    if (1 == m_constraintScratch.size())
-        m_singleTermConstraints.push_back(m_constraintRanges.size());
-    else
-        m_multiTermConstraints.push_back(m_constraintRanges.size());
-    m_constraintRanges.push_back({ m_constraintData.size(), m_constraintScratch.size() });
     m_constraintData.insert(m_constraintData.end(), m_constraintScratch.begin(), m_constraintScratch.end());
+    m_constraintStart.push_back(m_constraintData.size());
 }
 
 void MixedIntegerLeastSquares::addConstraint(const std::vector<std::pair<size_t, double>>& row)
@@ -204,11 +201,15 @@ void MixedIntegerLeastSquares::addConstraint(size_t a, double ca, size_t b, doub
     recordConstraint();
 }
 
+size_t MixedIntegerLeastSquares::recordedConstraintCount() const
+{
+    return m_constraintStart.size() - 1;
+}
+
 const std::vector<MixedIntegerLeastSquares::Coeff>& MixedIntegerLeastSquares::recordedConstraint(size_t index) const
 {
-    const auto& range = m_constraintRanges[index];
-    m_rowScratch.assign(m_constraintData.begin() + range.first,
-        m_constraintData.begin() + range.first + range.second);
+    m_rowScratch.assign(m_constraintData.begin() + m_constraintStart[index],
+        m_constraintData.begin() + m_constraintStart[index + 1]);
     return m_rowScratch;
 }
 
@@ -216,21 +217,30 @@ void MixedIntegerLeastSquares::finalizeConstraints()
 {
     if (m_pass != 0)
         return;
-    for (size_t index : m_singleTermConstraints)
-        processConstraint(recordedConstraint(index));
+    const size_t count = recordedConstraintCount();
+    const auto termCount = [this](size_t index) { return m_constraintStart[index + 1] - m_constraintStart[index]; };
+    // Pass 0 takes the single-term constraints, pass 1 the others, each in
+    // the order they were added.
+    for (size_t index = 0; index < count; ++index)
+        if (1 == termCount(index))
+            processConstraint(recordedConstraint(index));
     endPass(0);
-    for (size_t index : m_multiTermConstraints)
-        processConstraint(recordedConstraint(index));
+    for (size_t index = 0; index < count; ++index)
+        if (1 < termCount(index))
+            processConstraint(recordedConstraint(index));
     endPass(1);
-    for (size_t index = 0; index < m_constraintRanges.size(); ++index)
+    for (size_t index = 0; index < count; ++index)
         processConstraint(recordedConstraint(index));
     endPass(2);
     if (m_eliminationOverBudget)
         return;
-    for (size_t index = 0; index < m_constraintRanges.size(); ++index)
+    for (size_t index = 0; index < count; ++index)
         if (!processConstraint(recordedConstraint(index)))
             ++m_droppedConstraintCount;
     endPass(3);
+    // Kept until constraintResidual(); drop the slack of their growth.
+    m_constraintData.shrink_to_fit();
+    m_constraintStart.shrink_to_fit();
 
     buildKernel();
 
@@ -517,7 +527,7 @@ size_t MixedIntegerLeastSquares::expectedRoundingPasses() { return roundingBatch
 
 bool MixedIntegerLeastSquares::solveIteration()
 {
-    if (m_pass < 3 || m_kernelSize == 0 || m_eliminationOverBudget)
+    if (m_pass < 3 || m_kernelSize == 0 || m_eliminationOverBudget || m_systemReleased)
         return false;
     IterationStats& stats = m_lastIterationStats;
     stats = IterationStats();
@@ -575,6 +585,13 @@ bool MixedIntegerLeastSquares::scaleSolution(double factor)
     for (double& value : m_values)
         value *= factor;
     return true;
+}
+
+void MixedIntegerLeastSquares::releaseSystem()
+{
+    m_system.reset();
+    std::vector<size_t>().swap(m_energyIndices);
+    m_systemReleased = true;
 }
 
 bool MixedIntegerLeastSquares::converged() const
@@ -678,9 +695,9 @@ double MixedIntegerLeastSquares::constraintResidual(double tolerance, size_t* vi
 {
     double residual = 0.0;
     size_t violated = 0;
-    for (const auto& range : m_constraintRanges) {
+    for (size_t index = 0; index < recordedConstraintCount(); ++index) {
         double sum = 0.0;
-        for (size_t k = range.first; k < range.first + range.second; ++k)
+        for (size_t k = m_constraintStart[index]; k < m_constraintStart[index + 1]; ++k)
             sum += m_constraintData[k].a * value(m_constraintData[k].index);
         const double magnitude = std::fabs(sum);
         residual = std::max(residual, magnitude);

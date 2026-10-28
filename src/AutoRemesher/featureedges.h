@@ -106,10 +106,13 @@ FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
     double sharpEdgeDegrees, size_t* dropped = nullptr);
 
 // Per corner of `mesh` (the edge from the corner's vertex to the next one):
-// 1 when that edge is in `set`.  Both corners of an interior edge get it.
-std::vector<char> featureCornerFlags(const SurfaceMesh& mesh, const FeatureEdgeSet& set);
+// 1 when that edge is in `set` with every bit of `requiredFlags`.  Both
+// corners of an interior edge get it.
+std::vector<char> featureCornerFlags(const SurfaceMesh& mesh, const FeatureEdgeSet& set,
+    unsigned char requiredFlags = 0);
 
-// meshopt_simplify vertex lock bits for the ends of the set's edges.
+// meshopt_simplify vertex lock bits for the ends of the set's edges: hard
+// edges locked, the others kept by priority.
 std::vector<unsigned char> featureVertexLock(const FeatureEdgeSet& set, size_t vertexCount);
 
 // Total length of the set's edges.

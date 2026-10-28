@@ -248,6 +248,9 @@ void SingularitySimplifier::buildFramesAndConnection()
     const std::vector<char> sharpCorners = nullptr != m_sharpEdges
         ? featureCornerFlags(m_mesh, *m_sharpEdges)
         : std::vector<char>(corners, 0);
+    const std::vector<char> hardCorners = nullptr != m_sharpEdges
+        ? featureCornerFlags(m_mesh, *m_sharpEdges, FeatureEdgeSet::Hard)
+        : std::vector<char>(corners, 0);
     for (size_t c = 0; c < corners; ++c) {
         const size_t other = m_mesh.oppositeCorner(c);
         if (other == SurfaceMesh::npos)
@@ -258,8 +261,10 @@ void SingularitySimplifier::buildFramesAndConnection()
         // Concave sharp edges only (normalAngle > 0), as before the set:
         // freezing the convex ones too keeps cones from reaching the convex
         // corners they belong to (inferred), and measured worse (TODO 2.6:
-        // cad set: SJ p1 0.61 -> 0.59, UV flips x1.3 summed).
-        m_sharpCorner[c] = 0 != sharpCorners[c] && m_mesh.normalAngle(c) > 0.0;
+        // cad set: SJ p1 0.61 -> 0.59, UV flips x1.3 summed).  Hard
+        // (user-marked) edges both ways: they are often on a smooth surface,
+        // where cones would cross them (TODO 5.4).
+        m_sharpCorner[c] = 0 != hardCorners[c] || (0 != sharpCorners[c] && m_mesh.normalAngle(c) > 0.0);
     }
 }
 

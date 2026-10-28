@@ -489,6 +489,8 @@ def value(r, k):
     if k == "crease_cov": return (m.get("creases") or {}).get("coverage")
     if k == "crease_cov_theta": return (m.get("creases") or {}).get("coverage_theta")
     if k == "crease_bent_1k": return (m.get("creases") or {}).get("bent_quads_per_1k")
+    if k == "marked_cov": return (m.get("marked") or {}).get("coverage")
+    if k == "marked_bevel": return (m.get("marked") or {}).get("bevel_median")
     if k == "count_err": return abs(o["quads"] / r["target"] - 1) if o.get("quads") else None
     if k == "energy_ratio":
         e = [(c["continuous_energy"], c["rounded_energy"]) for c in r.get("cover") or []
@@ -512,15 +514,15 @@ COUNTS = ["flips_cont", "flips_round", "flips", "degenerate", "non_quads", "sj_l
           # V3's split (2026-10-23): flips over folded input vs the rest
           "flipped_off_folds", "flipped_over_folds"]
 MEANS = ["area_uncovered", "area_wrong_side", "irregular_1k", "in_out_p99", "hausdorff", "in_out_mean", "normal_dev", "vertex_dist", "sj_p1",
-         "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "count_err", "energy_ratio", "time", "peak_rss_mb"]
+         "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel", "count_err", "energy_ratio", "time", "peak_rss_mb"]
 # Rows computed by metrics.py (the rest come from the CLI's own report and stage records).
 FROM_METRICS = {"sj_le_0", "flipped_vs_input", "flipped_vs_raw", "flipped_off_folds", "flipped_over_folds",
                 "folded_faces", "holes_added", "holes_closed", "handles_lost", "handles_added", "islands_dropped",
                 "islands_merged", "area_uncovered", "area_wrong_side", "nm_vertices", "islands_changed",
                 "irregular_1k", "hausdorff", "in_out_mean", "in_out_p99", "vertex_dist", "normal_dev", "sj_p1",
-                "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k"}
+                "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel"}
 # Rows where a higher value is the better one (for "runs B better / worse").
-HIGHER_IS_BETTER = {"sj_p1", "crease_cov", "crease_cov_theta"}
+HIGHER_IS_BETTER = {"sj_p1", "crease_cov", "crease_cov_theta", "marked_cov"}
 
 
 def resolve(spec, work):
