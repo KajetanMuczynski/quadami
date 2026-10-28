@@ -34,6 +34,8 @@ namespace {
     // Greedy rounding schedule, see fixNextBatch().
     const size_t roundingBatches = 10;
     const double nearlyIntegral = 1e-3;
+    // See eliminationOverBudget().
+    const size_t maximumEliminationFill = 64;
 }
 
 MixedIntegerLeastSquares::MixedIntegerLeastSquares(size_t size)
@@ -223,6 +225,8 @@ void MixedIntegerLeastSquares::finalizeConstraints()
     for (size_t index = 0; index < m_constraintRanges.size(); ++index)
         processConstraint(recordedConstraint(index));
     endPass(2);
+    if (m_eliminationOverBudget)
+        return;
     for (size_t index = 0; index < m_constraintRanges.size(); ++index)
         if (!processConstraint(recordedConstraint(index)))
             ++m_droppedConstraintCount;
@@ -335,6 +339,7 @@ void MixedIntegerLeastSquares::finalizeM1()
         m_m2.rows[i].push_back({ i, 1 });
         m_m2t.rows[i].push_back({ i, 1 });
     }
+    m_eliminationNonZeros = n;
 }
 
 void MixedIntegerLeastSquares::finalizeM2()
@@ -357,8 +362,14 @@ void MixedIntegerLeastSquares::applyRemoveColumn(const std::vector<Coeff>& row, 
     const std::vector<Coeff> column = m_m2t.rows[zero];
     for (const Coeff& d : difference)
         axpy(&m_m2t.rows[d.index], column, d.a);
-    for (const Coeff& source : column)
-        axpy(&m_m2.rows[source.index], difference, source.a);
+    for (const Coeff& source : column) {
+        std::vector<Coeff>& target = m_m2.rows[source.index];
+        m_eliminationNonZeros -= target.size();
+        axpy(&target, difference, source.a);
+        m_eliminationNonZeros += target.size();
+    }
+    if (m_eliminationNonZeros > maximumEliminationFill * m_m2.rows.size())
+        m_eliminationOverBudget = true;
 }
 
 bool MixedIntegerLeastSquares::processConstraint(const std::vector<Coeff>& row)
@@ -389,6 +400,8 @@ bool MixedIntegerLeastSquares::processConstraint(const std::vector<Coeff>& row)
         }
         return true;
     }
+    if (m_eliminationOverBudget)
+        return true;
     const std::vector<Coeff> r2 = multiply(r1, m_m2);
     if (r2.empty())
         return true;
@@ -504,7 +517,7 @@ size_t MixedIntegerLeastSquares::expectedRoundingPasses() { return roundingBatch
 
 bool MixedIntegerLeastSquares::solveIteration()
 {
-    if (m_pass < 3 || m_kernelSize == 0)
+    if (m_pass < 3 || m_kernelSize == 0 || m_eliminationOverBudget)
         return false;
     IterationStats& stats = m_lastIterationStats;
     stats = IterationStats();
