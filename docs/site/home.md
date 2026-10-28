@@ -29,8 +29,8 @@ What it does not do well yet, measured on our test meshes ([results](../gallery/
 - **Folded sculpt input** (Twist, Rotate, Pinch brushes) is where most remaining defects on our test
   sculpts sit. **Repair Folds and Re-run** repairs some of these spots, not all.
 - **Hard-surface models**: sharp edges come out slightly rounded and cone tips are cut off; a few
-  triangles or pentagons along sharp rims are normal. Edges marked Sharp in Blender do not guide the
-  quads. No mirror symmetry, guide curves or density painting yet.
+  triangles or pentagons along sharp rims are normal. Mark edges Sharp to keep quad edges along
+  them (**Follow Marks**). No mirror symmetry, guide curves or density painting yet.
 - The macOS build is checked only by automatic tests, not yet on a real Mac. The programs are not
   code-signed.
 

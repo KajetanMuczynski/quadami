@@ -6,6 +6,8 @@ Release with known limits (release notes: [docs/releases/0.2.0.md](docs/releases
 Changes since 0.1.0. Results differ from 0.1.0 on most models. macOS is still experimental and untested.
 
 Blender add-on
+- Follow Marks (Sharp on by default; Crease, Seam): marked edges keep a row of quad edges along
+  them; marks on more than half of a large mesh's edges are skipped with a warning
 - Keep from Original: the result gets the original's materials, vertex groups, colour attributes and
   sharp, crease and seam marks (on by default) and, opt-in, its UV maps
 - Missing-parts warning names the cause (thin parts as a limit of Target Quads, pieces with no
@@ -16,6 +18,8 @@ Blender add-on
 Remeshing
 - Input sanitizer: welds open seams, removes duplicate faces, splits pinched vertices, leaves out
   paper-thin sliver islands (they took minutes, many GB or crashed)
+- Marked edges as hard edges (interface 1.10, OBJ `l` lines in the CLI), with a density guard and a
+  per-island re-run without marks when the marked run folds
 - One sharp-edge test with 0.1° tolerance, so 90° edges are kept at the default Sharp Edge of 90°
 - libQEx guards against two endless loops and an out-of-bounds read after the n-gon merge; the
   island falls back to the built-in extractor
