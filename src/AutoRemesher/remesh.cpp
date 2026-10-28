@@ -323,7 +323,7 @@ void measureClosedIslands(const RemeshMesh& mesh,
 void measureLostParts(const std::vector<double>& positions, const std::vector<uint32_t>& triangles,
     size_t targetQuads, const RemeshMesh& mesh,
     const std::vector<::AutoRemesher::AutoRemesher::RemeshedIsland>& islands,
-    QualityReport* report)
+    QualityReport* report, const std::vector<size_t>* leftOut)
 {
     for (const auto& island : islands) {
         if (0 == island.faceCount || island.faceCount >= 0.5 * island.targetQuads)
@@ -347,6 +347,12 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
     for (size_t i = 0; i < triangles.size(); i += 3) {
         area += 0.5 * Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]), point(triangles[i + 2]) - point(triangles[i])).length();
         used[triangles[i]] = used[triangles[i + 1]] = used[triangles[i + 2]] = 1;
+    }
+    if (nullptr != leftOut) {
+        for (const size_t vertex : *leftOut) {
+            if (vertex < used.size())
+                used[vertex] = 0;
+        }
     }
     std::vector<uint32_t> inputVertices;
     for (size_t vertex = 0; vertex < used.size(); ++vertex) {
@@ -746,7 +752,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     {
         const auto lostPartsStart = std::chrono::steady_clock::now();
         measureLostParts(request.positions, request.triangles, parameters.targetQuadCount, mesh,
-            engine.remeshedIslands(), &report);
+            engine.remeshedIslands(), &report, &engine.leftOutVertices());
         report.diagnostics.emplace_back("lost_parts_ms",
             1000.0 * std::chrono::duration<double>(std::chrono::steady_clock::now() - lostPartsStart).count());
     }

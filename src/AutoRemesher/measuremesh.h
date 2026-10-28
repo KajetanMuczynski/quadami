@@ -43,11 +43,12 @@ void measureClosedIslands(const RemeshMesh& mesh,
 // Adds the lost-part counts to report (farthestInputQuadWidths and the four
 // after it): the distance from every vertex of the input triangles (positions
 // and triangles as in RemeshRequest) to mesh, and each island's faces against
-// the quads it was planned.  targetQuads is the run's target.
+// the quads it was planned.  targetQuads is the run's target.  Vertices in
+// leftOut (sliver islands the remesh did not run on) are not measured.
 void measureLostParts(const std::vector<double>& positions, const std::vector<uint32_t>& triangles,
     size_t targetQuads, const RemeshMesh& mesh,
     const std::vector<::AutoRemesher::AutoRemesher::RemeshedIsland>& islands,
-    QualityReport* report);
+    QualityReport* report, const std::vector<size_t>* leftOut = nullptr);
 
 }
 

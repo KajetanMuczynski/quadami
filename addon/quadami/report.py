@@ -75,11 +75,25 @@ def summary_rows(report):
         count("Non-manifold vertices", output.get("non_manifold_vertices", 0))
         count("Winding flips", output.get("orientation_flips", 0))
         count("Folded faces", output.get("folded_faces", 0))
-        # The core's input cleanup: triangles on a zero-length edge it dropped
-        # and triangles it turned to match their neighbours.  Not a problem,
-        # only reported.
+        # The core's input cleanup: open seams it welded, duplicate triangles
+        # it removed, pinched vertices it split, islands with almost no area
+        # for their length (zero-width slivers) it left out, triangles on a zero-length edge it dropped and
+        # triangles it turned to match their neighbours.  Not a problem, only
+        # reported.
         diagnostics = report.get("diagnostics", {})
         fixes = []
+        welded = int(diagnostics.get("input_welded_edges", 0))
+        if welded:
+            fixes.append("%d seam edges welded" % welded)
+        duplicates = int(diagnostics.get("input_duplicate_triangles", 0))
+        if duplicates:
+            fixes.append("%d duplicate faces removed" % duplicates)
+        split = int(diagnostics.get("input_split_vertices", 0))
+        if split:
+            fixes.append("%d pinched vertices split" % split)
+        slivers = int(diagnostics.get("input_sliver_islands", 0))
+        if slivers:
+            fixes.append("%d zero-width sliver islands left out" % slivers)
         dropped = int(diagnostics.get("input_dropped_triangles", 0))
         if dropped:
             fixes.append("%d degenerate triangles removed" % dropped)

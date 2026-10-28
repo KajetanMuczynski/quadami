@@ -169,6 +169,7 @@ public:
 
     // Islands that went through the pipeline but contributed no faces, either
     // because a stage failed on them or because extraction found nothing.
+    // Sliver islands left out before remeshing are not counted.
     size_t islandsWithoutOutput() const
     {
         return m_islandsWithoutOutput;
@@ -196,6 +197,13 @@ public:
     const std::vector<RemeshedIsland>& remeshedIslands() const
     {
         return m_remeshedIslands;
+    }
+
+    // Input vertices of the sliver islands remeshIslands() left out, so the
+    // lost-part measure does not count them as lost.
+    const std::vector<size_t>& leftOutVertices() const
+    {
+        return m_leftOutVertices;
     }
 
     const std::vector<Vector3>& remeshedVertices()
@@ -323,6 +331,15 @@ public:
         // them (a Moebius strip).
         size_t flippedTriangles = 0;
         size_t nonOrientablePieces = 0;
+        // Open seams joined by weldSeams() (inputsanitizer.h): boundary edge
+        // pairs, vertices merged, and parts left unwelded.
+        size_t weldedEdges = 0;
+        size_t weldedVertices = 0;
+        size_t weldKeptParts = 0;
+        // Triangles removed because an earlier one has the same corners.
+        size_t duplicateTriangles = 0;
+        // Vertices added by splitPinchedVertices(): one per extra fan.
+        size_t splitVertices = 0;
     };
 
     // Edges up to this long are rounding noise of the float32 positions
@@ -392,6 +409,7 @@ private:
     std::vector<Vector3> m_remeshedVertices;
     std::vector<std::vector<size_t>> m_remeshedQuads;
     std::vector<RemeshedIsland> m_remeshedIslands;
+    std::vector<size_t> m_leftOutVertices;
     std::vector<Vector3> m_decimatedVertices;
     std::vector<std::vector<size_t>> m_decimatedTriangles;
     bool m_decimated = false;
