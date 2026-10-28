@@ -40,7 +40,7 @@ bool IsotropicRemesher::remesh()
         remesher.setTargetEdgeLength(m_targetEdgeLength);
     if (m_vertexTargetEdgeLengths != nullptr)
         remesher.setVertexTargetEdgeLengths(m_vertexTargetEdgeLengths);
-    remesher.setSharpEdgeIncludedAngle(180.0 - m_sharpEdgeDegrees);
+    remesher.setFeatureEdges(m_featureEdges.edges, m_featureEdges.flags);
     remesher.setSmoothNormalDegrees(m_smoothNormalDegrees);
     if (m_progressHandler)
         remesher.setProgressHandler(m_progressHandler);
@@ -68,6 +68,24 @@ bool IsotropicRemesher::remesh()
             face->halfedge->startVertex->outputIndex,
             face->halfedge->nextHalfedge->startVertex->outputIndex });
     }
+    m_remeshedFeatureEdges = FeatureEdgeSet();
+    for (IsotropicHalfedgeMesh::Face* face = halfedgeMesh->moveToNextFace(nullptr);
+        nullptr != face;
+        face = halfedgeMesh->moveToNextFace(face)) {
+        IsotropicHalfedgeMesh::Halfedge* halfedge = face->halfedge;
+        do {
+            const size_t first = halfedge->startVertex->outputIndex;
+            const size_t second = halfedge->nextHalfedge->startVertex->outputIndex;
+            // Each edge once, from its halfedge that runs up in index.
+            if (halfedge->feature && nullptr != halfedge->oppositeHalfedge && first < second) {
+                m_remeshedFeatureEdges.edges.emplace_back(first, second);
+                m_remeshedFeatureEdges.flags.push_back(halfedge->featureFlags);
+            }
+            halfedge = halfedge->nextHalfedge;
+        } while (halfedge != face->halfedge);
+    }
+    m_remeshedFeatureEdges.normalize();
+    m_clearedFeatureEdges = halfedgeMesh->clearedFeatureEdges();
 
     return true;
 }

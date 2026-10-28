@@ -19,6 +19,7 @@
 #ifndef AUTO_REMESHER_SURFACE_PROJECTOR_H
 #define AUTO_REMESHER_SURFACE_PROJECTOR_H
 
+#include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/Vector3>
 #include <cstddef>
 #include <memory>
@@ -59,12 +60,12 @@ Vector3 closestPointOnSegment(const Vector3& p, const Vector3& a, const Vector3&
 class SurfaceProjector {
 public:
     // `triangles` index `vertices`; they may be a subset of a larger mesh (one
-    // island of the input). Both must outlive the projector. An input edge
-    // whose two faces meet at more than `sharpEdgeDegrees` is a crease for
-    // relax(); 0 (or 180 and more) means no creases.
+    // island of the input). Both must outlive the projector. The edges of
+    // `creases` (in the numbering of `vertices`; the island's sharp edges)
+    // are the creases of relax(); none when null.
     SurfaceProjector(const std::vector<Vector3>* vertices,
         const std::vector<std::vector<size_t>>* triangles,
-        double sharpEdgeDegrees = 0.0);
+        const FeatureEdgeSet* creases = nullptr);
     ~SurfaceProjector();
 
     struct Result {
