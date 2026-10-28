@@ -67,6 +67,12 @@ namespace {
             if (index >= vertexCount)
                 return "a triangle refers to a vertex index past the end of positions";
         }
+        if (0 != request.featureEdges.size() % 2)
+            return "feature edges must hold two vertex indices each";
+        for (const uint32_t index : request.featureEdges) {
+            if (index >= vertexCount)
+                return "a feature edge refers to a vertex index past the end of positions";
+        }
         const RemeshParameters& parameters = request.parameters;
         if (0 == parameters.targetQuadCount)
             return "target quad count must be greater than zero";
@@ -660,6 +666,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     QualityReport& report = result.report;
     report.inputVertexCount = request.positions.size() / 3;
     report.inputTriangleCount = request.triangles.size() / 3;
+    report.inputFeatureEdgeCount = request.featureEdges.size() / 2;
     const auto finish = [&](RemeshStatus status, const std::string& message) {
         result.status = status;
         result.message = message;
@@ -690,6 +697,13 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     engine.setGradientAdaptivity(parameters.adaptivity);
     engine.setAnisotropy(parameters.anisotropy);
     engine.setSharpEdgeDegrees(parameters.sharpEdgeDegrees);
+    if (!request.featureEdges.empty()) {
+        std::vector<std::pair<size_t, size_t>> marked;
+        marked.reserve(request.featureEdges.size() / 2);
+        for (size_t i = 0; i + 1 < request.featureEdges.size(); i += 2)
+            marked.emplace_back(request.featureEdges[i], request.featureEdges[i + 1]);
+        engine.setMarkedEdges(std::move(marked));
+    }
     engine.setSmoothNormalDegrees(parameters.smoothNormalDegrees);
     engine.setUseQex(Extractor::Qex == parameters.extractor);
     engine.setRepairInputFolds(parameters.repairFolds);
@@ -716,6 +730,9 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
         return finish(RemeshStatus::Failed, std::string("remeshing failed: ") + e.what());
     }
 
+    report.ignoredFeatureEdgeCount = engine.ignoredMarkedEdgeCount();
+    const size_t marksDroppedIslands = engine.markedEdgesDroppedIslandCount();
+    const size_t marksTooDenseIslands = engine.markedEdgesTooDenseIslandCount();
     if (nullptr != preview)
         preview->phaseReport = engine.phaseReport();
     result.stageDiagnostics = engine.diagnostics();
@@ -775,6 +792,21 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     if (report.islandsWithoutOutput > 0) {
         report.warnings.push_back(std::to_string(report.islandsWithoutOutput) + " of "
             + std::to_string(report.islandCount) + " islands produced no faces");
+    }
+    if (marksTooDenseIslands > 0) {
+        report.warnings.push_back("Marked edges were not used on " + std::to_string(marksTooDenseIslands)
+            + (1 == marksTooDenseIslands ? " part" : " parts")
+            + ": they are too dense for the quad count (an import often marks nearly every edge Sharp)");
+    }
+    if (marksDroppedIslands > 0) {
+        report.warnings.push_back("Marked edges were not followed on " + std::to_string(marksDroppedIslands)
+            + (1 == marksDroppedIslands ? " part" : " parts")
+            + ": following them folded the quads there (marks that cross other creases or each other)");
+    }
+    if (report.ignoredFeatureEdgeCount > 0) {
+        report.warnings.push_back(std::to_string(report.ignoredFeatureEdgeCount)
+            + (1 == report.ignoredFeatureEdgeCount ? " marked edge is" : " marked edges are")
+            + " not an edge of the mesh and " + (1 == report.ignoredFeatureEdgeCount ? "was" : "were") + " ignored");
     }
     if (report.closedIslandHoleCount > 0) {
         report.warnings.push_back("Output has " + std::to_string(report.closedIslandHoleCount)
@@ -920,6 +952,8 @@ std::string toJson(const RemeshResult& result)
     out << "  \"input\": {"
         << "\"vertices\": " << jsonCount(report.inputVertexCount)
         << ", \"triangles\": " << jsonCount(report.inputTriangleCount)
+        << ", \"feature_edges\": " << jsonCount(report.inputFeatureEdgeCount)
+        << ", \"ignored_feature_edges\": " << jsonCount(report.ignoredFeatureEdgeCount)
         << "},\n";
     out << "  \"output\": {"
         << "\"vertices\": " << jsonCount(report.vertexCount)

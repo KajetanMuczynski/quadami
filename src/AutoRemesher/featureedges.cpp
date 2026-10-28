@@ -191,7 +191,8 @@ FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
     return result;
 }
 
-std::vector<char> featureCornerFlags(const SurfaceMesh& mesh, const FeatureEdgeSet& set)
+std::vector<char> featureCornerFlags(const SurfaceMesh& mesh, const FeatureEdgeSet& set,
+    unsigned char requiredFlags)
 {
     std::vector<char> flags(mesh.cornerCount(), 0);
     if (set.empty())
@@ -199,7 +200,10 @@ std::vector<char> featureCornerFlags(const SurfaceMesh& mesh, const FeatureEdgeS
     for (size_t c = 0; c < mesh.cornerCount(); ++c) {
         if (mesh.oppositeCorner(c) == SurfaceMesh::npos)
             continue;
-        if (set.contains(mesh.cornerVertex(c), mesh.cornerVertex(mesh.nextCorner(c))))
+        const auto edge = undirected(mesh.cornerVertex(c), mesh.cornerVertex(mesh.nextCorner(c)));
+        const auto found = std::lower_bound(set.edges.begin(), set.edges.end(), edge);
+        if (found != set.edges.end() && *found == edge
+            && requiredFlags == (set.flags[found - set.edges.begin()] & requiredFlags))
             flags[c] = 1;
     }
     return flags;
@@ -208,9 +212,14 @@ std::vector<char> featureCornerFlags(const SurfaceMesh& mesh, const FeatureEdgeS
 std::vector<unsigned char> featureVertexLock(const FeatureEdgeSet& set, size_t vertexCount)
 {
     std::vector<unsigned char> lock(vertexCount, 0);
-    for (const auto& edge : set.edges) {
-        lock[edge.first] |= meshopt_SimplifyVertex_Priority;
-        lock[edge.second] |= meshopt_SimplifyVertex_Priority;
+    for (size_t i = 0; i < set.edges.size(); ++i) {
+        // A hard edge stays as it is: no collapse moves its ends, so it
+        // survives the decimation.
+        const unsigned char bit = 0 != (set.flags[i] & FeatureEdgeSet::Hard)
+            ? meshopt_SimplifyVertex_Lock
+            : meshopt_SimplifyVertex_Priority;
+        lock[set.edges[i].first] |= bit;
+        lock[set.edges[i].second] |= bit;
     }
     return lock;
 }
