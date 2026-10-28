@@ -161,7 +161,7 @@ jobs:
             for set in corpus closed; do
               only=$ONLY_CORPUS; [ "$set" = closed ] && only=$ONLY_CLOSED
               # shellcheck disable=SC2086  # CMAKE and only are empty or whole arguments
-              python tools/bench/ab.py run "$ref" --set "$set" --replicates "$REPLICATES" --jobs "$JOBS" \
+              python -c "import faulthandler, runpy, sys; faulthandler.dump_traceback_later(120, repeat=True); sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')" tools/bench/ab.py run "$ref" --set "$set" --replicates "$REPLICATES" --jobs "$JOBS" \
                 --timeout 1800 --cmake-arg=-DAUTOREMESHER_BUNDLED_TBB=ON $CMAKE $only | tee "run-$set.log"
             done
             tail -n 1 run-corpus.log | tr -d '\r' >> dirs.txt  # Windows' Python ends lines with CRLF
