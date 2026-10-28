@@ -69,8 +69,8 @@ the install scripts and the snap version of Blender on Linux: [user guide §2](d
   model are not detected.
 - **Holes** can still appear in closed sculpts at higher quad counts; the **Holes** row shows them.
 - **Hard-surface models**: sharp edges come out rounded (a box or cylinder edge keeps an edge loop on
-  about half to two thirds of its length, a cone's rim much less), cone tips are cut off about one
-  quad deep, and edges marked Sharp in Blender are not used. Edges of exactly 90° keep better with
+  about half to two thirds of its length, a cone's rim much less), needle-sharp spikes are cut off
+  about one quad deep, and edges marked Sharp in Blender are not used. Edges of exactly 90° keep better with
   Sharp Edge at 89°; lower angles make more triangles and other non-quads on detailed parts. Mirror symmetry, guide curves and density painting are not
   available yet.
 - **Large inputs** are slow to hand over (the mesh goes through a text file both ways).
