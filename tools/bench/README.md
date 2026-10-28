@@ -83,7 +83,10 @@ $P tools/bench/ab.py run HEAD --set closed   # genus check; also --set suzanne
   a finished run is never repeated (delete its folder under `$AR_WORK/runs` to force it).
 - **Options.** `--only a,b`, `--skip`, `--targets`, `--resolutions` override the set's defaults;
   `--timeout S` kills a run after S seconds (recorded as `rc: "timeout"`); every record has the run's
-  own peak RSS (`peak_rss_mb`). `--cli-arg=--adaptivity=0` (repeatable) passes CLI options, and those runs get their own folder, so
+  own peak RSS (`peak_rss_mb`). `--metrics-timeout S` (default 1800, `0` = no limit) kills metrics.py
+  on one run after S seconds: the record keeps `metrics: null` with `metrics_error` and
+  `metrics_timeout`, `compare` leaves the run out and `release_gate.py` stops (exit 2), and only a
+  later `run` with a longer limit measures it again. Each record has `metrics_seconds`. `--cli-arg=--adaptivity=0` (repeatable) passes CLI options, and those runs get their own folder, so
   compare folders, not refs: `compare $AR_WORK/runs/<key> $AR_WORK/runs/<key>+<hash>`.
   `--cmake-arg=-DCMAKE_CXX_FLAGS=-fsanitize=address` (repeatable) configures the build with a CMake option, for
   experiments behind a build switch; such builds and runs get their own key. Each run's log keeps its

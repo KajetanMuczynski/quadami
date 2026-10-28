@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -92,6 +93,17 @@ class MetricsAddedLater(unittest.TestCase):
         self.assertEqual((calls, rec["metrics"]), (1, {"measured": True}))
 
 
+    def test_timed_out_run_is_measured_again_only_with_a_longer_limit(self):
+        # Measuring it again under the same limit would stall every later run for that long.
+        with open(os.path.join(self.d, "record.json"), "w") as fp:
+            json.dump({"mesh": "m", "rc": 0, "metrics": None, "metrics_error": "timeout", "metrics_timeout": 1800}, fp)
+        for limit, expected in ((1800, 0), (600, 0), (3600, 1), (None, 1)):
+            with mock.patch.object(ab, "measure") as m:
+                ab.run_one("cli", self.mesh, "corpus", 2000, "quality", 0, self.out, [], self.work, True, 1,
+                           metrics_timeout=limit)
+            self.assertEqual(m.call_count, expected, limit)
+
+
 class Measure(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -124,6 +136,26 @@ class Measure(unittest.TestCase):
         rec, calls = self.measure([None, None])
         self.assertEqual((calls, rec["metrics"]), (2, None))
         self.assertIn("MemoryError", rec["metrics_error"])
+
+    def test_timeout_is_recorded_and_not_retried(self):
+        def hang(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        rec = {"metrics": {"old": True}}
+        with mock.patch.object(ab.subprocess, "run", side_effect=hang) as m:
+            ab.measure(rec, self.d, {"id": "m"}, 2000, "in.obj", self.d, timeout=5)
+        self.assertEqual((m.call_count, rec["metrics"], rec["metrics_timeout"]), (1, None, 5))
+        self.assertIn("timeout", rec["metrics_error"])
+
+    def test_a_real_metrics_py_is_killed_at_the_limit(self):
+        # subprocess.run kills the child on timeout; a sleeping stand-in for metrics.py must not outlive it.
+        with mock.patch.object(ab, "METRICS", os.path.join(self.d, "slow.py")):
+            with open(ab.METRICS, "w") as fp:
+                fp.write("import time\ntime.sleep(30)\n")
+            t0 = time.time()
+            rec = {}
+            ab.measure(rec, self.d, {"id": "m"}, 2000, "in.obj", self.d, timeout=1)
+        self.assertLess(time.time() - t0, 10)
+        self.assertEqual((rec["metrics"], rec["metrics_timeout"]), (None, 1))
 
 
 class Compare(unittest.TestCase):
