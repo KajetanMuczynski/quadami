@@ -12,4 +12,5 @@
 - Measured: nothing. Read in code at 57c19f9: the fallback `cleanupTriangles` rebuilds a whole-mesh edge
   map per pass, `isHealthyIslandResult` has no quad-count check, Smooth Normal excludes faces by the
   angle to the vertex's average normal.
-- Next: fold in the comparison thread's measured list; re-measure C6 and C8 on 0.2.0 before planning them.
+- Later the same day: folded in the open-source comparison's matched-count runs and the math analysis (icosphere cones and rotated flat parts moved to fixable, nemetona's lace a topology limit, rim step-off traced to the extractor smoothing, vaseflowers relapse a rule artefact).
+- Next: re-measure the eyeball caps and the 256-sided cylinder on 0.2.0 before planning them.
