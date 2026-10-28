@@ -1,0 +1,6 @@
+/*
+ *  Copyright (C) 2026 Quadami contributors
+ *
+ *  SPDX-License-Identifier: GPL-3.0-or-later
+ */
+#include "../../src/AutoRemesher/featureedges.h"

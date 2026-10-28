@@ -33,9 +33,11 @@ IsotropicRemesher::~IsotropicRemesher()
     delete m_triangleNormals;
 }
 
-void IsotropicRemesher::setSharpEdgeIncludedAngle(double degrees)
+void IsotropicRemesher::setFeatureEdges(const std::vector<std::pair<size_t, size_t>> &edges,
+    const std::vector<unsigned char> &flags)
 {
-    m_sharpEdgeThresholdRadians = (180 - degrees) * (M_PI / 180.0);
+    m_featureEdges = edges;
+    m_featureEdgeFlags = flags;
 }
 
 void IsotropicRemesher::setTargetEdgeLength(double edgeLength)
@@ -351,14 +353,13 @@ void IsotropicRemesher::remesh(size_t iteration)
 
     report(0.15f, "Splitting long edges");
     bool skipSplitOnce = true;
-    if (m_sharpEdgeThresholdRadians > 0) {
-        splitLongEdges(maxTargetLengthSquared);
-        m_halfedgeMesh->updateTriangleNormals();
-        m_halfedgeMesh->featureEdges(m_sharpEdgeThresholdRadians);
-    } else {
-        splitLongEdges(maxTargetLengthSquared);
-        m_halfedgeMesh->featureBoundaries();
-    }
+    // The edges are marked before the first split, so their halves inherit
+    // them; their vertices only after it, as the split's midpoints were
+    // before.
+    m_halfedgeMesh->markFeatureEdges(m_featureEdges, m_featureEdgeFlags);
+    splitLongEdges(maxTargetLengthSquared);
+    m_halfedgeMesh->featureVertices();
+    m_halfedgeMesh->featureBoundaries();
     
     // The five passes below repeat once per iteration, so the remaining 0.25..1
     // splits evenly across all of them.

@@ -24,6 +24,7 @@
 #define AUTO_REMESHER_FRAME_FIELD_H
 
 #include <AutoRemesher/Diagnostics>
+#include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/SurfaceMesh>
 #include <AutoRemesher/Vector3>
 #include <cmath>
@@ -34,10 +35,11 @@ namespace AutoRemesher {
 
 class FrameField {
 public:
+    // Faces on a boundary or a `sharpEdges` edge are locked to that edge.
     // When `diagnostics` is given, appends a "frame_field" record to it.
     // `tipVertices` are conical tips (TODO 2.23): the field is not guided by
     // curvature near them.
-    static bool create(const SurfaceMesh& mesh, double sharpEdgeDegrees,
+    static bool create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdges,
         std::vector<Vector3>* field,
         std::vector<DiagnosticRecord>* diagnostics = nullptr,
         const std::vector<size_t>* tipVertices = nullptr);

@@ -299,12 +299,20 @@ bool Parameterizer::parameterize()
                 }
     }
 
+    // One set of sharp edges for the field, the simplifier and the cover.
+    FeatureEdgeSet classifiedEdges;
+    const FeatureEdgeSet* featureEdges = m_featureEdges;
+    if (nullptr == featureEdges) {
+        classifiedEdges = classifySharpEdges(topology, m_sharpEdgeDegrees);
+        featureEdges = &classifiedEdges;
+    }
+
     report(0.03f, "Solving frame field");
     // Topology, field, and quad cover form the complete active path.
     std::vector<Vector3> field;
     if (nullptr != m_triangleFieldVectors) {
         field = *m_triangleFieldVectors;
-    } else if (!FrameField::create(topology, m_sharpEdgeDegrees,
+    } else if (!FrameField::create(topology, *featureEdges,
                    &field, &m_diagnostics, &tipVertices)) {
         std::cerr << "Frame field solve failed" << std::endl;
         return false;
@@ -317,7 +325,7 @@ bool Parameterizer::parameterize()
     SingularitySimplifier simplifier(topology, &field);
     if (m_singularitySimplification) {
         report(0.17f, "Simplifying singularities");
-        simplifier.setSharpEdgeDegrees(m_sharpEdgeDegrees);
+        simplifier.setFeatureEdges(featureEdges);
         simplifier.setMaximumPairDistance(m_maximumSingularityPairDistance);
         simplifier.simplify();
         {
@@ -357,7 +365,7 @@ bool Parameterizer::parameterize()
     }
     QuadParameterizer::Result cover;
     const bool coverSolved = QuadParameterizer::parameterize(*m_vertices, *m_triangles,
-        &field, m_scaling * baseEdgeLength, m_sharpEdgeDegrees, &cover,
+        &field, m_scaling * baseEdgeLength, *featureEdges, &cover,
         &faceScalingField, &faceScalingU, &faceScalingV,
         coverProgress ? &coverProgress : nullptr);
     for (auto& record : cover.diagnostics)
