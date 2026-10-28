@@ -57,7 +57,7 @@ under **Assets**, click the zip for your system. No GitHub account is needed.
 | System | Zip on the Releases page | Tested on a real computer? |
 |---|---|---|
 | **Linux** (64-bit Intel/AMD, any distribution with glibc 2.28 or newer: Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL 8+) | `quadami-<version>-linux-x64.zip`. Blender from blender.org or the snap (`/snap/bin/blender`). Or build it yourself ([addon/BEGINNERS.md](../addon/BEGINNERS.md)). | Yes (Ubuntu, Blender 4.5 snap) |
-| **Windows** 10 or 11 (64-bit) | `quadami-<version>-windows-x64.zip` (the program is not signed) | No, only in CI (Blender 5.2, no window) |
+| **Windows** 10 or 11 (64-bit) | `quadami-<version>-windows-x64.zip` (the program is not signed) | Yes (one Windows 10 desktop) |
 | **macOS**, Apple silicon (M1 or newer), macOS 11.2 or newer: **experimental, untested** | `quadami-<version>-macos-arm64.zip` (not notarized, so macOS may block it) | No, only in CI |
 | macOS on Intel, Linux on ARM, Windows on ARM | Not built. Intel Macs: build it yourself ([BUILDING.md](BUILDING.md)). | No |
 
@@ -78,7 +78,7 @@ release. Use one only when asked to try a fix, and send its [build line](#which-
 3. Scroll to **Artifacts** at the bottom and click `addon-linux-x64`, `addon-windows-x64` or
    `addon-macos-arm64`.
 4. GitHub wraps the add-on in a zip of its own. Unpack that outer zip once (Linux: `unzip`;
-   Windows: right-click > **Extract All...**; macOS: double-click). The `quadami-0.1.0-<system>.zip`
+   Windows: right-click > **Extract All...**; macOS: double-click). The `quadami-<version>-<system>.zip`
    inside is the add-on: keep it zipped.
 
 These files are deleted by GitHub after its retention period (90 days unless the repository says
@@ -124,7 +124,7 @@ above. Results you already made stay in your files; they are ordinary mesh objec
 
 - **Windows:** [windows-test/quadami-update.ps1](windows-test/quadami-update.ps1), described in the
   [Windows test sheet](windows-test/README.md) §4. Quit Blender, then in PowerShell:
-  `powershell -ExecutionPolicy Bypass -File .\quadami-update.ps1 .\quadami-0.1.0-windows-x64.zip "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"`.
+  `powershell -ExecutionPolicy Bypass -File .\quadami-update.ps1 .\quadami-0.2.0-windows-x64.zip "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"`.
   It only lists what it would do; add `-Apply` to do it. Tried only against a stand-in Blender, not
   on real Windows.
 - **Linux:** `quadami-update.sh`, the same for Linux, comes with the maintainer's test builds (it is not
@@ -144,7 +144,7 @@ Please report what happened either way.
 
 ### Which version do I have? (the build line)
 
-Blender's extension list shows version 0.1.0 for every build, so it cannot tell builds apart. Use the
+Blender's extension list shows the release version (such as 0.2.0) for every build, so it cannot tell builds apart. Use the
 **build line** instead: a small grey line at the very bottom of the Quadami panel (and in the add-on's
 preferences), for example `Add-on build 4e9cdc7 2026-10-21`. The first part is the code version (a
 commit), the second its date. Copy that line into every bug report.
@@ -224,7 +224,7 @@ defaults and change one thing at a time.
 |---|---|---|---|
 | **Target Quads** | 5000 | How many quads to aim for. The result lands near it (between 60 % and 150 % counts as normal). Memory: about 2 GB per 100,000 quads. | The main knob. 2000–5000 to judge the flow quickly; 10,000–20,000 for a detailed sculpt. Raise it when thin parts fold or details vanish ([§7](#7-sculpts-what-works-and-what-struggles)). Above 200,000 the add-on asks first and shows the memory it needs; the panel will not go above 2,000,000. |
 | **Adaptivity** | 0.5 | 0: all quads the same size. 1: smaller quads where the surface curves strongly, bigger on flat parts. | 0 gives the fewest folded quads; 1 gives about twice as many. Use 0 for even topology (e.g. to sculpt further on it). It does **not** move quads onto thin parts. |
-| **Sharp Edge** | 90° | Edges where the surface bends more than this angle are treated as creases: the quads follow them, but they come out slightly rounded ([§7](#7-sculpts-what-works-and-what-struggles)). Edges marked Sharp in Blender are not used. | Lower (e.g. 60°) for hard-surface models with bevels you want to keep, but it makes about twice as many triangles and other non-quads. Raise to 180° for soft organic sculpts, so nothing is treated as a crease. Tested quality numbers are for 90°. Edges of exactly 90° (Blender's cube and cylinder) sit right on the default: see *Hard edges* in [§7](#7-sculpts-what-works-and-what-struggles). |
+| **Sharp Edge** | 90° | Edges where the surface bends more than this angle are treated as creases: the quads follow them, but they come out slightly rounded ([§7](#7-sculpts-what-works-and-what-struggles)). An edge of exactly this angle counts (to within 0.1°), so the 90° edges of Blender's cube and cylinder are creases at the default. Edges marked Sharp in Blender do not guide the quads (they are copied onto the result, [§3](#3-your-first-remesh)). | Lower (e.g. 60°) for hard-surface models with bevels you want to keep, but it makes about twice as many triangles and other non-quads. Raise to 180° for soft organic sculpts, so nothing is treated as a crease. Tested quality numbers are for 90°. |
 | Advanced > **Resolution** | Quality | Quality solves on a finer mesh: cleaner quads, fewer flipped ones. Fast is quicker and rougher. | Fast for quick previews (Quality takes about 1.5 times as long), Quality for the result you keep. Quad count is the same. |
 | Advanced > **Anisotropy** | 1 | Lets quads stretch along the direction the surface curves least, like long quads on a cylinder (up to about 2.3 : 1). | 0 for square quads everywhere; the result then follows the shape 25–35 % less closely. Hardly changes anything else. |
 | Advanced > **Edge Scaling** | 1 | Multiplies the quad size; 2 gives about a quarter of the quads. | Leave at 1 and use Target Quads instead; it is the same thing, less clearly. |
@@ -324,13 +324,13 @@ From the project's measurements on real sculpts and on synthetic brush tests (Oc
 | **Holes in a closed sculpt** at higher counts | On the head test sculpt, before libQEx became the extractor, holes appeared from 6,000 quads up in most runs, all at the pleats above. | As above; and the **Holes** row now shows them. |
 | **Crevices narrower than a quad** (deep pinched grooves, eyelid lines) | Folded quads in the groove; at high counts sometimes an extra tunnel across the groove. | More quads, or soften the groove. |
 | **Sharp tips and spikes** | A cone-like tip is cut off about one quad deep, often with a ring of small, crowded quads around it (Blender's default cone at every count tested). A needle spike gets a non-quad or a crowded pole. | More quads make the cut smaller, since it is about one quad. |
-| **Hard edges** (box, cylinder or cone rims) | Rounded. On Blender's default primitives an edge loop follows about half to two thirds of a box or cylinder edge from 1,000 quads up; a cone's base rim is mostly rounded off. Rows of thin quads often line the edge. Edges marked Sharp in Blender are not used. | More quads make the rounding smaller. If the edges are exactly 90° (Blender's cube and cylinder), set Sharp Edge to 89°: at 5,000 quads an edge loop then follows about 90 % of a cube's edges instead of 70 %, and about 80 % of a cylinder's rims instead of 60 %. On a detailed mechanical test part with many right angles, 89° made more triangles and sometimes changed its holes or handles, so check the **Holes** and **Handles** rows. |
+| **Hard edges** (box, cylinder or cone rims) | Slightly rounded. On Blender's cube an edge loop follows about 90 % of the edges at 5,000 quads (about 70 % at 1,000), on the cylinder about 80 % of the rims (about 75 % at 1,000); a cone's base rim is mostly rounded off. Rows of thin quads often line the edge. Edges marked Sharp in Blender do not guide the quads. | More quads make the rounding smaller. Edges sharper than Sharp Edge (90° by default, exactly 90° included) are kept as creases; lowering it keeps blunter edges too, but on detailed parts it makes more triangles and can change holes or handles, so check the **Holes** and **Handles** rows. |
 | **Small tunnels** (a gap thinner than about 3 quads, e.g. between an arm and the body) | It may close. | Raise Target Quads until the tunnel is several quads wide. |
 | **Very low-poly input** (big flat facets) | The result follows the facets. An icosphere also gets extra poles inside its facets, with or without Subdivision Surface (a UV sphere comes out clean from about 3,000 quads). | Add Subdivision Surface first. Smooth Normal only on rounded shapes: on a box (Blender's default cube) any value above about 55° (on a cylinder, above 45°) tears the result open, with holes, extra handles and hundreds of folded quads, and the run takes about 20 times as long. |
 | **A surface pushed through itself** | May fold there. Not measured yet. | Fix in Sculpt Mode. |
 | **Very tiny or huge models** | Measured from 0.0001 to 10,000 times the default size, and up to 1,000,000 units from the origin: it works throughout, with the same quad count from 0.001 times up. | Nothing to do. |
-| **Text or a curve converted to mesh** (Object > Convert > Mesh) | Blender leaves the letters' front, back and sides as separate pieces that only touch, so each comes out as its own open sheet with gaps at the edges. | Before remeshing: **Tab**, **A**, **M > By Distance**, **Tab**. Thin strokes then need more quads (§6, thin parts). |
-| **Imported glTF models** (.glb, .gltf) | The importer splits the vertices along UV seams and, on flat-shaded models (or files saved without shared vertices), at every face, so the result gets cracks along the seams, or breaks up into thousands of pieces with many times the target count. | Before remeshing: **Tab**, **A**, **M > By Distance**, **Tab** (the importer's own **Merge Vertices** option leaves flat-shaded models split). |
+| **Text or a curve converted to mesh** (Object > Convert > Mesh) | Blender leaves the letters' front, back and sides as separate pieces that only touch. The remesher welds them itself (the **Input cleanup** row), so the letters come out closed; thin strokes then lose area at low counts (about 9–19 % of the text at 1,000 quads on our test, and the thin-part warning fires). | More quads for thin strokes (§6, thin parts). |
+| **Imported glTF models** (.glb, .gltf) | The importer splits the vertices along UV seams and, on flat-shaded models (or files saved without shared vertices), at every face. The remesher welds these seams itself (the **Input cleanup** row): on our test files the result matched the one from a merged copy. | Nothing to do. Seams with a visible gap (more than about 1/100,000 of the model's size) are not welded: then **Tab**, **A**, **M > By Distance**, **Tab** first. |
 
 **Time.** Measured on a cloud machine: a 140,000-triangle test sculpt took about 12 s at
 10,000 quads and 30 s at 20,000 (Quality). A laptop may be 2× slower.

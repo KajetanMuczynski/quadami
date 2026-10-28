@@ -18,7 +18,7 @@ quads that follows the shape, with edge loops that run along it. It is free soft
 
 ## Status
 
-**Version 0.1.0, the first public release, with known limits.** It works on the sculpts we test with, but expect rough edges.
+**Version 0.2.0, a release with known limits.** It works on the sculpts we test with, but expect rough edges.
 After every run the panel reports quads against the target, non-quads, holes, folded faces and the
 time, so a bad result shows itself. Put the panel's build line in every bug report.
 
@@ -28,10 +28,11 @@ What it does not do well yet, measured on our test meshes ([results](../gallery/
   pieces. The panel warns about thin and missing parts; raise Target Quads, or thicken the part.
 - **Folded sculpt input** (Twist, Rotate, Pinch brushes) is where most remaining defects on our test
   sculpts sit. **Repair Folds and Re-run** repairs some of these spots, not all.
-- **Hard-surface models**: a few triangles or pentagons along sharp rims are normal. No mirror
-  symmetry, guide curves or density painting yet.
-- Windows and macOS builds are checked only by automatic tests, not yet on a real desktop. The
-  programs are not code-signed.
+- **Hard-surface models**: sharp edges come out slightly rounded and cone tips are cut off; a few
+  triangles or pentagons along sharp rims are normal. Edges marked Sharp in Blender do not guide the
+  quads. No mirror symmetry, guide curves or density painting yet.
+- The macOS build is checked only by automatic tests, not yet on a real Mac. The programs are not
+  code-signed.
 
 The full list, with what helps: [user guide §7](../USER-GUIDE.md#7-sculpts-what-works-and-what-struggles).
 
