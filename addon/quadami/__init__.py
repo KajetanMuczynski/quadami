@@ -22,8 +22,10 @@ progress, cancels it on Esc, and imports the result with its quality report.
 The add-on's name and ids come from names.py.
 """
 
+import collections
 import json
 
+import blf
 import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
@@ -476,9 +478,43 @@ class OBJECT_OT_remesh_quads_cancel(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _draw_fold_offer(box, settings):
+# Room for text in the sidebar, in pixels: `panel` is a row of the panel,
+# `box` a row inside the report's box, `icon` what an icon in front of a label
+# takes, `pad` the margin Blender keeps in front of a label's text and `space`
+# the gap between the columns of a split row.  Characters (measure len) where
+# Blender gives no region.
+TextRoom = collections.namedtuple("TextRoom", "panel box icon pad space measure")
+
+
+def _text_room(context):
+    """Blender 4.2 and 5.2 lay a sidebar panel out from the widget unit: tabs
+    1 unit (1.4 with 5.x's compact tabs), the panel's background 0.4 unit on
+    both sides, panelspace 8 px and a box's boxspace 5 px on both sides, an
+    icon 16 + 2 px and a label's text margin 0.4 unit, all times the UI scale.
+    Half a unit more is slack for rounding and font hinting.  A label wider
+    than its room is cut off with an ellipsis."""
+    region = context.region
+    system = context.preferences.system
+    scale = system.ui_scale
+    if region is None or region.width <= 0 or scale <= 0:
+        return TextRoom(report_rows.WARNING_WIDTH + 4, report_rows.WARNING_WIDTH + 2, 2, 0, 1, len)
+    unit = round(18 * scale) + 2 * system.pixel_size
+    tabs = 1.4 if getattr(system, "show_panel_tabs_compact", False) else 1.0
+    panel = region.width - (tabs + 0.8 + 0.5) * unit - 2 * int(8 * scale)
+    size = context.preferences.ui_styles[0].widget.points * scale
+
+    # Font 0 is Blender's interface font.
+    def measure(text):
+        blf.size(0, size)
+        return blf.dimensions(0, text)[0]
+
+    return TextRoom(panel=max(panel, 10 * size), box=max(panel - 2 * int(5 * scale), 10 * size),
+                    icon=round(18 * scale), pad=round(0.4 * unit), space=int(8 * scale), measure=measure)
+
+
+def _draw_fold_offer(box, settings, room):
     column = box.column(align=True)
-    for line in report_rows.fold_offer_lines():
+    for line in report_rows.fold_offer_lines(room.box - room.pad, room.measure):
         column.label(text=line)
     box.prop(settings, "flatten_spikes")
     operator = box.operator(OBJECT_OT_remesh_quads.bl_idname, text="Repair Folds and Re-run", icon="MOD_SMOOTH")
@@ -520,6 +556,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         else:
             layout.operator(OBJECT_OT_remesh_quads.bl_idname, icon="MOD_REMESH")
 
+        room = _text_room(context)
         obj = context.active_object
         if obj is not None and obj.type == "MESH":
             # What Remesh will run on: a result shows its source, which the
@@ -532,7 +569,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
             if warning:
                 column = layout.column(align=True)
                 column.alert = True
-                for i, line in enumerate(report_rows.wrap(warning)):
+                for i, line in enumerate(report_rows.wrap(warning, room.panel - room.icon - room.pad, room.measure)):
                     column.label(text=line, icon="ERROR" if i == 0 else "BLANK1")
 
         # A failed or cancelled last run stays on show until the next run;
@@ -551,20 +588,24 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
             if message and status != "ok":
                 box.label(text=message)
             if report:
-                for label, value, problem in report_rows.summary_rows(report):
-                    row = box.row()
-                    row.alert = problem
-                    row.label(text=label)
-                    row.label(text=value)
+                factor, rows = report_rows.summary_columns(report_rows.summary_rows(report), room.box, room.space,
+                                                           room.pad, room.measure)
+                for labels, values, problem in rows:
+                    split = box.split(factor=factor)
+                    split.alert = problem
+                    for column, lines in ((split.column(align=True), labels), (split.column(align=True), values)):
+                        for line in lines:
+                            column.label(text=line)
                 # Full width, so a sentence is not cut off at the value column.
                 column = box.column(align=True)
-                for text, first, problem in report_rows.warning_lines(report):
+                for text, first, problem in report_rows.warning_lines(report, room.box - room.icon - room.pad,
+                                                                      room.measure):
                     row = column.row()
                     row.alert = problem
                     icon = ("ERROR" if problem else "INFO") if first else "BLANK1"
                     row.label(text=text, icon=icon)
                 if report_rows.offers_fold_repair(report) and _source(obj) is not None:
-                    _draw_fold_offer(box, settings)
+                    _draw_fold_offer(box, settings, room)
 
         preferences = _preferences(context)
         _draw_build(layout, worker.find_executable(bpy.path.abspath(preferences.executable) if preferences else ""))

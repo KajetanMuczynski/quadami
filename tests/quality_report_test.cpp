@@ -194,17 +194,87 @@ int lostPartFailures()
     AutoRemesher::measureLostParts(positions, triangles, 12, mesh, islands, &report);
     const bool ok = 8 == report.farInputVertexCount && std::fabs(report.farthestInputQuadWidths - 10.0) < 1e-9
         && 1 == report.collapsedIslandCount && 2 == report.smallestCollapsedIslandFaces
-        && 6 == report.smallestCollapsedIslandTargetQuads;
+        && 6 == report.smallestCollapsedIslandTargetQuads && 1 == report.lostPieceCount
+        && 8 == report.pieceLostVertexCount && 0 == report.thinLostVertexCount && 0 == report.otherLostVertexCount;
     AutoRemesher::QualityReport whole;
     AutoRemesher::measureLostParts(positions, std::vector<uint32_t>(triangles.begin(), triangles.begin() + 36), 12,
         mesh, {}, &whole);
     const bool wholeOk = 0 == whole.farInputVertexCount && whole.farthestInputQuadWidths < 1e-9;
     printf("far vertices %zu (want 8), farthest %.3f quad widths (want 10), collapsed %zu (want 1), "
-           "smallest %zu of %zu (want 2 of 6); kept cube: far %zu (want 0)%s\n\n",
+           "smallest %zu of %zu (want 2 of 6), lost pieces %zu with %zu vertices (want 1 with 8); "
+           "kept cube: far %zu (want 0)%s\n\n",
         report.farInputVertexCount, report.farthestInputQuadWidths, report.collapsedIslandCount,
         report.smallestCollapsedIslandFaces, report.smallestCollapsedIslandTargetQuads,
+        report.lostPieceCount, report.pieceLostVertexCount,
         whole.farInputVertexCount, ok && wholeOk ? "" : "  FAIL");
     return ok && wholeOk ? 0 : 1;
+}
+
+// Why far vertices are lost, on one piece whose output covers only its end at
+// x = 0: a slab 10 long, 1 wide and 0.1 thick, whose far corners have the
+// other side 0.1 away (thin), and a cube of side 10, whose far corners have
+// no other side within two quad widths (other).  Quad width about 1 in both.
+// Then a single-sided strip, lost along its open edges.
+int lostPartCauseFailures()
+{
+    const auto box = [](double x, double y, double z) {
+        std::vector<double> corners = cubeCorners(0.0);
+        for (size_t i = 0; i < corners.size(); i += 3) {
+            corners[i] *= x;
+            corners[i + 1] *= y;
+            corners[i + 2] *= z;
+        }
+        std::vector<uint32_t> triangles;
+        for (const auto& face : cubeFaces(0))
+            triangles.insert(triangles.end(), { face[0], face[1], face[2], face[0], face[2], face[3] });
+        return std::make_pair(corners, triangles);
+    };
+    // One quad on the x = 0 face, within one quad width of its four corners.
+    AutoRemesher::RemeshMesh end;
+    end.positions = { 0, 0, 0, 0, 1, 0, 0, 1, 0.1, 0, 0, 0.1 };
+    end.faceSizes = { 4 };
+    end.faceIndices = { 0, 1, 2, 3 };
+    const auto slab = box(10.0, 1.0, 0.1);
+    AutoRemesher::QualityReport thin;
+    AutoRemesher::measureLostParts(slab.first, slab.second, 22, end, {}, &thin);
+    // The thickness in quad widths, recorded as a diagnostic.
+    const double expectedThickness = 0.1 / std::sqrt(22.2 / 22.0);
+    double thickness = 0.0;
+    for (const auto& it : thin.diagnostics) {
+        if (it.first == "lost_thin_thickness_p50")
+            thickness = it.second;
+    }
+    const bool thinOk = 4 == thin.farInputVertexCount && 4 == thin.thinLostVertexCount && 0 == thin.otherLostVertexCount
+        && 0 == thin.openEdgeLostVertexCount && 0 == thin.lostPieceCount && std::fabs(thickness / expectedThickness - 1.0) < 1e-9;
+
+    AutoRemesher::RemeshMesh corner;
+    corner.positions = { 0, 0, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0.5, 0 };
+    corner.faceSizes = { 4 };
+    corner.faceIndices = { 0, 1, 2, 3 };
+    const auto cube = box(10.0, 10.0, 10.0);
+    AutoRemesher::QualityReport other;
+    AutoRemesher::measureLostParts(cube.first, cube.second, 600, corner, {}, &other);
+    const bool otherOk = 7 == other.farInputVertexCount && 7 == other.otherLostVertexCount
+        && 0 == other.openEdgeLostVertexCount
+        && 0 == other.thinLostVertexCount && 0 == other.lostPieceCount && other.diagnostics.empty();
+
+    // A single-sided strip 10 long and 1 wide: no other side, but its far
+    // corners lie on its open edges.  Quad width 1.
+    const std::vector<double> strip = { 0, 0, 0, 10, 0, 0, 10, 1, 0, 0, 1, 0 };
+    AutoRemesher::RemeshMesh stripEnd;
+    stripEnd.positions = { 0, 0, 0, 0.5, 0, 0, 0.5, 1, 0, 0, 1, 0 };
+    stripEnd.faceSizes = { 4 };
+    stripEnd.faceIndices = { 0, 1, 2, 3 };
+    AutoRemesher::QualityReport open;
+    AutoRemesher::measureLostParts(strip, { 0, 1, 2, 0, 2, 3 }, 10, stripEnd, {}, &open);
+    const bool openOk = 2 == open.farInputVertexCount && 2 == open.openEdgeLostVertexCount
+        && 0 == open.thinLostVertexCount && 0 == open.otherLostVertexCount;
+    printf("slab: far %zu, thin %zu (want 4, 4), thickness %.4f quad widths (want %.4f); "
+           "cube: far %zu, other %zu (want 7, 7); strip: far %zu, open edge %zu (want 2, 2)%s\n\n",
+        thin.farInputVertexCount, thin.thinLostVertexCount, thickness, expectedThickness,
+        other.farInputVertexCount, other.otherLostVertexCount, open.farInputVertexCount,
+        open.openEdgeLostVertexCount, thinOk && otherOk && openOk ? "" : "  FAIL");
+    return thinOk && otherOk && openOk ? 0 : 1;
 }
 
 // Handles per island from the islands' twice-handle counts: a torus that came
@@ -266,6 +336,7 @@ int main()
     failures += closedIslandFailures();
     failures += handleFailures();
     failures += lostPartFailures();
+    failures += lostPartCauseFailures();
     printf("%-24s %13s %17s %11s\n", "case", "folded", "degenerate", "flips");
     for (const auto& c : cases) {
         const AutoRemesher::QualityReport report = measure(c.positions, c.faces);

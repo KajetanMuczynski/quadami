@@ -160,7 +160,8 @@ bool relaxEvensOutAlongThePlane()
     const std::vector<Vector3> before = output;
     // Vertex 12 is the centre (2, 2); pull it off towards a corner.
     output[12] = Vector3(2.4, 2.3, 0.0);
-    const auto result = SurfaceProjector(&input, &triangles, 90.0).relax(&output, quads, 5);
+    const auto creases = AutoRemesher::classifySharpEdges(input, triangles, 90.0);
+    const auto result = SurfaceProjector(&input, &triangles, &creases).relax(&output, quads, 5);
     bool ok = check(9 == result.free && 0 == result.snapped, "the 9 interior vertices are free, no crease");
     const double offBefore = std::hypot(0.4, 0.3);
     const double offAfter = std::hypot(output[12].x() - 2.0, output[12].y() - 2.0);
@@ -214,7 +215,8 @@ bool relaxPutsVerticesOnCreases()
     std::vector<Vector3> output;
     Faces quads;
     gridOnFoldedSheet(&output, &quads);
-    const auto result = SurfaceProjector(&input, &triangles, 30.0).relax(&output, quads, 5);
+    const auto creases = AutoRemesher::classifySharpEdges(input, triangles, 30.0);
+    const auto result = SurfaceProjector(&input, &triangles, &creases).relax(&output, quads, 5);
     bool ok = check(3 == result.snapped && 6 == result.free, "the crease row is snapped, the other 6 are free");
     ok = check(std::fabs(output[12].y()) < 1e-12 && std::fabs(output[12].z()) < 1e-12,
              "the vertex next to the crease lands on it")
@@ -228,7 +230,8 @@ bool relaxPutsVerticesOnCreases()
     std::vector<Vector3> unsnapped;
     Faces sameQuads;
     gridOnFoldedSheet(&unsnapped, &sameQuads);
-    const auto off = SurfaceProjector(&input, &triangles, 0.0).relax(&unsnapped, sameQuads, 0);
+    const auto noCreases = AutoRemesher::classifySharpEdges(input, triangles, 0.0);
+    const auto off = SurfaceProjector(&input, &triangles, &noCreases).relax(&unsnapped, sameQuads, 0);
     ok = check(0 == off.snapped && std::fabs(unsnapped[12].y() - 0.1) < 1e-12, "sharp edge 0 snaps nothing") && ok;
     return ok;
 }
