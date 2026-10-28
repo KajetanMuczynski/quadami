@@ -51,6 +51,29 @@ class OutputDiff(unittest.TestCase):
         self.assertEqual([u for _, u, *_ in failed], [1])
 
 
+class LaneRunArgs(unittest.TestCase):
+    def test_lane_runs_with_every_run_option(self):
+        # lane built its run arguments by hand and missed --metrics-timeout when it was added (2026-10-28).
+        seen = []
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus = os.path.join(tmp, "corpus.json")
+            with open(corpus, "w") as fp:
+                json.dump({"sets": {"s": {"targets": [2000]}}}, fp)
+            with mock.patch.object(ab, "CORPUS", corpus), \
+                    mock.patch.object(ab, "source_key", side_effect=lambda ref, *a: ref), \
+                    mock.patch.object(ab, "git", return_value="0"), \
+                    mock.patch.object(ab, "load_set", return_value=({}, [])), \
+                    mock.patch.object(ab, "cmd_run", side_effect=seen.append), \
+                    mock.patch.object(ab, "load_runs", return_value={}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                ab.cmd_lane(ab.parser().parse_args(["lane", "base", "head", "--work", tmp]))
+        run = vars(ab.parser().parse_args(["run", "x"]))
+        self.assertEqual(len(seen), 2)
+        for ra in seen:
+            self.assertEqual(set(vars(ra)), set(run))
+            self.assertEqual((ra.no_metrics, ra.replicates, ra.timeout, ra.work), (True, 1, 1200, tmp))
+
+
 class MetricsAddedLater(unittest.TestCase):
     """A run made with --no-metrics (as `lane` does) gets its metrics once a run asks for them,
     instead of being reused without them."""

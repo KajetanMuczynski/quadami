@@ -762,9 +762,12 @@ def cmd_lane(a):
     same, differ, failed = 0, [], []
     for setname in sets:
         for ref in (a.base, a.head):
-            ra = argparse.Namespace(ref=ref, set=setname, only=None, skip=None, targets=None, resolutions=None,
-                                    replicates=a.replicates, cli_arg=[], cmake_arg=[], jobs=a.jobs, no_metrics=True,
-                                    remeasure=False, timeout=a.timeout, work=a.work)
+            # Parsed like a `run` command line, so every run option keeps its default (a hand-built
+            # Namespace missed --metrics-timeout and broke lane, 2026-10-28).
+            ra = parser().parse_args(["run", ref, "--set", setname, "--replicates", str(a.replicates),
+                                      "--jobs", str(a.jobs), "--no-metrics"]
+                                     + (["--timeout", repr(a.timeout)] if a.timeout else []))
+            ra.work = a.work
             with open(os.devnull, "w") as quiet:
                 stdout, sys.stdout = sys.stdout, quiet
                 try:
@@ -789,7 +792,7 @@ def cmd_lane(a):
     return 0
 
 
-def main():
+def parser():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--work", default=os.environ.get("AR_WORK", os.path.expanduser("~/ar-work")))
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -833,7 +836,11 @@ def main():
     ln.add_argument("--timeout", type=float, default=1200)
     for p in (b, r, c, ln):
         p.add_argument("--work", default=argparse.SUPPRESS)
-    a = ap.parse_args()
+    return ap
+
+
+def main():
+    a = parser().parse_args()
     a.work = os.path.abspath(a.work)
     if a.cmd == "build":
         print(build(a.ref, a.work, a.jobs, a.cmake_arg)[1])
