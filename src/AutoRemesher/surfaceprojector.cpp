@@ -351,7 +351,7 @@ Vector3 closestPointOnSegment(const Vector3& p, const Vector3& a, const Vector3&
 }
 
 SurfaceProjector::SurfaceProjector(const std::vector<Vector3>* vertices,
-    const std::vector<std::vector<size_t>>* triangles, double sharpEdgeDegrees)
+    const std::vector<std::vector<size_t>>* triangles, const FeatureEdgeSet* creases)
     : m_vertices(vertices)
     , m_triangles(triangles)
 {
@@ -381,10 +381,6 @@ SurfaceProjector::SurfaceProjector(const std::vector<Vector3>* vertices,
     triangleGroupBox.updateCenter();
     m_triangleTree.reset(new AxisAlignedBoudingBoxTree(m_triangleBoxes.get(), triangleIndices, triangleGroupBox));
 
-    // 0 turns creases off, as it turns off the sharp-edge handling of the
-    // decimation; at 180 no edge can be sharper.
-    const bool findCreases = sharpEdgeDegrees > 0.0 && sharpEdgeDegrees < 180.0;
-    const double creaseCosine = std::cos(sharpEdgeDegrees * M_PI / 180.0);
     std::sort(edges.begin(), edges.end());
     for (size_t i = 0; i < edges.size();) {
         size_t j = i;
@@ -392,12 +388,8 @@ SurfaceProjector::SurfaceProjector(const std::vector<Vector3>* vertices,
             ++j;
         if (1 == j - i)
             m_boundary.edges.push_back(edges[i].first);
-        else if (2 == j - i && findCreases) {
-            const Vector3& a = m_triangleNormals[edges[i].second];
-            const Vector3& b = m_triangleNormals[edges[i + 1].second];
-            if (!a.isZero() && !b.isZero() && Vector3::dotProduct(a, b) < creaseCosine)
-                m_creases.edges.push_back(edges[i].first);
-        }
+        else if (2 == j - i && nullptr != creases && creases->contains(edges[i].first.first, edges[i].first.second))
+            m_creases.edges.push_back(edges[i].first);
         i = j;
     }
     buildEdgeTree(&m_boundary);

@@ -160,7 +160,8 @@ int check(const char* name, const Mesh& input, double quadEdge)
     int failures = 0;
     SurfaceMesh mesh(input.vertices, input.triangles);
     std::vector<Vector3> field;
-    if (!AutoRemesher::FrameField::create(mesh, 90.0, &field)) {
+    const AutoRemesher::FeatureEdgeSet sharpEdges = AutoRemesher::classifySharpEdges(mesh, 90.0);
+    if (!AutoRemesher::FrameField::create(mesh, sharpEdges, &field)) {
         std::printf("%s: frame field failed\n", name);
         return 1;
     }
@@ -171,6 +172,7 @@ int check(const char* name, const Mesh& input, double quadEdge)
         ++failures;
 
     AutoRemesher::SingularitySimplifier simplifier(mesh, &field);
+    simplifier.setFeatureEdges(&sharpEdges);
     const std::vector<int> before = simplifier.vertexCharges();
     simplifier.simplify();
     const std::vector<int> after = simplifier.vertexCharges();
@@ -185,7 +187,7 @@ int check(const char* name, const Mesh& input, double quadEdge)
         ++failures;
 
     AutoRemesher::QuadParameterizer::Result cover;
-    if (!AutoRemesher::QuadParameterizer::parameterize(input.vertices, input.triangles, &field, quadEdge, 90.0, &cover)) {
+    if (!AutoRemesher::QuadParameterizer::parameterize(input.vertices, input.triangles, &field, quadEdge, sharpEdges, &cover)) {
         std::printf("%s: cover failed\n", name);
         return failures + 1;
     }
