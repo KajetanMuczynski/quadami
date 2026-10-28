@@ -28,11 +28,12 @@
 namespace AutoRemesher {
 
 // The sharp edges of an island (TODO 2.6), with one test instead of a test
-// of each stage's own.  The input's set, classified once, drives the
-// decimation lock, the remesher's feature vertices and the crease snap; it
-// is carried through the decimation (remapFeatureEdges).  The set of the
-// isotropic remesh T (reclassifyFeatureEdges), with the same test, drives
-// the field lock, the singularity freeze and the isoline constraints.
+// of each stage's own.  The input's set drives the decimation lock and the
+// crease snap; the decimated mesh's (remapFeatureEdges) the remesher's
+// feature vertices; T's (reclassifyFeatureEdges) the field lock, the
+// singularity freeze and the isoline constraints.  Each is the same test on
+// that mesh plus the edges carried from the one before: all of them through
+// the decimation, the hard ones through the remesh.
 //
 // An interior edge is sharp when the angle between its two face normals is
 // at least the Sharp Edge angle minus kSharpEdgeToleranceDegrees.  Without
@@ -86,11 +87,14 @@ FeatureEdgeSet reclassifyFeatureEdges(const FeatureEdgeSet& carried,
 
 // Carries a set through a decimation that kept a subset of the vertices
 // (`outputIndexOfInput`, SIZE_MAX for a removed vertex) and rebuilt the
-// faces: the set's edges that are still edges, plus every edge between two
-// of the set's surviving vertices that passes the sharp test on the
-// decimated mesh, so a vertex the decimation removed from a chain leaves a
-// chain edge rather than a gap.  `dropped` counts set edges whose two ends
-// both survive but are no longer joined by an edge.
+// faces: the set's edges that are still edges (the decimation moves no
+// vertex, so they are still the input's creases), plus every other edge
+// sharp on the decimated mesh.  The latter close a chain where the
+// decimation removed a vertex of it, and keep the creases the decimation
+// makes on thin parts (a thin ellipsoid's rim), which the remesher must
+// keep: without them the closed set lost fidelity (TODO 2.6: uncovered area
+// x1.5).  `dropped` counts set edges whose two ends both survive but are no
+// longer joined by an edge.
 FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
     const std::vector<size_t>& outputIndexOfInput,
     const std::vector<Vector3>& vertices,

@@ -47,11 +47,9 @@ namespace {
         return std::fabs(mesh.normalAngle(corner));
     }
 
-    // `carried` edges that are still edges of the mesh, plus the edges that
-    // pass the sharp test on it and have both ends on a feature (every
-    // vertex when `onFeature` is null).
+    // `carried` edges that are still edges of the mesh, plus every other
+    // interior edge that passes the sharp test on it; `added` counts these.
     FeatureEdgeSet carryAndClassify(const FeatureEdgeSet& carried,
-        const std::vector<char>* onFeature,
         const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles,
         double sharpEdgeDegrees, size_t* added)
@@ -69,8 +67,7 @@ namespace {
             if (found != carried.edges.end() && *found == edge) {
                 result.edges.push_back(edge);
                 result.flags.push_back(carried.flags[found - carried.edges.begin()]);
-            } else if ((nullptr == onFeature || ((*onFeature)[a] && (*onFeature)[b]))
-                && isSharpNormalAngle(cornerNormalAngle(mesh, c), sharpEdgeDegrees)) {
+            } else if (isSharpNormalAngle(cornerNormalAngle(mesh, c), sharpEdgeDegrees)) {
                 result.edges.push_back(edge);
                 result.flags.push_back(0);
                 ++addedEdges;
@@ -163,7 +160,7 @@ FeatureEdgeSet reclassifyFeatureEdges(const FeatureEdgeSet& carried,
             hard.flags.push_back(carried.flags[i]);
         }
     }
-    return carryAndClassify(hard, nullptr, vertices, triangles, sharpEdgeDegrees, classified);
+    return carryAndClassify(hard, vertices, triangles, sharpEdgeDegrees, classified);
 }
 
 FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
@@ -174,14 +171,9 @@ FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
 {
     constexpr size_t removed = std::numeric_limits<size_t>::max();
     FeatureEdgeSet mapped;
-    std::vector<char> onFeature(vertices.size(), 0);
     for (size_t i = 0; i < set.edges.size(); ++i) {
         const size_t a = outputIndexOfInput[set.edges[i].first];
         const size_t b = outputIndexOfInput[set.edges[i].second];
-        if (a != removed)
-            onFeature[a] = 1;
-        if (b != removed)
-            onFeature[b] = 1;
         if (a != removed && b != removed) {
             mapped.edges.push_back(undirected(a, b));
             mapped.flags.push_back(set.flags[i]);
@@ -189,7 +181,7 @@ FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
     }
     mapped.normalize();
 
-    const FeatureEdgeSet result = carryAndClassify(mapped, &onFeature, vertices, triangles, sharpEdgeDegrees, nullptr);
+    const FeatureEdgeSet result = carryAndClassify(mapped, vertices, triangles, sharpEdgeDegrees, nullptr);
     if (nullptr != dropped) {
         size_t kept = 0;
         for (const auto& edge : mapped.edges)
