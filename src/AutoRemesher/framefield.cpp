@@ -36,9 +36,12 @@ namespace {
     constexpr double kSymmetry = 4.0;
 
     // Radius, in mean edges of the mesh, around a conical tip within which
-    // curvature does not guide the field. 4 and 16 kept the tip as well
-    // (Blender cones, 500 to 10k quads, 6 replicates each).
-    constexpr double kTipUnguidedEdges = 8.0;
+    // curvature does not guide the field. Without it, quads fold next to the
+    // tip of open cones. 2, 4, 8 and 16 all keep the tip (Blender cones, 500 to
+    // 10k quads, 6 replicates each), but larger radii move singularities far
+    // away: on a private sculpt with two tips, folds rose from 7.9 (no tips) to
+    // 8.6 / 10.0 / 11.8 with 2 / 4 / 8 (21 replicates).
+    constexpr double kTipUnguidedEdges = 2.0;
 
     struct FacetTangentBasis {
         Vector3 tangent;
