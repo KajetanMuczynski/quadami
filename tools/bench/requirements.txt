@@ -1,0 +1,22 @@
+# Python packages of the bench tools (metrics.py, ab.py, DracoPy for Draco glTF sources): the bench
+# tests in ci.yml and the check job of release-check.yml. Pinned with hashes, per the dependency rule
+# in CLAUDE.md. The hashes are the CPython 3.12 wheels of the three runners (Linux x86-64, Windows
+# x64, macOS arm64); add the matching wheel when the Python version or a runner changes.
+# Install with:
+#   python -m pip install --require-hashes --no-deps -r tools/bench/requirements.txt
+numpy==2.5.4 \
+    --hash=sha256:fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a \
+    --hash=sha256:a7b1b6353e36a7e50de2973a38d705c88ee93adcf120673cee7f45a4a3fa223a \
+    --hash=sha256:9cb18a327b49c5c337f972b03682f6a49855525faaf3c0d3e9c96cd0fd8880a8
+scipy==1.18.1 \
+    --hash=sha256:f55fa87b6c612ecd6b058f167c53231b1d14e412efe361d3d6e38b3631c73218 \
+    --hash=sha256:5e4d44984abc0020154ea81b247adeddcc3ac5527b975ff798bd1ba0adc513c2 \
+    --hash=sha256:7bbf207c4453ce1ad2e00b17313852b33310b83090c2311bdaf97f93c0380d12
+libigl==2.6.3 \
+    --hash=sha256:4a1d28aebfeb8b232a58943b1af318ec61a1fff7650a9d25a1396ba8fa1ef6d6 \
+    --hash=sha256:1d91745ed0e78c56a04539e3231ce6faff49ae0dbe123caa2034e1886fcb2e7d \
+    --hash=sha256:da3c62c50103be9b192bc76bbcb9e5031d80a2cf209b3ef0a0cf0060750088d9
+DracoPy==2.2.0 \
+    --hash=sha256:862a3e20c129d05ef1cdf54216c8b122fb0e46ecfd01112d86ed1736e58a5209 \
+    --hash=sha256:95d5abce48ba75d9ebc2cf8ded97904057c69f25c4d88aaba265d22493867a1a \
+    --hash=sha256:d9a1f1d7a627b4deb4c86cf567d40f04037025104b2954d6589d846e2a210891
