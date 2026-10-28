@@ -18,5 +18,8 @@
 - Measured: `marked` set, 5 replicates: marked length followed 0.29 → 0.70, folded + non-quads
   48 → 35, topology same in every run; CAD set with 30° marks (from #113's generator, not in the
   repo): boxes, chamfered box and cylinder 0.25–0.71 → 0.82–0.99, the 30° wedge 0.49 → 0.16 at 1k.
-- Next: port onto the sharp-edge thread's `FeatureEdgeSet` (2.6) after it merges; face-set and
+- 2026-10-28: moved onto 2.6's `FeatureEdgeSet` (#139): the marks are its hard edges; the halfedge
+  mesh's own `marked` flag became `hard()` on the feature flags; meshopt locks hard ends; the
+  singularity freeze takes hard corners both ways. `marked` set against #139: 0.34 → 0.69.
+- Next: face-set and
   material borders as sources; 5.2's sector rule for acute and crossing marks.

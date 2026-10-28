@@ -24,6 +24,7 @@
 #define AUTO_REMESHER_QUAD_PARAMETERIZER_H
 
 #include <AutoRemesher/Diagnostics>
+#include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/Progress>
 #include <AutoRemesher/Vector2>
 #include <AutoRemesher/Vector3>
@@ -44,20 +45,18 @@ public:
         std::vector<DiagnosticRecord> diagnostics;
     };
     // quadEdgeLength is the quad edge, in mesh units, where the face scalings
-    // are 1; each face scaling multiplies it.
+    // are 1; each face scaling multiplies it.  `hardEdges` (and boundaries)
+    // get an isoline where the field runs along them.
     static bool parameterize(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles,
         const std::vector<Vector3>* guidance, double quadEdgeLength,
-        double hardEdgeDegrees, Result* result,
+        const FeatureEdgeSet& hardEdges, Result* result,
         const std::vector<double>* faceScaling = nullptr,
         const std::vector<double>* faceScalingU = nullptr,
         const std::vector<double>* faceScalingV = nullptr,
         // Reports 0..1 across the quad cover solve, which is the single longest
         // step of the whole pipeline and would otherwise be one silent block.
-        const ProgressHandler* progressHandler = nullptr,
-        // Per corner: the corner's edge is marked, so a hard edge whatever
-        // its angle.
-        const std::vector<char>* markedCorners = nullptr);
+        const ProgressHandler* progressHandler = nullptr);
 };
 
 }

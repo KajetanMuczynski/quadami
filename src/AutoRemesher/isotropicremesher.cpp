@@ -21,7 +21,6 @@
  */
 #include <AutoRemesher/IsotropicRemesher>
 #include <AutoRemesher/Vector3>
-#include <algorithm>
 #include <cstdio>
 
 #include <isotropichalfedgemesh.h>
@@ -41,10 +40,8 @@ bool IsotropicRemesher::remesh()
         remesher.setTargetEdgeLength(m_targetEdgeLength);
     if (m_vertexTargetEdgeLengths != nullptr)
         remesher.setVertexTargetEdgeLengths(m_vertexTargetEdgeLengths);
-    remesher.setSharpEdgeIncludedAngle(180.0 - m_sharpEdgeDegrees);
+    remesher.setFeatureEdges(m_featureEdges.edges, m_featureEdges.flags);
     remesher.setSmoothNormalDegrees(m_smoothNormalDegrees);
-    if (m_markedEdges != nullptr && !m_markedEdges->empty())
-        remesher.setMarkedEdges(*m_markedEdges);
     if (m_progressHandler)
         remesher.setProgressHandler(m_progressHandler);
     remesher.remesh(m_remeshIterations);
@@ -70,17 +67,25 @@ bool IsotropicRemesher::remesh()
             face->halfedge->previousHalfedge->startVertex->outputIndex,
             face->halfedge->startVertex->outputIndex,
             face->halfedge->nextHalfedge->startVertex->outputIndex });
+    }
+    m_remeshedFeatureEdges = FeatureEdgeSet();
+    for (IsotropicHalfedgeMesh::Face* face = halfedgeMesh->moveToNextFace(nullptr);
+        nullptr != face;
+        face = halfedgeMesh->moveToNextFace(face)) {
         IsotropicHalfedgeMesh::Halfedge* halfedge = face->halfedge;
         do {
-            // Each marked edge once, from the half that runs low to high.
-            const size_t from = halfedge->startVertex->outputIndex;
-            const size_t to = halfedge->nextHalfedge->startVertex->outputIndex;
-            if (halfedge->marked && from < to)
-                m_remeshedMarkedEdges.emplace_back(from, to);
+            const size_t first = halfedge->startVertex->outputIndex;
+            const size_t second = halfedge->nextHalfedge->startVertex->outputIndex;
+            // Each edge once, from its halfedge that runs up in index.
+            if (halfedge->feature && nullptr != halfedge->oppositeHalfedge && first < second) {
+                m_remeshedFeatureEdges.edges.emplace_back(first, second);
+                m_remeshedFeatureEdges.flags.push_back(halfedge->featureFlags);
+            }
             halfedge = halfedge->nextHalfedge;
         } while (halfedge != face->halfedge);
     }
-    std::sort(m_remeshedMarkedEdges.begin(), m_remeshedMarkedEdges.end());
+    m_remeshedFeatureEdges.normalize();
+    m_clearedFeatureEdges = halfedgeMesh->clearedFeatureEdges();
 
     return true;
 }

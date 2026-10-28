@@ -21,6 +21,7 @@
 #ifndef AUTO_REMESHER_PARAMETERIZER_H
 #define AUTO_REMESHER_PARAMETERIZER_H
 #include <AutoRemesher/Diagnostics>
+#include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/Progress>
 #include <AutoRemesher/Vector2>
 #include <AutoRemesher/Vector3>
@@ -81,16 +82,20 @@ public:
         m_adaptivity = adaptivity;
     }
 
+    // Without setFeatureEdges(), the sharp edges are classified on the
+    // triangles given, at this angle.
     void setSharpEdgeDegrees(double degrees)
     {
         m_sharpEdgeDegrees = degrees;
     }
 
-    // Vertex pairs of the edges the user marked, kept as creases whatever
-    // their angle.
-    void setMarkedEdges(const std::vector<std::pair<size_t, size_t>>* edges)
+    // The sharp edges of the triangles given (the input's, carried through
+    // the remesh): the field locks to them, the singularity simplifier
+    // keeps cones from crossing them and the cover puts isolines on them.
+    // Must outlive parameterize().
+    void setFeatureEdges(const FeatureEdgeSet* featureEdges)
     {
-        m_markedEdges = edges;
+        m_featureEdges = featureEdges;
     }
 
     void setAnisotropy(double anisotropy)
@@ -134,7 +139,7 @@ private:
     double m_targetQuadCount = 0.0;
     double m_adaptivity = 0.5;
     double m_sharpEdgeDegrees = 90.0;
-    const std::vector<std::pair<size_t, size_t>>* m_markedEdges = nullptr;
+    const FeatureEdgeSet* m_featureEdges = nullptr;
     double m_anisotropy = 1.0;
     double m_maxAspectRatio = 2.3;
     bool m_singularitySimplification = true;

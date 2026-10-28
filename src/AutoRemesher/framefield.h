@@ -24,6 +24,7 @@
 #define AUTO_REMESHER_FRAME_FIELD_H
 
 #include <AutoRemesher/Diagnostics>
+#include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/SurfaceMesh>
 #include <AutoRemesher/Vector3>
 #include <cmath>
@@ -34,13 +35,11 @@ namespace AutoRemesher {
 
 class FrameField {
 public:
+    // Faces on a boundary or a `sharpEdges` edge are locked to that edge.
     // When `diagnostics` is given, appends a "frame_field" record to it.
-    // `markedCorners`, per corner, locks the field to that corner's edge
-    // whatever its angle (marked edges).
-    static bool create(const SurfaceMesh& mesh, double sharpEdgeDegrees,
+    static bool create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdges,
         std::vector<Vector3>* field,
-        std::vector<DiagnosticRecord>* diagnostics = nullptr,
-        const std::vector<char>* markedCorners = nullptr);
+        std::vector<DiagnosticRecord>* diagnostics = nullptr);
 
     // The angle a cross field asks the map to have around an interior
     // vertex, in quarter turns: 4 at a regular vertex, 3 at a valence-3

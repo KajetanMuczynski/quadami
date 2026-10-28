@@ -32,6 +32,10 @@
 class IsotropicHalfedgeMesh
 {
 public:
+    // Bit of Halfedge::featureFlags for a hard (user-marked) edge; the same
+    // bit as AutoRemesher::FeatureEdgeSet::Hard.
+    static const unsigned char kHardFeature = 0x1;
+
     struct Halfedge;
       
     struct Vertex
@@ -49,8 +53,8 @@ public:
         size_t debugIndex = 0;
         size_t outputIndex = 0;
         bool featured = false;
-        // On an edge the user marked (markEdges): never moved or removed
-        // except by a collapse along the marked line.
+        // On a hard feature edge: never moved or removed except by a
+        // collapse along the hard line.
         bool marked = false;
         double targetEdgeLength = 0.0; // 0 = use global default in split/collapse
         Vertex *_allocLink = nullptr;
@@ -74,10 +78,16 @@ public:
         Halfedge *nextHalfedge = nullptr;
         Halfedge *previousHalfedge = nullptr;
         Halfedge *oppositeHalfedge = nullptr;
-        int featureState = -1;
-        // Both halves of a marked edge carry it; splits pass it on, flips
-        // and collapses never remove it.
-        bool marked = false;
+        // A feature edge (both halfedges carry it), from the caller's set:
+        // split halves inherit it, a flip clears it unless it is hard.
+        bool feature = false;
+        unsigned char featureFlags = 0;
+        // A hard (user-marked) feature edge: never flipped, split on its
+        // line, kept by collapses (collapseEdge).
+        bool hard() const
+        {
+            return feature && 0 != (featureFlags & kHardFeature);
+        }
         size_t debugIndex = 0;
         Halfedge *_allocLink = nullptr;
     };
@@ -90,11 +100,9 @@ public:
     void breakEdge(Halfedge *halfedge);
     // collapseTo: where the kept vertex goes; nullptr = the edge's midpoint.
     bool collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared, const Vector3 *collapseTo=nullptr);
-    // Marks the interior edges between the given input vertex pairs.
-    void markEdges(const std::vector<std::pair<size_t, size_t>> &edges);
-    // On exactly two marked edges that meet at 150 degrees or more: a point
-    // of a marked line that a collapse along the line may remove.
-    bool isStraightMarkedChainVertex(Vertex *vertex);
+    // On exactly two hard edges that meet at 150 degrees or more: a point
+    // of a hard line that a collapse along the line may remove.
+    bool isStraightHardChainVertex(Vertex *vertex);
     bool flipEdge(Halfedge *halfedge);
     void relaxVertex(Vertex *vertex);
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);
@@ -103,8 +111,18 @@ public:
     void updateVertexValences();
     void updateVertexNormals();
     void updateTriangleNormals();
-    void featureEdges(double radians);
+    // Marks the caller's feature edges, given as pairs of input vertex
+    // indices with a flags byte each; call before anything adds a vertex.
+    void markFeatureEdges(const std::vector<std::pair<size_t, size_t>> &edges,
+        const std::vector<unsigned char> &flags);
+    // Marks the ends of feature edges as feature vertices.
+    void featureVertices();
     void featureBoundaries();
+    // Feature edges a flip has removed so far.
+    size_t clearedFeatureEdges() const
+    {
+        return m_clearedFeatureEdges;
+    }
 private:
     Vertex *m_firstVertex = nullptr;
     Vertex *m_lastVertex = nullptr;
@@ -116,6 +134,7 @@ private:
     Vertex *m_vertexAllocLink = nullptr;
     Face *m_faceAllocLink = nullptr;
     Halfedge *m_halfedgeAllocLink = nullptr;
+    size_t m_clearedFeatureEdges = 0;
     
     static inline uint64_t makeHalfedgeKey(size_t first, size_t second)
     {
@@ -163,7 +182,6 @@ private:
         Face *removedFaceTwo);
     void collectVerticesAroundVertex(Vertex *vertex,
         std::set<Vertex *> *vertices);
-    void featureHalfedge(Halfedge *halfedge, double radians);
     void iterateVertexHalfedges(Vertex *vertex, std::function<bool(Halfedge *halfedge)> handler);
 };
 

@@ -21,6 +21,7 @@
  */
 #ifndef AUTO_REMESHER_ISOTROPIC_REMESHER_H
 #define AUTO_REMESHER_ISOTROPIC_REMESHER_H
+#include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/Progress>
 #include <AutoRemesher/Vector3>
 #include <unordered_set>
@@ -52,28 +53,16 @@ public:
         m_targetEdgeLength = edgeLength;
     }
 
-    void setSharpEdgeDegrees(double degrees)
+    // The input's sharp edges (classifySharpEdges); their vertices stay where
+    // they are, and featureEdges() is what is left of them in the result.
+    void setFeatureEdges(const FeatureEdgeSet& featureEdges)
     {
-        m_sharpEdgeDegrees = degrees;
+        m_featureEdges = featureEdges;
     }
 
     void setSmoothNormalDegrees(double degrees)
     {
         m_smoothNormalDegrees = degrees;
-    }
-
-    // Vertex pairs of the input edges to keep as edges of the result
-    // (marked edges): split along their line, never flipped, collapsed only
-    // along it.
-    void setMarkedEdges(const std::vector<std::pair<size_t, size_t>>* edges)
-    {
-        m_markedEdges = edges;
-    }
-
-    // The result's edges on the marked ones, as vertex pairs.
-    const std::vector<std::pair<size_t, size_t>>& remeshedMarkedEdges()
-    {
-        return m_remeshedMarkedEdges;
     }
 
     void setProgressHandler(ProgressHandler progressHandler)
@@ -91,6 +80,18 @@ public:
         return m_remeshedTriangles;
     }
 
+    // The input's feature edges as edges of the result: the halves of every
+    // split one, less those a flip removed (clearedFeatureEdges()).
+    const FeatureEdgeSet& featureEdges() const
+    {
+        return m_remeshedFeatureEdges;
+    }
+
+    size_t clearedFeatureEdges() const
+    {
+        return m_clearedFeatureEdges;
+    }
+
     bool remesh();
 
     void debugExportObj(const char* filename);
@@ -100,15 +101,15 @@ private:
     std::vector<std::vector<size_t>> m_triangles;
     const std::unordered_set<size_t>* m_constraintVertices = nullptr;
     const std::vector<double>* m_vertexTargetEdgeLengths = nullptr;
-    const std::vector<std::pair<size_t, size_t>>* m_markedEdges = nullptr;
-    std::vector<std::pair<size_t, size_t>> m_remeshedMarkedEdges;
     double m_targetEdgeLength = 0;
-    double m_sharpEdgeDegrees = 60;
+    FeatureEdgeSet m_featureEdges;
     double m_smoothNormalDegrees = 0.0;
     int m_remeshIterations = 3;
     ProgressHandler m_progressHandler;
     std::vector<Vector3> m_remeshedVertices;
     std::vector<std::vector<size_t>> m_remeshedTriangles;
+    FeatureEdgeSet m_remeshedFeatureEdges;
+    size_t m_clearedFeatureEdges = 0;
 };
 
 }

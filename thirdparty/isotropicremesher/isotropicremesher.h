@@ -38,14 +38,16 @@ public:
             const std::vector<std::vector<size_t>> *triangles);
     ~IsotropicRemesher();
     double initialAverageEdgeLength();
-    void setSharpEdgeIncludedAngle(double degrees);
+    // Feature edges of the input, as pairs of input vertex indices with a
+    // flags byte each (kept as they are).  Their vertices are not collapsed
+    // or projected; the edges are tracked through the remesh, see
+    // featureEdges().
+    void setFeatureEdges(const std::vector<std::pair<size_t, size_t>> &edges,
+        const std::vector<unsigned char> &flags);
     void setTargetEdgeLength(double edgeLength);
     void setVertexTargetEdgeLengths(const std::vector<double> *targetLengths);
     void setTargetTriangleCount(size_t triangleCount);
     void setSmoothNormalDegrees(double degrees);
-    // Input vertex pairs of edges to keep as edges (IsotropicHalfedgeMesh::markEdges).
-    // Call after construction, before remesh().
-    void setMarkedEdges(const std::vector<std::pair<size_t, size_t>> &edges);
     // Reports 0..1 across remesh(), which is otherwise a long silent stretch of
     // the pipeline. `name` labels the pass that is starting.
     void setProgressHandler(std::function<void(float, const char *)> handler)
@@ -62,7 +64,8 @@ private:
     IsotropicHalfedgeMesh *m_halfedgeMesh = nullptr;
     std::vector<AxisAlignedBoudingBox> *m_triangleBoxes = nullptr;
     AxisAlignedBoudingBoxTree *m_axisAlignedBoundingBoxTree = nullptr;
-    double m_sharpEdgeThresholdRadians = 0;
+    std::vector<std::pair<size_t, size_t>> m_featureEdges;
+    std::vector<unsigned char> m_featureEdgeFlags;
     double m_targetEdgeLength = 0;
     double m_initialAverageEdgeLength = 0;
     size_t m_targetTriangleCount = 0;

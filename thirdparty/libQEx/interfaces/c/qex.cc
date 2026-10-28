@@ -17,7 +17,7 @@
  * You should have received a copy of the GNU General Public License
  * along with QEx.  If not, see <http://www.gnu.org/licenses/>.
  *
- * Modified by the Quadami fork, 2026-10-21 (TODO 6.1b): extractQuadMeshOMLimited; connectivity check before merging; no log output.
+ * Modified by the Quadami fork, 2026-10-21 (TODO 6.1b): extractQuadMeshOMLimited; connectivity check before merging; handle range check before garbage collection; no log output.
  * See thirdparty/libQEx/PATCHES.md.
  */
 
@@ -68,6 +68,7 @@ void mergePolyToQuad(QuadMesh_t inout_polyMesh, QEx::PropMgr<QuadMesh>::LocalUvs
     QEx::checkCirculatorsTerminate(*inout_polyMesh, "before merging");
     qexPp.ngons_to_quads();
 
+    QEx::checkHandlesInRange(*inout_polyMesh, "before garbage collection");
     inout_polyMesh->garbage_collection();
 
     inout_polyMesh->release_face_status();
