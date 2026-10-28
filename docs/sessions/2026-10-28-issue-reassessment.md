@@ -14,3 +14,4 @@
   angle to the vertex's average normal.
 - Later the same day: folded in the open-source comparison's matched-count runs and the math analysis (icosphere cones and rotated flat parts moved to fixable, nemetona's lace a topology limit, rim step-off traced to the extractor smoothing, vaseflowers relapse a rule artefact).
 - Next: re-measure the eyeball caps and the 256-sided cylinder on 0.2.0 before planning them.
+- Corrected after the comparison thread's re-check: the icosphere cones come from the curvature guidance (a weak-anchor field gives 8, the earlier guidance-off probe was degenerate); QuadriFlow and Blender QuadriFlow are not better on thin parts and handles, not worse (counts poorly matched); no tool keeps a cone apex reliably.
