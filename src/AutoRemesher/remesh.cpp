@@ -547,6 +547,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     engine.setSharpEdgeDegrees(parameters.sharpEdgeDegrees);
     engine.setSmoothNormalDegrees(parameters.smoothNormalDegrees);
     engine.setUseQex(Extractor::Qex == parameters.extractor);
+    engine.setKeepPreviewData(nullptr != preview);
     engine.setRepairInputFolds(parameters.repairFolds);
     engine.setFlattenSpikes(parameters.flattenSpikes);
     engine.setTangentialQuadSmoothing(QuadSmoothing::Tangential == parameters.quadSmoothing);
