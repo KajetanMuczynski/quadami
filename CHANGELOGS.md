@@ -1,5 +1,35 @@
 # Changelog
 
+## Quadami 0.2.0
+
+Release with known limits (release notes: [docs/releases/0.2.0.md](docs/releases/0.2.0.md)).
+Changes since 0.1.0. Results differ from 0.1.0 on most models. macOS is still experimental and untested.
+
+Blender add-on
+- Follow Marks (Sharp on by default; Crease, Seam): marked edges keep a row of quad edges along
+  them; marks on more than half of a large mesh's edges are skipped with a warning
+- Keep from Original: the result gets the original's materials, vertex groups, colour attributes and
+  sharp, crease and seam marks (on by default) and, opt-in, its UV maps
+- Missing-parts warning names the cause (thin parts as a limit of Target Quads, pieces with no
+  quads, open edges of single-sided surfaces, other) and what raising Target Quads did on test models
+- Advanced > Quad Smoothing: experimental Keep Ridges (tangential smoothing), off by default
+- Panel text wraps to the sidebar's real width; CI fails on a cut-off label
+
+Remeshing
+- Input sanitizer: welds open seams, removes duplicate faces, splits pinched vertices, leaves out
+  paper-thin sliver islands (they took minutes, many GB or crashed)
+- Marked edges as hard edges (interface 1.10, OBJ `l` lines in the CLI), with a density guard and a
+  per-island re-run without marks when the marked run folds
+- One sharp-edge test with 0.1° tolerance, so 90° edges are kept at the default Sharp Edge of 90°
+- libQEx guards against two endless loops and an out-of-bounds read after the n-gon merge; the
+  island falls back to the built-in extractor
+- An island whose cover elimination fills in fails on its own instead of taking many GB
+- Lower peak memory with byte-identical output
+
+Project
+- A CI run for every master merge; macOS nightly instead of per merge
+- Bench: crease, Blender primitives and thin-part test sets; metrics time limit; no silent missing numbers
+
 ## Quadami 0.1.0
 
 First public release, with known limits (release notes: [docs/releases/0.1.0.md](docs/releases/0.1.0.md)).

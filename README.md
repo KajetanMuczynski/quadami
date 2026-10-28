@@ -8,8 +8,8 @@ It is made for people who sculpt or model in Blender and need clean, even topolo
 (to animate, UV-unwrap, keep sculpting at a lower resolution, or hand over). You do not need to be
 a programmer to use it: the [user guide](docs/USER-GUIDE.md) is written for Blender beginners.
 
-> **Status: 0.1.0, the first public release, with known limits.** It works on the sculpts we test
-> with, but expect rough edges. Read [Limits and warnings](#limits-and-warnings) before you rely
+> **Status: 0.2.0, a release with known limits.** It works on the sculpts we test with, but
+> expect rough edges. Read [Limits and warnings](#limits-and-warnings) before you rely
 > on it, and send the panel's build line with every bug report.
 
 ![Koala sculpt: input left, Quadami output right](docs/gallery/img/koala.webp)
@@ -45,7 +45,7 @@ no GitHub account needed). Do not unpack it: Blender installs the zip itself.
 | System | Zip | Tested |
 |---|---|---|
 | **Linux** (x64, any distribution with glibc 2.28 or newer, e.g. Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL 8+) | `quadami-<version>-linux-x64.zip` (built in AlmaLinux 8, so it does not need a new distribution). Works with Blender from blender.org and the snap (`/snap/bin/blender`). Or build it yourself ([addon/BEGINNERS.md](addon/BEGINNERS.md)). | CI (Ubuntu 24.04, Blender 4.2, headless) and the maintainer's laptop (Ubuntu, Blender 4.5 snap) |
-| **Windows** 10/11 (x64) | `quadami-<version>-windows-x64.zip` | In CI only (Blender 5.2, headless); not yet on a real Windows desktop. The program is not signed. |
+| **Windows** 10/11 (x64) | `quadami-<version>-windows-x64.zip` | CI (Blender 5.2, headless); 0.1.0 also on one Windows 10 desktop, 0.2.0 not yet by hand. The program is not signed. |
 | **macOS** (Apple silicon, macOS 11.2+): **experimental, untested** | `quadami-<version>-macos-arm64.zip` | In CI only; **never tried on a real Mac**, and the program is not notarized, so Gatekeeper may block it |
 | macOS on Intel | Build it yourself ([docs/BUILDING.md](docs/BUILDING.md)). | No |
 
@@ -68,13 +68,16 @@ the install scripts and the snap version of Blender on Linux: [user guide §2](d
   **Repair Folds and Re-run**, or smooth those spots by hand; folds wider than about 1 % of the
   model are not detected.
 - **Holes** can still appear in closed sculpts at higher quad counts; the **Holes** row shows them.
-- **Hard-surface models**: sharp edges come out rounded (a box or cylinder edge keeps an edge loop on
-  about half to two thirds of its length, a cone's rim much less), cone tips are cut off about one
-  quad deep, and edges marked Sharp in Blender are not used. Edges of exactly 90° keep better with
-  Sharp Edge at 89°; lower angles make more triangles and other non-quads on detailed parts. Mirror symmetry, guide curves and density painting are not
+- **Hard-surface models**: sharp edges come out slightly rounded (on Blender's cube an edge loop
+  follows about 90 % of the edges at 5,000 quads, on the cylinder about 80 % of the rims; a cone's
+  rim much less), and cone tips are cut off about one quad deep. Mark the edges to keep as Sharp:
+  **Follow Marks** (on by default) then keeps quad edges along 90-99 % of a cube's or cylinder's marked
+  edges at 5,000 quads. Sharp Edge below 90° makes more triangles
+  and other non-quads on detailed parts. Mirror symmetry, guide curves and density painting are not
   available yet.
+- **Modifiers are baked in**: a Mirror, Subdivision Surface or Armature on the original is applied
+  into the result and is not on it.
 - **Large inputs** are slow to hand over (the mesh goes through a text file both ways).
-- Very small or very large models (under about 1 cm or over 10 km) are untested.
 
 The full list, with what helps: [user guide §7](docs/USER-GUIDE.md#7-sculpts-what-works-and-what-struggles).
 What we test and promise: [docs/TARGETS.md](docs/TARGETS.md) (quality targets) and
