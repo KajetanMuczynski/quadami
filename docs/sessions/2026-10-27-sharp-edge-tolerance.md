@@ -1,0 +1,16 @@
+# 2026-10-27 · cloud thread "Fix sharp-edge 90° knife edge" · One sharp-edge classification (TODO 2.6)
+- Repos/commits: core master c1f80a9, branch `fix/sharp-edge-tolerance` (PR #139), head 0992450 for the measurements.
+- Did:
+  - Built `FeatureEdgeSet` (`featureedges.h/.cpp`): one test, |β| ≥ θ_s − 0.1°, and a set per mesh. The input's set drives the decimation lock and the crease snap. The decimated mesh's set (remapped, plus its own sharp edges) drives the remesher's feature vertices. T's set (hard edges carried, the rest reclassified on T) drives the field lock, the concave-only singularity freeze and the isoline constraints.
+  - Per-halfedge feature flags in the thirdparty remesher: halves inherit them, flips clear them and are counted.
+  - Flags byte with bit `Hard` for 5.4.
+  - Set counts in the `features` record.
+  - New test `tests/feature_edges_test.cpp`.
+- Found:
+  - Carrying the input's creases into T fixes nothing. Flips remove 79 of 131 box edges, the relaxation bends the rest, and constraining the field to bent edges costs UV flips (cad ×2.2 summed).
+  - Without its own sharp edges, the decimated mesh loses the rims that decimation makes on thin parts, and with them closed-set fidelity (uncovered area ×1.5).
+  - A 1° tolerance also marks the many genuine 89–90° edges of organic meshes (ext_corset holes 1.3 → 3.3, the same as master at 89°). Float32 noise on CAD right angles stays at 0.009° or less.
+  - REFERENCE row 7 was wrong: the signed freeze protected only concave creases.
+  - The ext_watch 10k and brush_twist 2k timeouts are libQEx's add_face loop, which #140 fixes (checked with #140 merged in).
+- Measured: research/sharp-edge-tolerance-2026-10-28.md (ab.py, 6 replicates, every public set plus realsculpt and realsword).
+- Next: 2.5 (no flip of feature edges, chain-preserving relaxation). That is where the CAD validity costs of locking every right angle should go away.
