@@ -1,0 +1,111 @@
+{
+ "_comment": "Thin-part test meshes (TODO 4.1 local size cap) whose license allows public use with credit (tools/bench/fetch_external.py, set external_thin in corpus.json). License checked at the source on 2026-10-27 (see source); per-mesh credits in docs/EXTERNAL-MESHES.md. kinds: 1 thin attached parts, 2 ornament/relief, 3 hair, 4 foliage, 5 thin shells/cloth, 6 chains/rings.",
+ "meshes": [
+  {
+   "id": "ext_nemetona",
+   "files": [
+    {
+     "url": "https://raw.githubusercontent.com/mrdoob/three.js/24bb9a92068db3374368dedeb72cc99995c1afb6/examples/models/gltf/nemetona.glb",
+     "sha256": "09a0740838bfed0cebccce99d159b0ce1f27441f788d732bb3412f82bf3797b2"
+    }
+   ],
+   "license": "CC BY 4.0",
+   "author": "JOJObrush (Sketchfab \"Nemetona_NatureBeauty\"), via three.js examples",
+   "source": "https://sketchfab.com/3d-models/nemetona-naturebeauty-c338180707ce4b7c9bb4d1c6d24843c0 (license read on the page and in the file's asset.extras, 2026-10-27); three.js examples/models/gltf/nemetona.glb, Draco",
+   "category": "sculpted figure with wolf: bow with a hair-thin string, horns, bead necklaces and jewellery, cloth strips, wolf tail, branch base; open, non-manifold",
+   "kinds": [
+    1,
+    5,
+    6
+   ],
+   "public": true
+  },
+  {
+   "id": "ext_tarisland_dragon",
+   "files": [
+    {
+     "url": "https://raw.githubusercontent.com/BabylonJS/Assets/ffbd501c388cbf3ba29936851ef4b36bada145dc/meshes/tarisland_dragon/tarisland_dragon_high_poly.glb",
+     "sha256": "b855c0a86f7c8ebed76209c92288d5648e1c07563cb10a125fb784a83e36dbcd"
+    }
+   ],
+   "license": "CC BY 4.0",
+   "author": "Doctor A. (Sketchfab \"Tarisland - Dragon (High Poly)\"), via BabylonJS/Assets",
+   "source": "https://sketchfab.com/3d-models/tarisland-dragon-high-poly-ecf63885166c40e2bbbcdf11cd14e65f (Sketchfab API license label, 2026-10-27); BabylonJS/Assets meshes/tarisland_dragon/license.md",
+   "category": "creature: membrane wings (thin open shells), horns, spikes, claws, tail",
+   "kinds": [
+    1,
+    5
+   ],
+   "public": true
+  },
+  {
+   "id": "ext_bee",
+   "files": [
+    {
+     "url": "https://raw.githubusercontent.com/BabylonJS/Assets/ffbd501c388cbf3ba29936851ef4b36bada145dc/meshes/Bee.glb",
+     "sha256": "e7f57e9818d89bd68717e961bbfe9f38ecbbea2a4b99eab23fef3f77613dfb45"
+    }
+   ],
+   "license": "CC BY 4.0",
+   "author": "BabylonJS/Assets (no per-asset author)",
+   "source": "BabylonJS/Assets README.md: repository licensed CC BY 4.0 unless the asset folder says otherwise; meshes/Bee.glb has no folder license",
+   "category": "insect: thin legs, antennae, single-sheet wings; many open parts",
+   "kinds": [
+    1,
+    5
+   ],
+   "public": true
+  },
+  {
+   "id": "ext_clothfolds",
+   "files": [
+    {
+     "url": "https://raw.githubusercontent.com/BabylonJS/Assets/ffbd501c388cbf3ba29936851ef4b36bada145dc/meshes/clothFolds.glb",
+     "sha256": "324c555fe47670cd822a87e948ed70cbd0f9e1a2896e80211f71ff13119a235b"
+    }
+   ],
+   "license": "CC BY 4.0",
+   "author": "BabylonJS/Assets (no per-asset author)",
+   "source": "BabylonJS/Assets README.md: repository licensed CC BY 4.0 unless the asset folder says otherwise; meshes/clothFolds.glb",
+   "category": "single-sided cloth draped over a sphere and a floor: one open sheet, folds",
+   "kinds": [
+    5
+   ],
+   "public": true
+  },
+  {
+   "id": "ext_vaseflowers",
+   "files": [
+    {
+     "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/8f492390ddc7a2ae221a1369ef560589cf8c70fb/Models/GlassVaseFlowers/glTF-Binary/GlassVaseFlowers.glb",
+     "sha256": "faa2e19329961652b585cc62132ef50b1d95dca8a6a2fd63409158e680563761"
+    }
+   ],
+   "license": "CC0 1.0",
+   "author": "Eric Chadwick (vase), Rico Cilliers (flowers), via Khronos glTF-Sample-Assets",
+   "source": "KhronosGroup/glTF-Sample-Assets Models/GlassVaseFlowers/metadata.json (legal: CC0-1.0) and asset.copyright",
+   "category": "two vases with flowers: thin stems, single-sheet leaves and petals (coarse input)",
+   "kinds": [
+    4
+   ],
+   "public": true
+  },
+  {
+   "id": "ext_yenching",
+   "files": [
+    {
+     "url": "https://raw.githubusercontent.com/BabylonJS/Assets/ffbd501c388cbf3ba29936851ef4b36bada145dc/meshes/harvard-yenching/harvard-yenching_institute_statue.glb",
+     "sha256": "cf7d1539ed700b05455fb7c3d2bcb62b27500189ac24e42a816ee2c99e5b6f86"
+    }
+   ],
+   "license": "CC BY 4.0",
+   "author": "Alexandre Tokovinine (Sketchfab \"Harvard-Yenching Institute statue\"), via BabylonJS/Assets",
+   "source": "https://sketchfab.com/3d-models/harvard-yenching-institute-statue-fc245710c4d64d0886a7f37dc522ff87 (Sketchfab API license label, 2026-10-27); BabylonJS/Assets meshes/harvard-yenching/LICENSE.txt",
+   "category": "guardian-lion scan: curled mane relief, carved base, small attached cub and ball",
+   "kinds": [
+    2
+   ],
+   "public": true
+  }
+ ]
+}
