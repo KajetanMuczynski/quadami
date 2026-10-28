@@ -357,7 +357,8 @@ namespace {
     // is left out, and so is one whose triangles do not form a cap (some
     // faces away from their mean normal): a corner of sharp edges, which the
     // feature edges hold, or folded brush input, whose angle sums mean
-    // nothing (brush_box_relief had 18 such "tips"). The isotropic remesh
+    // nothing (brush_box_relief had 18 such "tips"); so is one whose deficit
+    // does not hold out to one and two T edges. The isotropic remesh
     // keeps tips where they are: it used to collapse and relax the apex away,
     // so the quads were laid out on a cut cone and their cap sat about one
     // quad below the tip.
@@ -420,31 +421,43 @@ namespace {
         std::vector<char> taken(n, 0);
         std::vector<size_t> tips, region;
         std::vector<char> seen(n, 0);
-        for (const size_t v : candidates) {
-            if (taken[v])
-                continue;
+        // The vertices within `distance` of v, connected through the mesh,
+        // into `region`; returns their deficit, `open` if one is on a boundary.
+        const auto gather = [&](size_t v, double distance, bool* open) {
             region.assign(1, v);
             seen[v] = 1;
             double gathered = 0.0;
-            bool open = false;
             for (size_t i = 0; i < region.size(); ++i) {
                 const size_t u = region[i];
-                if (!interior[u])
-                    open = true;
+                if (!interior[u] && nullptr != open)
+                    *open = true;
                 gathered += deficit[u];
                 for (const size_t w : neighbours[u])
-                    if (!seen[w] && (vertices[w] - vertices[v]).length() <= radius) {
+                    if (!seen[w] && (vertices[w] - vertices[v]).length() <= distance) {
                         seen[w] = 1;
                         region.push_back(w);
                     }
             }
             for (const size_t u : region)
                 seen[u] = 0;
+            return gathered;
+        };
+        for (const size_t v : candidates) {
+            if (taken[v])
+                continue;
+            bool open = false;
+            const double gathered = gather(v, radius, &open);
             if (open || gathered < minimumDeficit || gathered >= maximumDeficit
                 || deficit[v] < 0.5 * gathered || !isCap(region))
                 continue;
+            const std::vector<size_t> cluster = region;
+            // A cone keeps its deficit further out; a bump or a noise spike
+            // is ringed by negative curvature that cancels it within a quad
+            // or two (spot_noisy, plane).
+            if (gather(v, 2.0 * radius, nullptr) < minimumDeficit || gather(v, 4.0 * radius, nullptr) < minimumDeficit)
+                continue;
             tips.push_back(v);
-            for (const size_t u : region)
+            for (const size_t u : cluster)
                 taken[u] = 1;
         }
         return tips;
