@@ -137,7 +137,8 @@ jobs:
       - name: Bench tools tests
         run: |
           python3 -m venv build/bench-venv
-          build/bench-venv/bin/pip install -q --require-hashes --no-deps -r tools/bench/requirements.txt
+          build/bench-venv/bin/pip install -q --require-hashes --no-deps -r tools/bench/requirements.txt \
+            -r tools/bench/requirements-draco.txt
           build/bench-venv/bin/python -m unittest discover -s tools/bench/tests -v
 
       # The decision of ci/rerun_dropped.py (rerun-dropped.yml runs it from master only).
