@@ -149,6 +149,21 @@ def marked_edges(mesh):
     return {kind: values for kind, values in marks.items() if np.any(values > 0)}
 
 
+def flooded(edge_count, marked_count):
+    """Whether marks on marked_count of a mesh's edge_count edges flood it:
+    most edges of a mesh of over 1000, as an FBX or OBJ import marks them,
+    rather than edges to keep. A cube or cylinder has most of its edges
+    marked too, but few edges."""
+    return edge_count > 1000 and 2 * marked_count > edge_count
+
+
+def copied_marks(mesh):
+    """marked_edges without the kinds that flood the mesh: copied onto the
+    result, they would scribble zigzag paths all over it."""
+    return {kind: values for kind, values in marked_edges(mesh).items()
+            if not flooded(len(mesh.edges), int(np.count_nonzero(values > 0)))}
+
+
 def _chains(edges, marked):
     """The marked edges as polylines of vertex indices, split where lines
     meet or end; a closed loop starts and ends at the same vertex. Each
@@ -229,13 +244,14 @@ def _shortest_path(adjacency, positions, start, goal, line_distance, scale):
 
 
 def _copy_edge_marks(depsgraph, source, mesh):
-    """Sharp, seam and crease marks: each marked line of the source becomes
-    a connected path of result edges along it. Returns {kind: number of
+    """Sharp, seam and crease marks that do not flood the source
+    (copied_marks): each marked line of the source becomes a connected path
+    of result edges along it. Returns {kind: number of
     result edges marked}."""
     evaluated = source.evaluated_get(depsgraph)
     source_mesh = evaluated.to_mesh()
     try:
-        marks = marked_edges(source_mesh)
+        marks = copied_marks(source_mesh)
         if not marks:
             return {}
         source_positions = np.empty(len(source_mesh.vertices) * 3, dtype=np.float64)

@@ -119,6 +119,9 @@ try:
     flood.attributes.new("sharp_edge", "BOOLEAN", "EDGE").data.foreach_set("value", [True] * len(flood.edges))
     assert addon._flooded_marks(flood, addon._mark_counts(flood), {"SHARP"}) == ["SHARP"], len(flood.edges)
     assert addon._flood_warning(["SHARP"]).startswith("Follow Marks left out Sharp")
+    # Nor are such marks copied onto the result (zigzag paths all over it).
+    assert "sharp" in addon.transfer.marked_edges(flood) and "sharp" not in addon.transfer.copied_marks(flood)
+    assert "sharp" in addon.transfer.copied_marks(mesh)
     bpy.data.meshes.remove(flood)
 
     # Uneven scale warns (shear from a rotated parent counts too); even scale does not.
