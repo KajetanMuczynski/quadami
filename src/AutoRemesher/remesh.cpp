@@ -706,6 +706,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     }
     engine.setSmoothNormalDegrees(parameters.smoothNormalDegrees);
     engine.setUseQex(Extractor::Qex == parameters.extractor);
+    engine.setKeepPreviewData(nullptr != preview);
     engine.setRepairInputFolds(parameters.repairFolds);
     engine.setFlattenSpikes(parameters.flattenSpikes);
     engine.setTangentialQuadSmoothing(QuadSmoothing::Tangential == parameters.quadSmoothing);
@@ -735,7 +736,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     const size_t marksTooDenseIslands = engine.markedEdgesTooDenseIslandCount();
     if (nullptr != preview)
         preview->phaseReport = engine.phaseReport();
-    result.stageDiagnostics = engine.diagnostics();
+    result.stageDiagnostics = engine.takeDiagnostics();
     if (!result.stageDiagnostics.empty())
         report.diagnostics = summarizeDiagnostics(result.stageDiagnostics);
     if (engine.cancelled())

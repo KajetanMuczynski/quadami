@@ -111,6 +111,10 @@ namespace {
                 edges.push_back(edge);
                 i = j;
             }
+            // Each temporary goes as soon as it is used up: on a large input
+            // they sat at the run's peak next to the finished topology.
+            std::vector<Side>().swap(sides);
+            std::vector<size_t>().swap(bucketStart);
             // Bucketed by the first triangle, then each short row sorted.
             faceFaceStart.assign(faces.size() + 1, 0);
             for (const auto& link : faceLinks)
@@ -122,6 +126,7 @@ namespace {
                 for (const auto& link : faceLinks)
                     rows[next[link.first]++] = link.second;
             }
+            std::vector<std::pair<size_t, size_t>>().swap(faceLinks);
             std::vector<size_t> rowLength(faces.size());
             tbb::parallel_for(tbb::blocked_range<size_t>(0, faces.size()), [&](const tbb::blocked_range<size_t>& range) {
                 for (size_t f = range.begin(); f != range.end(); ++f) {
@@ -137,6 +142,7 @@ namespace {
             for (size_t f = 0; f < faces.size(); ++f)
                 std::copy(rows.begin() + faceFaceStart[f], rows.begin() + faceFaceStart[f] + rowLength[f], faceFaces.begin() + compact[f]);
             faceFaceStart.swap(compact);
+            std::vector<size_t>().swap(rows);
 
             vertexFaceStart.assign(vertexCount + 1, 0);
             for (const Face& face : faces)
@@ -1260,19 +1266,49 @@ namespace {
     }
 }
 
+namespace {
+
+    // FoldRepair::defaultRadius over the points forEachPoint visits, in its order.
+    template <typename ForEachPoint>
+    double radiusOfPoints(const FoldRepair::Options& options, ForEachPoint forEachPoint)
+    {
+        if (options.radius > 0.0)
+            return options.radius;
+        bool any = false;
+        Vector3 low, high;
+        forEachPoint([&](const Vector3& v) {
+            if (!any) {
+                low = high = v;
+                any = true;
+            }
+            for (size_t i = 0; i < 3; ++i) {
+                low[i] = std::min(low[i], v[i]);
+                high[i] = std::max(high[i], v[i]);
+            }
+        });
+        return any ? options.radiusFraction * (high - low).length() : 0.0;
+    }
+
+    // The same over every triangle corner, without copying the corners out
+    // (that copy was 24 bytes per corner at the run's peak on big inputs).
+    double radiusOfCorners(const std::vector<Vector3>& vertices,
+        const std::vector<std::vector<size_t>>& triangles, const FoldRepair::Options& options)
+    {
+        return radiusOfPoints(options, [&](const auto& visit) {
+            for (const std::vector<size_t>& triangle : triangles)
+                for (size_t v : triangle)
+                    visit(vertices[v]);
+        });
+    }
+
+}
+
 double FoldRepair::defaultRadius(const std::vector<Vector3>& vertices, const Options& options)
 {
-    if (options.radius > 0.0)
-        return options.radius;
-    if (vertices.empty())
-        return 0.0;
-    Vector3 low = vertices[0], high = vertices[0];
-    for (const Vector3& v : vertices)
-        for (size_t i = 0; i < 3; ++i) {
-            low[i] = std::min(low[i], v[i]);
-            high[i] = std::max(high[i], v[i]);
-        }
-    return options.radiusFraction * (high - low).length();
+    return radiusOfPoints(options, [&](const auto& visit) {
+        for (const Vector3& v : vertices)
+            visit(v);
+    });
 }
 
 std::vector<char> FoldRepair::detect(const std::vector<Vector3>& vertices,
@@ -1566,11 +1602,7 @@ namespace {
         FoldRepair::Stats total;
         const std::vector<std::vector<size_t>> parts = partsOf(vertices.size(), triangles);
         if (options.radius > 0.0 || parts.size() <= 1) {
-            std::vector<Vector3> used;
-            for (const std::vector<size_t>& triangle : triangles)
-                for (size_t v : triangle)
-                    used.push_back(vertices[v]);
-            total = run(nullptr, FoldRepair::defaultRadius(used, options));
+            total = run(nullptr, radiusOfCorners(vertices, triangles, options));
         } else {
             for (const std::vector<size_t>& part : parts) {
                 Part p = partOf(vertices, triangles, part);
@@ -1612,13 +1644,8 @@ std::vector<char> FoldRepair::detect(const std::vector<Vector3>& vertices,
 {
     std::vector<char> flags(triangles.size(), 0);
     const std::vector<std::vector<size_t>> parts = partsOf(vertices.size(), triangles);
-    if (options.radius > 0.0 || parts.size() <= 1) {
-        std::vector<Vector3> used;
-        for (const std::vector<size_t>& triangle : triangles)
-            for (size_t v : triangle)
-                used.push_back(vertices[v]);
-        return detect(vertices, triangles, defaultRadius(used, options));
-    }
+    if (options.radius > 0.0 || parts.size() <= 1)
+        return detect(vertices, triangles, radiusOfCorners(vertices, triangles, options));
     for (const std::vector<size_t>& part : parts) {
         const Part p = partOf(vertices, triangles, part);
         const std::vector<char> partFlags = detect(p.positions, p.triangles, defaultRadius(p.positions, options));

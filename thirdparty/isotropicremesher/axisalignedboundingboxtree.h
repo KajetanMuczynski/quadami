@@ -32,7 +32,10 @@ public:
     {
         AxisAlignedBoudingBox boundingBox;
         Vector3 center;
+        // Only leaves keep their indices; an inner node keeps the count
+        // (Quadami: the lists on every level cost about depth x 8 bytes per box).
         std::vector<size_t> boxIndices;
+        size_t boxCount = 0;
         Node *left = nullptr;
         Node *right = nullptr;
         
@@ -75,7 +78,7 @@ public:
                     testNodes(first->left, second, secondBoxes, pairs);
                     testNodes(first->right, second, secondBoxes, pairs);
                 } else {
-                    if (first->boxIndices.size() < second->boxIndices.size()) {
+                    if (first->boxCount < second->boxCount) {
                         testNodes(first, second->left, secondBoxes, pairs);
                         testNodes(first, second->right, secondBoxes, pairs);
                     } else {
