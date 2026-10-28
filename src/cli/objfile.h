@@ -30,10 +30,12 @@ namespace AutoRemesher {
 namespace Cli {
 
     // Polygons are fan-triangulated as the Qt app does (tinyobjloader);
-    // normals, UVs, groups and materials are ignored.  Indices are passed on
-    // unchecked: remesh() rejects any that point past the vertices.
+    // normals, UVs, groups and materials are ignored.  Line elements (`l a b
+    // c ...`) are marked edges: each consecutive pair goes into featureEdges
+    // (RemeshRequest::featureEdges).  Indices are passed on unchecked:
+    // remesh() rejects any that point past the vertices.
     bool readObj(const std::string& path, std::vector<double>* positions,
-        std::vector<uint32_t>* triangles, std::string* error);
+        std::vector<uint32_t>* triangles, std::vector<uint32_t>* featureEdges, std::string* error);
 
     // Coordinates with 17 significant digits, so doubles read back exactly.
     bool writeObj(const std::string& path, const RemeshMesh& mesh, std::string* error);

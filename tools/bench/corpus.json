@@ -1,5 +1,5 @@
 {
- "_comment": "Mesh sets for run_corpus.py (set corpus) and ab.py (any set). 'file' is relative to the meshes folder: downloads/ from fetch_meshes.sh, synthetic/ from make_synthetic.py, suzanne/ from make_suzanne.py, primitives/ from make_primitives.py, usage/ from make_usage.py, sculpt/ from make_sculpt.py, external/ and external_thin/ from fetch_external.py (external.json, external_thin.json: license, author, SHA-256; external_thin has no default targets, so ab.py lane skips it and runs need --targets). 'set' defaults to corpus. sym = mirror plane for symmetry metrics (axis, center); 'auto' center = input bbox centre on that axis. sets: default targets and resolutions per set for ab.py. The gallery set (tools/gallery/gallery.py, docs/gallery/) holds public-license or procedural meshes only; its entries carry their own target, cli_args, up (file up axis, default Y), view (camera direction, Blender axes) and title, and the empty set default makes ab.py need --targets.",
+ "_comment": "Mesh sets for run_corpus.py (set corpus) and ab.py (any set). 'file' is relative to the meshes folder: downloads/ from fetch_meshes.sh, synthetic/ from make_synthetic.py, suzanne/ from make_suzanne.py, primitives/ from make_primitives.py, usage/ from make_usage.py, marked/ from make_marked.py, sculpt/ from make_sculpt.py, external/ and external_thin/ from fetch_external.py (external.json, external_thin.json: license, author, SHA-256; external_thin has no default targets, so ab.py lane skips it and runs need --targets). 'set' defaults to corpus. sym = mirror plane for symmetry metrics (axis, center); 'auto' center = input bbox centre on that axis. sets: default targets and resolutions per set for ab.py. The gallery set (tools/gallery/gallery.py, docs/gallery/) holds public-license or procedural meshes only; its entries carry their own target, cli_args, up (file up axis, default Y), view (camera direction, Blender axes) and title, and the empty set default makes ab.py need --targets.",
  "sets": {
   "corpus": {"targets": [2000, 10000], "resolutions": ["fast", "quality"]},
   "closed": {"targets": [150, 500, 2000], "resolutions": ["fast", "quality"]},
@@ -11,7 +11,8 @@
   "cad": {"targets": [1000, 4000], "resolutions": ["fast", "quality"]},
   "primitives": {"targets": [1000, 5000], "resolutions": ["quality"]},
   "external_thin": {"targets": [], "resolutions": ["quality"]},
-  "usage": {"targets": [1000, 5000], "resolutions": ["quality"]}
+  "usage": {"targets": [1000, 5000], "resolutions": ["quality"]},
+  "marked": {"targets": [1000, 5000], "resolutions": ["quality"]}
  },
  "meshes": [
   {"id": "spot", "file": "downloads/spot.obj", "category": "organic, clean, genus 0"},
@@ -147,6 +148,18 @@
   {"id": "ext_bee", "file": "external_thin/ext_bee.obj", "category": "insect: thin legs, antennae, single-sheet wings; many open parts", "set": "external_thin"},
   {"id": "ext_clothfolds", "file": "external_thin/ext_clothfolds.obj", "category": "single-sided cloth draped over a sphere and a floor: one open sheet, folds", "set": "external_thin"},
   {"id": "ext_vaseflowers", "file": "external_thin/ext_vaseflowers.obj", "category": "two vases with flowers: thin stems, single-sheet leaves and petals (coarse input)", "set": "external_thin"},
-  {"id": "ext_yenching", "file": "external_thin/ext_yenching.obj", "category": "guardian-lion scan: curled mane relief, carved base, small attached cub and ball", "set": "external_thin"}
+  {"id": "ext_yenching", "file": "external_thin/ext_yenching.obj", "category": "guardian-lion scan: curled mane relief, carved base, small attached cub and ball", "set": "external_thin"},
+  {"id": "marked_cube", "file": "marked/marked_cube.obj", "category": "Blender default cube, all 12 edges marked Sharp", "set": "marked"},
+  {"id": "marked_cylinder", "file": "marked/marked_cylinder.obj", "category": "Blender default cylinder, both rims marked Sharp (exactly 90 deg: the knife edge)", "set": "marked"},
+  {"id": "marked_cylinder_v64", "file": "marked/marked_cylinder_v64.obj", "category": "Blender cylinder, 64 segments, rims marked Sharp", "set": "marked"},
+  {"id": "marked_cone", "file": "marked/marked_cone.obj", "category": "Blender default cone, base rim marked Sharp", "set": "marked"},
+  {"id": "marked_cone_frustum", "file": "marked/marked_cone_frustum.obj", "category": "Blender cone, top radius 0.5, both rims marked Sharp", "set": "marked"},
+  {"id": "marked_uvsphere_equator", "file": "marked/marked_uvsphere_equator.obj", "category": "Blender UV sphere, equator marked Sharp (no dihedral crease there)", "set": "marked"},
+  {"id": "marked_uvsphere_tilted", "file": "marked/marked_uvsphere_tilted.obj", "category": "Blender UV sphere bisected by a tilted plane, the cut marked Sharp (across the rings)", "set": "marked"},
+  {"id": "marked_cube_loop", "file": "marked/marked_cube_loop.obj", "category": "Blender cube bisected at z = 0, the flat loop marked Sharp, its edges not", "set": "marked"},
+  {"id": "marked_cube_diagonal", "file": "marked/marked_cube_diagonal.obj", "category": "Blender cube bisected by the plane x + y + z = 0, the hexagon marked Sharp, its edges not", "set": "marked"},
+  {"id": "marked_cube_bevel", "file": "marked/marked_cube_bevel.obj", "category": "Blender cube + Bevel (1 segment), all 45 deg edges marked Sharp", "set": "marked"},
+  {"id": "marked_cube_hole", "file": "marked/marked_cube_hole.obj", "category": "Blender cube minus a cylinder (Boolean), edges of 30 deg and more marked Sharp", "set": "marked"},
+  {"id": "marked_suzanne", "file": "marked/marked_suzanne.obj", "category": "Suzanne, edges of 30 deg and more marked Sharp (553 short lines that meet)", "set": "marked"}
  ]
 }

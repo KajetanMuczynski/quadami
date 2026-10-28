@@ -22,6 +22,7 @@
 #include <map>
 #include <qex.h>
 #include <string>
+#include <tuple>
 #include <utility>
 
 namespace AutoRemesher {
@@ -254,8 +255,19 @@ long long twiceHandleCount(size_t vertexCount, const std::vector<std::vector<siz
         return x;
     };
     const auto unite = [&find](std::vector<size_t>& parent, size_t a, size_t b) { parent[find(parent, a)] = find(parent, b); };
-    // Undirected edge -> the corners at its two ends, per face using it.
-    std::map<std::pair<size_t, size_t>, std::vector<std::pair<size_t, size_t>>> edges;
+    // Every use of an undirected edge with the corners at its two ends,
+    // sorted so that the uses of one edge are adjacent. One flat array: a map
+    // of small vectors cost about 150 bytes per input edge at the run's peak.
+    // Only counts come out below, so the order within an edge does not matter.
+    struct EdgeUse {
+        size_t low, high, lowCorner, highCorner;
+        bool operator<(const EdgeUse& other) const
+        {
+            return std::tie(low, high, lowCorner, highCorner) < std::tie(other.low, other.high, other.lowCorner, other.highCorner);
+        }
+    };
+    std::vector<EdgeUse> uses;
+    uses.reserve(cornerBase.back());
     for (size_t f = 0; f < faces.size(); ++f) {
         const auto& face = faces[f];
         for (size_t i = 0; i < face.size(); ++i) {
@@ -264,15 +276,26 @@ long long twiceHandleCount(size_t vertexCount, const std::vector<std::vector<siz
             if (a >= vertexCount || b >= vertexCount || a == b)
                 continue;
             const size_t ca = cornerBase[f] + i, cb = cornerBase[f] + j;
-            edges[std::make_pair(std::min(a, b), std::max(a, b))].push_back(a < b ? std::make_pair(ca, cb) : std::make_pair(cb, ca));
+            uses.push_back(a < b ? EdgeUse { a, b, ca, cb } : EdgeUse { b, a, cb, ca });
         }
     }
-    for (const auto& edge : edges) {
-        if (2 != edge.second.size())
-            continue;
-        unite(fan, edge.second[0].first, edge.second[1].first);
-        unite(fan, edge.second[0].second, edge.second[1].second);
-    }
+    std::sort(uses.begin(), uses.end());
+    // Calls visit(begin, end) with the range of uses of each edge.
+    const auto forEachEdge = [&uses](const auto& visit) {
+        for (size_t begin = 0; begin < uses.size();) {
+            size_t end = begin + 1;
+            while (end < uses.size() && uses[end].low == uses[begin].low && uses[end].high == uses[begin].high)
+                ++end;
+            visit(begin, end);
+            begin = end;
+        }
+    };
+    forEachEdge([&](size_t begin, size_t end) {
+        if (2 != end - begin)
+            return;
+        unite(fan, uses[begin].lowCorner, uses[begin + 1].lowCorner);
+        unite(fan, uses[begin].highCorner, uses[begin + 1].highCorner);
+    });
     // Faces join their fans into components; boundary edges (one face, or a
     // sheet of a non-manifold edge) join them into boundary loops.
     std::vector<size_t> component(fan.size()), loop(fan.size());
@@ -284,17 +307,18 @@ long long twiceHandleCount(size_t vertexCount, const std::vector<std::vector<siz
     }
     long long edgeCount = 0;
     std::vector<char> onBoundary(fan.size(), 0);
-    for (const auto& edge : edges) {
-        const bool boundary = 2 != edge.second.size();
-        edgeCount += boundary ? (long long)edge.second.size() : 1;
+    forEachEdge([&](size_t begin, size_t end) {
+        const size_t useCount = end - begin;
+        const bool boundary = 2 != useCount;
+        edgeCount += boundary ? (long long)useCount : 1;
         if (!boundary)
-            continue;
-        for (const auto& ends : edge.second) {
-            const size_t a = find(fan, ends.first), b = find(fan, ends.second);
+            return;
+        for (size_t k = begin; k < end; ++k) {
+            const size_t a = find(fan, uses[k].lowCorner), b = find(fan, uses[k].highCorner);
             onBoundary[a] = onBoundary[b] = 1;
             unite(loop, a, b);
         }
-    }
+    });
     long long fans = 0, components = 0, loops = 0;
     for (size_t c = 0; c < fan.size(); ++c) {
         if (find(fan, c) != c)
