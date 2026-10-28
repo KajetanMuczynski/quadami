@@ -114,6 +114,22 @@ public:
         return m_droppedConstraintCount;
     }
 
+    // Non-zeros of the elimination (the matrix from the kernel to the
+    // variables left after the two-term constraints), and whether they grew
+    // past 64 per kernel variable. Then the elimination stops, no kernel is
+    // built and solveIteration() fails. The cover of chain-mail lace (about
+    // 1,600 holes in an island of 49 quads, ext_nemetona at 3000 quads) filled
+    // in to 326 per kernel variable, and its first solve passed 10 GB before
+    // it was stopped; other islands stay near 1.
+    size_t eliminationNonZeros() const
+    {
+        return m_eliminationNonZeros;
+    }
+    bool eliminationOverBudget() const
+    {
+        return m_eliminationOverBudget;
+    }
+
     // max |x / p - round(x / p)| over the variables given a period before
     // elimination, evaluated on the current solution.  Integers fixed in the
     // kernel can still leave an original variable fractional when the
@@ -198,6 +214,8 @@ private:
     // Integers fixed per rounding pass besides the nearly integral ones.
     size_t m_roundingBatch = 0;
     size_t m_droppedConstraintCount = 0;
+    size_t m_eliminationNonZeros = 0;
+    bool m_eliminationOverBudget = false;
 };
 }
 #endif

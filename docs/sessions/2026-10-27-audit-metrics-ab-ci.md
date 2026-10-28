@@ -23,3 +23,8 @@
   samples reproduce the reported values) and corrected its cause: density explains a median 36 % on the
   corpus. #131 merged; next PR gives every master push its own CI concurrency group (6 of 30 merges
   #98-#129 had their run cancelled by the next merge).
+- Peak memory (same session, from the usage audit): on Linux `ru_maxrss` of a process started with vfork
+  (Python's subprocess) includes the parent's peak, so `ab.py`'s `peak_rss_mb` and the CLI's
+  `peak_rss_bytes` read at least the harness's peak (spot 2k: 63 MB fresh, 2,012 MB after the harness
+  touched 2 GB). The CLI now reads `VmHWM` on Linux (63 MB either way) and `ab.py` takes its figure.
+  `lane`: 560/560 runs byte-identical on corpus, closed, sculpt, brush, external, cad (u0-u1).

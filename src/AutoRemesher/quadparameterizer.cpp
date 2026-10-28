@@ -1288,8 +1288,12 @@ namespace {
             record.set("kernel_integers", (double)s.integerKernelVariableCount());
             record.set("hard_coordinates", (double)hardCoordinateCount);
             record.set("dropped_constraints", (double)s.droppedConstraintCount());
+            record.set("elimination_nonzeros", (double)s.eliminationNonZeros());
+            record.set("elimination_over_budget", s.eliminationOverBudget() ? 1.0 : 0.0);
             diagnostics->push_back(std::move(record));
         }
+        if (s.eliminationOverBudget())
+            return false;
         // Rounding converges well short of the cap, so spread the fraction over
         // the passes it is expected to take and clamp instead of pacing it
         // against the cap and barely moving.

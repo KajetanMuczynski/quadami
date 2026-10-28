@@ -322,7 +322,7 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
     with open(os.path.join(d, "log.txt"), "wb") as log:
         rc, rss = call_measured(cmd, log, timeout)
     rec = {"mesh": mesh["id"], "set": setname, "target": target, "res": res, "replicate": k, "rc": rc,
-           "wall": time.time() - t0, "peak_rss_mb": rss, "cli_args": cli_args, "jobs": jobs,
+           "wall": time.time() - t0, "peak_rss_mb": rss, "peak_rss_from": "wait4", "cli_args": cli_args, "jobs": jobs,
            "input_sha": file_hash(inp)}
     if os.path.exists(os.path.join(d, "out.obj")):
         rec["out_sha"] = file_hash(os.path.join(d, "out.obj"))
@@ -331,6 +331,12 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
         rec["output"] = rep.get("output")
         rec["diagnostics"] = rep.get("diagnostics")
         rec["time"] = rep.get("time", {}).get("total_seconds")
+        # The CLI's own peak (VmHWM on Linux since 2026-10-27; Windows has no wait4 figure at all).
+        # wait4's ru_maxrss is at least this harness's own peak: Python starts the CLI with vfork, and
+        # exec keeps the parent's high-water mark (research/measurement-audit-2026-10-27.md §10.1).
+        cli_rss = (rec["diagnostics"] or {}).get("peak_rss_bytes")
+        if cli_rss:
+            rec["peak_rss_mb"], rec["peak_rss_from"] = cli_rss / (1 << 20), "cli"
     except (OSError, ValueError) as ex:
         rec["error"] = str(ex)
     try:
@@ -483,6 +489,8 @@ def value(r, k):
     if k == "crease_cov": return (m.get("creases") or {}).get("coverage")
     if k == "crease_cov_theta": return (m.get("creases") or {}).get("coverage_theta")
     if k == "crease_bent_1k": return (m.get("creases") or {}).get("bent_quads_per_1k")
+    if k == "marked_cov": return (m.get("marked") or {}).get("coverage")
+    if k == "marked_bevel": return (m.get("marked") or {}).get("bevel_median")
     if k == "count_err": return abs(o["quads"] / r["target"] - 1) if o.get("quads") else None
     if k == "energy_ratio":
         e = [(c["continuous_energy"], c["rounded_energy"]) for c in r.get("cover") or []
@@ -506,15 +514,15 @@ COUNTS = ["flips_cont", "flips_round", "flips", "degenerate", "non_quads", "sj_l
           # V3's split (2026-10-23): flips over folded input vs the rest
           "flipped_off_folds", "flipped_over_folds"]
 MEANS = ["area_uncovered", "area_wrong_side", "irregular_1k", "in_out_p99", "hausdorff", "in_out_mean", "normal_dev", "vertex_dist", "sj_p1",
-         "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "count_err", "energy_ratio", "time", "peak_rss_mb"]
+         "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel", "count_err", "energy_ratio", "time", "peak_rss_mb"]
 # Rows computed by metrics.py (the rest come from the CLI's own report and stage records).
 FROM_METRICS = {"sj_le_0", "flipped_vs_input", "flipped_vs_raw", "flipped_off_folds", "flipped_over_folds",
                 "folded_faces", "holes_added", "holes_closed", "handles_lost", "handles_added", "islands_dropped",
                 "islands_merged", "area_uncovered", "area_wrong_side", "nm_vertices", "islands_changed",
                 "irregular_1k", "hausdorff", "in_out_mean", "in_out_p99", "vertex_dist", "normal_dev", "sj_p1",
-                "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k"}
+                "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel"}
 # Rows where a higher value is the better one (for "runs B better / worse").
-HIGHER_IS_BETTER = {"sj_p1", "crease_cov", "crease_cov_theta"}
+HIGHER_IS_BETTER = {"sj_p1", "crease_cov", "crease_cov_theta", "marked_cov"}
 
 
 def resolve(spec, work):

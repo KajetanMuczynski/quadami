@@ -129,7 +129,7 @@ SHORTEST_MARK = 1.0
 MAX_PATH_VISITS = 400
 
 
-def _marked_edges(mesh):
+def marked_edges(mesh):
     """{kind: per-edge values} for the source's sharp, seam and crease
     marks; 0 is unmarked."""
     marks = {}
@@ -235,7 +235,7 @@ def _copy_edge_marks(depsgraph, source, mesh):
     evaluated = source.evaluated_get(depsgraph)
     source_mesh = evaluated.to_mesh()
     try:
-        marks = _marked_edges(source_mesh)
+        marks = marked_edges(source_mesh)
         if not marks:
             return {}
         source_positions = np.empty(len(source_mesh.vertices) * 3, dtype=np.float64)
