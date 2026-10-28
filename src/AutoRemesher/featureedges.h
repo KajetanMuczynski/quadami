@@ -79,11 +79,12 @@ FeatureEdgeSet classifySharpEdges(const std::vector<Vector3>& vertices,
 // The set of the isotropic remesh T: the hard edges of `carried` (the
 // remesher's carried set) that are still edges of T, plus every interior
 // edge of T that passes the sharp test on T itself; `classified` counts the
-// latter.  The input's other sharp edges are not carried: the remesher's
-// smoothing moves their vertices off the crease and bends them, and the
-// field and isolines constrained to a bent edge fold the parameterization
-// (TODO 2.6, cad set: continuous UV flips x2.2 summed, SJ p1 0.62 -> 0.47), where
-// the edges sharp on T are the creases T really has.
+// latter.  The input's other sharp edges are not carried.  Before TODO 2.5
+// the remesher bent them, and constraints on a bent edge folded the
+// parameterization (cad set: continuous UV flips x2.2 summed, SJ p1 0.62 ->
+// 0.47).  Since 2.5 the remesher keeps them on the crease, and carrying all
+// of them was still worse than this set on the cad set (6 replicates:
+// non-quads 1.7 -> 14, libQEx fallbacks 1 -> 6 of 144 runs, UV flips x1.09).
 FeatureEdgeSet reclassifyFeatureEdges(const FeatureEdgeSet& carried,
     const std::vector<Vector3>& vertices,
     const std::vector<std::vector<size_t>>& triangles,
@@ -104,6 +105,37 @@ FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
     const std::vector<Vector3>& vertices,
     const std::vector<std::vector<size_t>>& triangles,
     double sharpEdgeDegrees, size_t* dropped = nullptr);
+
+// Normal angle above which a detected chain is a fold of the surface (a
+// pleat a sculpting brush left), not a crease.
+constexpr double kFoldNormalAngleDegrees = 170.0;
+
+// The set the isotropic remesh keeps as chains (TODO 2.5): `set` without its
+// detected noise.  Chains are maximal paths of set edges through vertices
+// on two of them that turn by 45 degrees or less (the remesher's corners
+// end them).  A chain without a hard edge is dropped when its
+// length-weighted normal angle is above kFoldNormalAngleDegrees, or when its
+// component (chains joined at corners) has five chains or more that are
+// shorter than `minLength` on average.  The remesher fixes a chain's
+// corners, so short chains freeze vertices closer than a T edge; zigzag
+// noise (a crumpled or pleated region) is a large
+// component of mostly short chains, since every turn above 45 degrees ends
+// one; a fold kept through the remesh folds the map.  Before 2.5 the
+// remesher's flips and relaxation erased them.  `dropped` counts the
+// dropped edges.
+FeatureEdgeSet filterDetectedChains(const FeatureEdgeSet& set,
+    const std::vector<Vector3>& vertices,
+    const std::vector<std::vector<size_t>>& triangles,
+    double minLength, size_t* dropped = nullptr);
+
+// `set` without the components (edges joined at shared vertices) shorter
+// than `minLength` that have no hard edge: the quad mesh cannot follow a
+// crease shorter than one of its edges, and the map folds around one it is
+// made to (on the sculpt set, a 0.2 h piece at a horn's tip lost the
+// horn).  Applied to T's set only: in the remesh such a piece keeps a tip
+// that the remesh would cut otherwise.  `dropped` counts the dropped edges.
+FeatureEdgeSet dropShortFeatureComponents(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices,
+    double minLength, size_t* dropped = nullptr);
 
 // Per corner of `mesh` (the edge from the corner's vertex to the next one):
 // 1 when that edge is in `set` with every bit of `requiredFlags`.  Both

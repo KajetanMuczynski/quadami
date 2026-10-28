@@ -426,13 +426,16 @@ public:
         size_t decimatedEdges = 0;
         // Edges whose ends both survived decimation but no longer share an edge.
         size_t decimationDropped = 0;
-        // Edges of the remesh that a flip turned into the other diagonal.
-        size_t flipped = 0;
+        // Detected edges left out of the remesher's chains (filterDetectedChains).
+        size_t filtered = 0;
         // Edges of T that still carry an input edge (split halves included),
         // and the edges of T's own set that pass the sharp test on T
         // (reclassifyFeatureEdges).
         size_t carried = 0;
         size_t classified = 0;
+        // Edges of T's set in components shorter than a T edge, left out of
+        // it (dropShortFeatureComponents).
+        size_t tShort = 0;
     };
 
     struct DecimationStats {

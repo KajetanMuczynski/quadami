@@ -19,6 +19,7 @@
 #include <AutoRemesher/FeatureEdges>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <meshoptimizer.h>
 
@@ -191,6 +192,148 @@ FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
     return result;
 }
 
+FeatureEdgeSet filterDetectedChains(const FeatureEdgeSet& set,
+    const std::vector<Vector3>& vertices,
+    const std::vector<std::vector<size_t>>& triangles,
+    double minLength, size_t* dropped)
+{
+    if (nullptr != dropped)
+        *dropped = 0;
+    if (set.empty())
+        return set;
+    const SurfaceMesh mesh(vertices, triangles);
+    std::vector<double> normalAngle(set.size(), 0.0);
+    for (size_t c = 0; c < mesh.cornerCount(); ++c) {
+        const size_t opposite = mesh.oppositeCorner(c);
+        if (opposite == SurfaceMesh::npos || opposite < c)
+            continue;
+        const auto edge = undirected(mesh.cornerVertex(c), mesh.cornerVertex(mesh.nextCorner(c)));
+        const auto found = std::lower_bound(set.edges.begin(), set.edges.end(), edge);
+        if (found != set.edges.end() && *found == edge)
+            normalAngle[found - set.edges.begin()] = std::max(0.0, cornerNormalAngle(mesh, c));
+    }
+
+    std::vector<std::vector<size_t>> edgesAtVertex(vertices.size());
+    for (size_t e = 0; e < set.size(); ++e) {
+        edgesAtVertex[set.edges[e].first].push_back(e);
+        edgesAtVertex[set.edges[e].second].push_back(e);
+    }
+    const auto otherEnd = [&](size_t e, size_t v) {
+        return set.edges[e].first == v ? set.edges[e].second : set.edges[e].first;
+    };
+    // The remesher's corner test (IsotropicHalfedgeMesh::featureCorners).
+    const double cosCornerTurn = std::cos(45.0 * M_PI / 180.0);
+    std::vector<char> corner(vertices.size(), 0);
+    for (size_t v = 0; v < vertices.size(); ++v) {
+        const auto& at = edgesAtVertex[v];
+        if (at.empty())
+            continue;
+        if (2 != at.size()) {
+            corner[v] = 1;
+            continue;
+        }
+        const Vector3 in = vertices[v] - vertices[otherEnd(at[0], v)];
+        const Vector3 out = vertices[otherEnd(at[1], v)] - vertices[v];
+        const double inLength = in.length(), outLength = out.length();
+        corner[v] = (inLength <= 0.0 || outLength <= 0.0
+                        || Vector3::dotProduct(in, out) < cosCornerTurn * inLength * outLength)
+            ? 1
+            : 0;
+    }
+
+    constexpr size_t kZigzagChains = 5;
+    // Components: vertices joined by set edges.
+    std::vector<size_t> parent(vertices.size());
+    for (size_t v = 0; v < parent.size(); ++v)
+        parent[v] = v;
+    const auto find = [&](size_t v) {
+        while (parent[v] != v)
+            v = parent[v] = parent[parent[v]];
+        return v;
+    };
+    for (const auto& edge : set.edges)
+        parent[find(edge.first)] = find(edge.second);
+
+    struct Chain {
+        size_t component = 0;
+        double length = 0.0;
+        bool hard = false;
+        bool dropped = false;
+    };
+    std::vector<Chain> chains;
+    std::vector<size_t> chainOfEdge(set.size(), SIZE_MAX);
+    const auto walk = [&](size_t start, size_t firstEdge) {
+        Chain chain;
+        chain.component = find(start);
+        double weightedAngle = 0.0;
+        size_t v = start, e = firstEdge;
+        while (true) {
+            chainOfEdge[e] = chains.size();
+            const double edgeLength = (vertices[set.edges[e].second] - vertices[set.edges[e].first]).length();
+            chain.length += edgeLength;
+            weightedAngle += normalAngle[e] * edgeLength;
+            chain.hard = chain.hard || 0 != (set.flags[e] & FeatureEdgeSet::Hard);
+            v = otherEnd(e, v);
+            if (corner[v] || v == start)
+                break;
+            const auto& at = edgesAtVertex[v];
+            e = SIZE_MAX != chainOfEdge[at[0]] ? at[1] : at[0];
+            if (SIZE_MAX != chainOfEdge[e])
+                break;
+        }
+        const bool fold = chain.length > 0.0
+            && weightedAngle / chain.length > kFoldNormalAngleDegrees * (M_PI / 180.0);
+        chain.dropped = !chain.hard && fold;
+        chains.push_back(chain);
+    };
+    for (size_t v = 0; v < vertices.size(); ++v) {
+        if (!corner[v])
+            continue;
+        for (const size_t e : edgesAtVertex[v]) {
+            if (SIZE_MAX == chainOfEdge[e])
+                walk(v, e);
+        }
+    }
+    // Closed loops without a corner.
+    for (size_t e = 0; e < set.size(); ++e) {
+        if (SIZE_MAX == chainOfEdge[e])
+            walk(set.edges[e].first, e);
+    }
+
+    // Zigzag noise: a component of kZigzagChains or more chains, shorter than
+    // `minLength` on average.  Its longer chains are pieces of the same
+    // crumpled region.  A short chain joined to long ones (between two
+    // corners of a box) or to a few short ones (the ridges at a spike's tip)
+    // is a real feature's.
+    std::vector<double> componentLength(vertices.size(), 0.0);
+    std::vector<size_t> componentChains(vertices.size(), 0);
+    std::vector<char> componentHard(vertices.size(), 0);
+    for (const Chain& chain : chains) {
+        componentLength[chain.component] += chain.length;
+        ++componentChains[chain.component];
+        componentHard[chain.component] |= chain.hard ? 1 : 0;
+    }
+    for (Chain& chain : chains) {
+        if (!componentHard[chain.component] && componentChains[chain.component] >= kZigzagChains
+            && componentLength[chain.component] < minLength * (double)componentChains[chain.component])
+            chain.dropped = true;
+    }
+    std::vector<char> keep(set.size(), 1);
+    for (size_t e = 0; e < set.size(); ++e)
+        keep[e] = chains[chainOfEdge[e]].dropped ? 0 : 1;
+
+    FeatureEdgeSet result;
+    for (size_t e = 0; e < set.size(); ++e) {
+        if (keep[e]) {
+            result.edges.push_back(set.edges[e]);
+            result.flags.push_back(set.flags[e]);
+        }
+    }
+    if (nullptr != dropped)
+        *dropped = set.size() - result.size();
+    return result;
+}
+
 std::vector<char> featureCornerFlags(const SurfaceMesh& mesh, const FeatureEdgeSet& set,
     unsigned char requiredFlags)
 {
@@ -230,6 +373,44 @@ double featureEdgeLength(const FeatureEdgeSet& set, const std::vector<Vector3>& 
     for (const auto& edge : set.edges)
         length += (vertices[edge.second] - vertices[edge.first]).length();
     return length;
+}
+
+FeatureEdgeSet dropShortFeatureComponents(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices,
+    double minLength, size_t* dropped)
+{
+    if (nullptr != dropped)
+        *dropped = 0;
+    if (set.empty())
+        return set;
+    std::vector<size_t> parent(vertices.size());
+    for (size_t v = 0; v < parent.size(); ++v)
+        parent[v] = v;
+    const auto find = [&](size_t v) {
+        while (parent[v] != v)
+            v = parent[v] = parent[parent[v]];
+        return v;
+    };
+    for (const auto& edge : set.edges)
+        parent[find(edge.first)] = find(edge.second);
+    std::vector<double> componentLength(vertices.size(), 0.0);
+    std::vector<char> componentHard(vertices.size(), 0);
+    for (size_t e = 0; e < set.size(); ++e) {
+        const size_t c = find(set.edges[e].first);
+        componentLength[c] += (vertices[set.edges[e].second] - vertices[set.edges[e].first]).length();
+        componentHard[c] |= 0 != (set.flags[e] & FeatureEdgeSet::Hard) ? 1 : 0;
+    }
+    FeatureEdgeSet result;
+    for (size_t e = 0; e < set.size(); ++e) {
+        const size_t c = find(set.edges[e].first);
+        if (!componentHard[c] && componentLength[c] < minLength) {
+            if (nullptr != dropped)
+                ++*dropped;
+            continue;
+        }
+        result.edges.push_back(set.edges[e]);
+        result.flags.push_back(set.flags[e]);
+    }
+    return result;
 }
 
 }

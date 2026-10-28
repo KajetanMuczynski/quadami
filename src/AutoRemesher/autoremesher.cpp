@@ -955,6 +955,8 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     isotropicRemesher.setTargetEdgeLength(voxelSize);
     if (!vertexTargetLengths.empty())
         isotropicRemesher.setVertexTargetEdgeLengths(&vertexTargetLengths);
+    featureEdges = filterDetectedChains(featureEdges, vertices, triangles, voxelSize,
+        nullptr != sharpEdgeStats ? &sharpEdgeStats->filtered : nullptr);
     isotropicRemesher.setFeatureEdges(featureEdges);
     isotropicRemesher.setSmoothNormalDegrees(smoothNormalDegrees);
     isotropicRemesher.remesh();
@@ -962,9 +964,10 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     triangles = isotropicRemesher.remeshedTriangles();
     featureEdges = reclassifyFeatureEdges(isotropicRemesher.featureEdges(), vertices, triangles,
         sharpEdgeDegrees, nullptr != sharpEdgeStats ? &sharpEdgeStats->classified : nullptr);
+    featureEdges = dropShortFeatureComponents(featureEdges, vertices, voxelSize,
+        nullptr != sharpEdgeStats ? &sharpEdgeStats->tShort : nullptr);
     if (nullptr != sharpEdgeStats) {
         sharpEdgeStats->carried = isotropicRemesher.featureEdges().size();
-        sharpEdgeStats->flipped = isotropicRemesher.clearedFeatureEdges();
     }
 #if AUTO_REMESHER_DEBUG
     std::cerr << "Island[" << islandIndex << "]: Uniformly remesh done, vertex count: " << vertices.size() << " triangle count: " << triangles.size() << std::endl;
@@ -1439,9 +1442,10 @@ bool AutoRemesher::remeshIslands()
         run.features.set("set_input_edges", (double)ctx.featureEdges.size());
         run.features.set("set_decimated_edges", (double)sharpEdgeStats.decimatedEdges);
         run.features.set("set_decimation_dropped", (double)sharpEdgeStats.decimationDropped);
-        run.features.set("set_flipped", (double)sharpEdgeStats.flipped);
+        run.features.set("set_filtered", (double)sharpEdgeStats.filtered);
         run.features.set("set_t_carried", (double)sharpEdgeStats.carried);
         run.features.set("set_t_classified", (double)sharpEdgeStats.classified);
+        run.features.set("set_t_short", (double)sharpEdgeStats.tShort);
         run.features.set("set_t_edges", (double)run.isotropicFeatureEdges.size());
         run.features.set("set_t_length_rel_h", featureEdgeLength(run.isotropicFeatureEdges, ctx.vertices) / h);
         ctx.isotropicMarkedEdgeCount = (size_t)std::count_if(run.isotropicFeatureEdges.flags.begin(),

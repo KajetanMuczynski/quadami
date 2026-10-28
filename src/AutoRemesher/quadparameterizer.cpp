@@ -323,14 +323,85 @@ namespace {
         return cornerConstraints;
     }
 
+    // Corners (half edges) of T's hard edges that lie near a feature corner
+    // narrower than 45 degrees: both ends within quadEdgeLength / sin(angle)
+    // of its vertex, where the two edges are one quad edge apart (angles
+    // under 30 degrees count as 30).  The field
+    // meets the two edges of such a sector with the same isoline family (the
+    // sector rule's round(2 angle / pi) is 0, a quad corner needs 1), so
+    // isolines on both pinch the sector to a point and fold the map: on the
+    // 30 degree wedge 412 of 4488 triangles of T flipped once the remesh kept
+    // its creases (TODO 2.5).  These edges keep their field lock but get no
+    // isoline constraint.
+    std::vector<char> acuteSectorCorners(const SurfaceMesh& mesh, const std::vector<char>& hardCorners,
+        double quadEdgeLength)
+    {
+        constexpr double maximumAcuteAngle = 0.25 * M_PI;
+        constexpr double minimumReachAngle = M_PI / 6.0;
+        std::vector<char> acute(mesh.cornerCount(), 0);
+        const auto cornerAngle = [&](size_t c) {
+            const Vector3& p = mesh.position(mesh.cornerVertex(c));
+            const Vector3 a = mesh.position(mesh.cornerVertex(mesh.nextCorner(c))) - p;
+            const Vector3 b = mesh.position(mesh.cornerVertex(mesh.previousCorner(c))) - p;
+            const double lengths = a.length() * b.length();
+            if (lengths <= 0.0)
+                return 0.0;
+            return std::acos(std::max(-1.0, std::min(1.0, Vector3::dotProduct(a, b) / lengths)));
+        };
+        // Apex vertex and reach of each acute sector: walk from a hard edge
+        // around its start vertex, face by face, to the next hard edge.
+        std::vector<std::pair<size_t, double>> apexes;
+        for (size_t c0 = 0; c0 < mesh.cornerCount(); ++c0) {
+            if (!hardCorners[c0] || mesh.isBoundaryCorner(c0))
+                continue;
+            double angle = 0.0;
+            size_t c = c0;
+            bool closed = false;
+            for (size_t steps = 0; steps < mesh.cornerCount(); ++steps) {
+                angle += cornerAngle(c);
+                if (angle >= maximumAcuteAngle)
+                    break;
+                const size_t next = mesh.oppositeCorner(mesh.previousCorner(c));
+                if (SurfaceMesh::npos == next)
+                    break;
+                if (hardCorners[next]) {
+                    closed = true;
+                    break;
+                }
+                c = next;
+            }
+            // A sliver sector would reach far: no further than at 30 degrees.
+            if (closed)
+                apexes.emplace_back(mesh.cornerVertex(c0), quadEdgeLength / std::sin(std::max(angle, minimumReachAngle)));
+        }
+        if (apexes.empty())
+            return acute;
+        for (size_t c = 0; c < mesh.cornerCount(); ++c) {
+            if (!hardCorners[c])
+                continue;
+            const Vector3& a = mesh.position(mesh.cornerVertex(c));
+            const Vector3& b = mesh.position(mesh.cornerVertex(mesh.nextCorner(c)));
+            for (const auto& apex : apexes) {
+                const Vector3& p = mesh.position(apex.first);
+                if ((a - p).length() <= apex.second && (b - p).length() <= apex.second) {
+                    acute[c] = 1;
+                    break;
+                }
+            }
+        }
+        return acute;
+    }
+
     // What became of T's hard edges (`hardCorners`, the FeatureEdgeSet): an isoline
-    // constraint, none because the field is more than 10 deg off the edge, or none because
-    // the edge was re-rounded. Lengths relative to T's mean edge (`features` diagnostics,
+    // constraint, none because the field is more than 10 deg off the edge, none
+    // because the edge was re-rounded, or none because it lies at an acute corner
+    // (acuteSectorCorners). Lengths relative to T's mean edge (`features` diagnostics,
     // research/crease-preservation-2026-10-26.md).
     DiagnosticRecord creaseConstraintRecord(const SurfaceMesh& mesh, const std::vector<char>& hardCorners,
-        const std::vector<signed char>& cornerConstraints, const std::vector<char>& rerounded)
+        const std::vector<signed char>& cornerConstraints, const std::vector<char>& rerounded,
+        const std::vector<char>& acute)
     {
-        double hard = 0.0, constrained = 0.0, misaligned = 0.0, droppedRerounded = 0.0;
+        double hard = 0.0, constrained = 0.0, misaligned = 0.0, droppedRerounded = 0.0, droppedAcute = 0.0;
         size_t hardEdges = 0;
         for (size_t c = 0; c < mesh.cornerCount(); ++c) {
             const size_t opposite = mesh.oppositeCorner(c);
@@ -339,7 +410,9 @@ namespace {
             const double length = mesh.edgeVector(c).length();
             ++hardEdges;
             hard += length;
-            if (cornerConstraints[c] == ConstraintNone && cornerConstraints[opposite] == ConstraintNone)
+            if (acute[c] || acute[opposite])
+                droppedAcute += length;
+            else if (cornerConstraints[c] == ConstraintNone && cornerConstraints[opposite] == ConstraintNone)
                 misaligned += length;
             else if (rerounded[c] || rerounded[opposite])
                 droppedRerounded += length;
@@ -353,6 +426,7 @@ namespace {
         record.set("constrained_rel_edge", constrained / edge);
         record.set("misaligned_rel_edge", misaligned / edge);
         record.set("rerounded_rel_edge", droppedRerounded / edge);
+        record.set("acute_rel_edge", droppedAcute / edge);
         return record;
     }
 
@@ -1538,12 +1612,13 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     std::vector<char> rerounded;
     const size_t reroundedEdges = raiseSmallConeAngles(mesh, result->field, normals, cornerConstraints,
         &rotation, &rerounded);
-    result->diagnostics.push_back(creaseConstraintRecord(mesh, hardCorners, cornerConstraints, rerounded));
+    const std::vector<char> acute = acuteSectorCorners(mesh, hardCorners, scale);
+    result->diagnostics.push_back(creaseConstraintRecord(mesh, hardCorners, cornerConstraints, rerounded, acute));
     // A hard edge's constraint follows the field, which a re-rounded edge
     // no longer does: on that edge the two faces could ask for different
     // isolines and collapse it.
     for (size_t c = 0; c < corners; ++c)
-        if (rerounded[c])
+        if (rerounded[c] || acute[c])
             cornerConstraints[c] = ConstraintNone;
     result->cornerRotations = rotation;
     if (trackDirectionalScale)

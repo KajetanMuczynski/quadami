@@ -19,6 +19,7 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *  SOFTWARE.
  */
+#include <algorithm>
 #include <string>
 #include <iostream>
 #include <cmath>
@@ -28,6 +29,7 @@
 IsotropicRemesher::~IsotropicRemesher()
 {
     delete m_halfedgeMesh;
+    delete m_featureSegmentTree;
     delete m_axisAlignedBoundingBoxTree;
     delete m_triangleBoxes;
     delete m_triangleNormals;
@@ -337,11 +339,11 @@ void IsotropicRemesher::remesh(size_t iteration)
     report(0.15f, "Splitting long edges");
     bool skipSplitOnce = true;
     // The edges are marked before the first split, so their halves inherit
-    // them; their vertices only after it, as the split's midpoints were
-    // before.
+    // them, and so are the corners, on the input's own chains.
     m_halfedgeMesh->markFeatureEdges(m_featureEdges, m_featureEdgeFlags);
+    m_halfedgeMesh->featureCorners();
+    buildFeatureSegmentTree();
     splitLongEdges(maxTargetLengthSquared);
-    m_halfedgeMesh->featureVertices();
     m_halfedgeMesh->featureBoundaries();
     
     // The five passes below repeat once per iteration, so the remaining 0.25..1
@@ -374,6 +376,18 @@ void IsotropicRemesher::remesh(size_t iteration)
         reportPass("Projecting vertices");
         projectVertices();
 
+    }
+
+    // A face with two feature edges locks the field to one of them only,
+    // and the parameterization folds next to it (TODO 2.5: a prism with
+    // 45 degree corners, 276 of T's triangles flipped at 1k quads, 2 with
+    // the split); its third edge is split instead.
+    const std::vector<IsotropicHalfedgeMesh::Vertex *> added = m_halfedgeMesh->splitFacesOnTwoFeatureEdges();
+    if (!added.empty()) {
+        m_halfedgeMesh->updateTriangleNormals();
+        m_halfedgeMesh->updateVertexNormals();
+        for (IsotropicHalfedgeMesh::Vertex *vertex: added)
+            projectVertex(vertex);
     }
     report(1.0f, "");
     
@@ -439,22 +453,9 @@ void IsotropicRemesher::collapseShortEdges(double minEdgeLengthSquared, double m
                 edgeMaxLenSq = std::pow(4.0 / 3.0 * edgeTarget, 2);
             }
             if (lengthSquared < edgeMinLenSq) {
-                IsotropicHalfedgeMesh::Vertex *from = halfedge->startVertex;
-                IsotropicHalfedgeMesh::Vertex *to = nextHalfedge->startVertex;
-                if (!from->featured && !to->featured) {
-                    if (!from->marked && !to->marked) {
-                        if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq)) {
-                            break;
-                        }
-                    } else if (!from->marked ||
-                            (halfedge->hard() && m_halfedgeMesh->isStraightHardChainVertex(from))) {
-                        // Onto a marked vertex, which stays where it is: an
-                        // unmarked neighbour, or the next vertex along a
-                        // nearly straight marked line (not at a corner, an
-                        // end or a crossing).
-                        if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq, &to->position)) {
-                            break;
-                        }
+                if (!halfedge->startVertex->featured && !nextHalfedge->startVertex->featured) {
+                    if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq)) {
+                        break;
                     }
                 }
             }
@@ -496,93 +497,184 @@ void IsotropicRemesher::shiftVertices()
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
         //if (vertex->featured)
         //    continue;
-        if (vertex->marked)
-            continue;
         m_halfedgeMesh->relaxVertex(vertex);
     }
 }
 
 void IsotropicRemesher::projectVertices()
 {
+    for (IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr);
+            nullptr != vertex;
+            vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
+        projectVertex(vertex);
+    }
+}
+
+void IsotropicRemesher::projectVertex(IsotropicHalfedgeMesh::Vertex *vertex)
+{
     // Use subdivided (smooth) mesh data for projection when available
     const std::vector<Vector3> *projVertices = m_smoothVertices.empty() ? m_vertices : &m_smoothVertices;
     const std::vector<std::vector<size_t>> *projTriangles = m_smoothTriangles.empty() ? m_triangles : &m_smoothTriangles;
     const std::vector<Vector3> *projNormals = m_smoothTriangleNormals.empty() ? m_triangleNormals : &m_smoothTriangleNormals;
 
-    for (IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr);
-            nullptr != vertex;
-            vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
-        if (vertex->featured || vertex->marked)
-            continue;
+    if (vertex->featured || vertex->featureCorner)
+        return;
 
-        const auto &startHalfedge = vertex->firstHalfedge;
-        if (nullptr == startHalfedge)
-            continue;
+    const auto &startHalfedge = vertex->firstHalfedge;
+    if (nullptr == startHalfedge)
+        return;
 
-        std::vector<AxisAlignedBoudingBox> rayBox(1);
-        auto &box = rayBox[0];
-        box.update(vertex->position);
+    // A chain vertex goes onto the input's chain, any other vertex on a
+    // feature edge stays.
+    if (m_halfedgeMesh->featureDegree(vertex) > 0) {
+        if (m_halfedgeMesh->isChainVertex(vertex))
+            projectOntoFeatureChain(vertex);
+        return;
+    }
 
-        IsotropicHalfedgeMesh::Halfedge *loopHalfedge = startHalfedge;
-        do {
-            box.update(loopHalfedge->nextHalfedge->startVertex->position);
-            if (nullptr == loopHalfedge->oppositeHalfedge) {
-                loopHalfedge = startHalfedge;
-                do {
-                    box.update(loopHalfedge->previousHalfedge->startVertex->position);
-                    loopHalfedge = loopHalfedge->previousHalfedge->oppositeHalfedge;
-                    if (nullptr == loopHalfedge)
-                        break;
-                } while (loopHalfedge != startHalfedge);
-                break;
-            }
-            loopHalfedge = loopHalfedge->oppositeHalfedge->nextHalfedge;
-        } while (loopHalfedge != startHalfedge);
+    std::vector<AxisAlignedBoudingBox> rayBox(1);
+    auto &box = rayBox[0];
+    box.update(vertex->position);
 
-        AxisAlignedBoudingBoxTree testTree(&rayBox,
-            {0},
-            rayBox[0]);
-        std::vector<std::pair<size_t, size_t>> pairs;
-        m_axisAlignedBoundingBoxTree->test(m_axisAlignedBoundingBoxTree->root(), testTree.root(), &rayBox, &pairs);
-
-        std::vector<std::pair<Vector3, double>> hits;
-
-        auto boundingBoxSize = box.upperBound() - box.lowerBound();
-        Vector3 segment = vertex->_normal * (boundingBoxSize[0] + boundingBoxSize[1] + boundingBoxSize[2]);
-        for (const auto &it: pairs) {
-            // The segment runs both ways along the normal and reaches well
-            // past the one ring, so on thin parts it also hits the surface
-            // facing the other way. Landing there tears the neighborhood open.
-            if (Vector3::dotProduct((*projNormals)[it.first], vertex->_normal) <= 0)
-                continue;
-            const auto &triangle = (*projTriangles)[it.first];
-            std::vector<Vector3> trianglePositions = {
-                (*projVertices)[triangle[0]],
-                (*projVertices)[triangle[1]],
-                (*projVertices)[triangle[2]]
-            };
-            Vector3 intersection;
-            if (Vector3::intersectSegmentAndPlane(vertex->position - segment, vertex->position + segment,
-                    trianglePositions[0],
-                    (*projNormals)[it.first],
-                    &intersection)) {
-                std::vector<Vector3> normals;
-                for (size_t i = 0; i < 3; ++i) {
-                    size_t j = (i + 1) % 3;
-                    normals.push_back(Vector3::normal(intersection, trianglePositions[i], trianglePositions[j]));
-                }
-                if (Vector3::dotProduct(normals[0], normals[1]) > 0 &&
-                        Vector3::dotProduct(normals[0], normals[2]) > 0) {
-                    hits.push_back({intersection, (vertex->position - intersection).lengthSquared()});
-                }
-            }
+    IsotropicHalfedgeMesh::Halfedge *loopHalfedge = startHalfedge;
+    do {
+        box.update(loopHalfedge->nextHalfedge->startVertex->position);
+        if (nullptr == loopHalfedge->oppositeHalfedge) {
+            loopHalfedge = startHalfedge;
+            do {
+                box.update(loopHalfedge->previousHalfedge->startVertex->position);
+                loopHalfedge = loopHalfedge->previousHalfedge->oppositeHalfedge;
+                if (nullptr == loopHalfedge)
+                    break;
+            } while (loopHalfedge != startHalfedge);
+            break;
         }
+        loopHalfedge = loopHalfedge->oppositeHalfedge->nextHalfedge;
+    } while (loopHalfedge != startHalfedge);
 
-        if (!hits.empty()) {
-            vertex->position = std::min_element(hits.begin(), hits.end(), [](const std::pair<Vector3, double> &first,
-                    const std::pair<Vector3, double> &second) {
-                return first.second < second.second;
-            })->first;
+    AxisAlignedBoudingBoxTree testTree(&rayBox,
+        {0},
+        rayBox[0]);
+    std::vector<std::pair<size_t, size_t>> pairs;
+    m_axisAlignedBoundingBoxTree->test(m_axisAlignedBoundingBoxTree->root(), testTree.root(), &rayBox, &pairs);
+
+    std::vector<std::pair<Vector3, double>> hits;
+
+    auto boundingBoxSize = box.upperBound() - box.lowerBound();
+    Vector3 segment = vertex->_normal * (boundingBoxSize[0] + boundingBoxSize[1] + boundingBoxSize[2]);
+    for (const auto &it: pairs) {
+        // The segment runs both ways along the normal and reaches well
+        // past the one ring, so on thin parts it also hits the surface
+        // facing the other way. Landing there tears the neighborhood open.
+        if (Vector3::dotProduct((*projNormals)[it.first], vertex->_normal) <= 0)
+            continue;
+        const auto &triangle = (*projTriangles)[it.first];
+        std::vector<Vector3> trianglePositions = {
+            (*projVertices)[triangle[0]],
+            (*projVertices)[triangle[1]],
+            (*projVertices)[triangle[2]]
+        };
+        Vector3 intersection;
+        if (Vector3::intersectSegmentAndPlane(vertex->position - segment, vertex->position + segment,
+                trianglePositions[0],
+                (*projNormals)[it.first],
+                &intersection)) {
+            std::vector<Vector3> normals;
+            for (size_t i = 0; i < 3; ++i) {
+                size_t j = (i + 1) % 3;
+                normals.push_back(Vector3::normal(intersection, trianglePositions[i], trianglePositions[j]));
+            }
+            if (Vector3::dotProduct(normals[0], normals[1]) > 0 &&
+                    Vector3::dotProduct(normals[0], normals[2]) > 0) {
+                hits.push_back({intersection, (vertex->position - intersection).lengthSquared()});
+            }
         }
     }
+
+    if (!hits.empty()) {
+        vertex->position = std::min_element(hits.begin(), hits.end(), [](const std::pair<Vector3, double> &first,
+                const std::pair<Vector3, double> &second) {
+            return first.second < second.second;
+        })->first;
+    }
+}
+
+void IsotropicRemesher::buildFeatureSegmentTree()
+{
+    delete m_featureSegmentTree;
+    m_featureSegmentTree = nullptr;
+    m_featureSegmentBoxes.clear();
+    m_featureSegments = m_halfedgeMesh->featureSegments();
+    if (m_featureSegments.empty())
+        return;
+    m_featureSegmentBoxes.resize(m_featureSegments.size());
+    std::vector<size_t> segmentIndices(m_featureSegments.size());
+    AxisAlignedBoudingBox groupBox;
+    for (size_t i = 0; i < m_featureSegments.size(); ++i) {
+        for (const Vector3 &end : { m_featureSegments[i].first, m_featureSegments[i].second }) {
+            m_featureSegmentBoxes[i].update(end);
+            groupBox.update(end);
+        }
+        m_featureSegmentBoxes[i].updateCenter();
+        segmentIndices[i] = i;
+    }
+    groupBox.updateCenter();
+    m_featureSegmentTree = new AxisAlignedBoudingBoxTree(&m_featureSegmentBoxes, segmentIndices, groupBox);
+}
+
+bool IsotropicRemesher::projectOntoFeatureChain(IsotropicHalfedgeMesh::Vertex *vertex)
+{
+    if (nullptr == m_featureSegmentTree)
+        return false;
+    IsotropicHalfedgeMesh::Vertex *chainNeighbors[2] = { nullptr, nullptr };
+    if (2 != m_halfedgeMesh->featureDegree(vertex, &chainNeighbors[0], &chainNeighbors[1]))
+        return false;
+    Vector3 tangent = chainNeighbors[1]->position - chainNeighbors[0]->position;
+    if (tangent.isZero())
+        return false;
+    tangent.normalize();
+
+    // Segments of the vertex's own input chain within the longer chain
+    // edge, running within 60 degrees of the chain's direction here.  A
+    // segment of another chain can be closer (the other side of a thin
+    // ridge, the other edge of an acute corner); snapping onto it put two
+    // chain vertices 1e-8 apart on the sculpt set, and the curvature of
+    // that edge flattened the whole island's sizing field.
+    const size_t chain = m_halfedgeMesh->vertexFeatureChain(vertex);
+    const double reach = std::max((chainNeighbors[0]->position - vertex->position).length(),
+        (chainNeighbors[1]->position - vertex->position).length());
+    std::vector<AxisAlignedBoudingBox> queryBox(1);
+    queryBox[0].update(vertex->position - Vector3(reach, reach, reach));
+    queryBox[0].update(vertex->position + Vector3(reach, reach, reach));
+    queryBox[0].updateCenter();
+    AxisAlignedBoudingBoxTree queryTree(&queryBox, { 0 }, queryBox[0]);
+    std::vector<std::pair<size_t, size_t>> pairs;
+    m_featureSegmentTree->test(m_featureSegmentTree->root(), queryTree.root(), &queryBox, &pairs);
+
+    bool found = false;
+    double nearestDistanceSquared = 0.0;
+    Vector3 nearest;
+    for (const auto &it: pairs) {
+        if (m_featureSegments[it.first].chain != chain)
+            continue;
+        const Vector3 &a = m_featureSegments[it.first].first;
+        const Vector3 &b = m_featureSegments[it.first].second;
+        const Vector3 segment = b - a;
+        const double lengthSquared = segment.lengthSquared();
+        if (lengthSquared <= 0.0)
+            continue;
+        if (std::abs(Vector3::dotProduct(segment, tangent)) < 0.5 * std::sqrt(lengthSquared))
+            continue;
+        const double t = std::max(0.0, std::min(1.0, Vector3::dotProduct(vertex->position - a, segment) / lengthSquared));
+        const Vector3 point = a + segment * t;
+        const double distanceSquared = (point - vertex->position).lengthSquared();
+        if (!found || distanceSquared < nearestDistanceSquared) {
+            found = true;
+            nearestDistanceSquared = distanceSquared;
+            nearest = point;
+        }
+    }
+    if (!found)
+        return false;
+    return m_halfedgeMesh->moveVertexIfValid(vertex, nearest);
 }
