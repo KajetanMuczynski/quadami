@@ -62,14 +62,17 @@ Blender add-on (`addon/`, Quadami): `python addon/package.py --cli-prefix <insta
 builds the extension zip with the CLI bundled; see `addon/README.md`.
 
 CI (`.github/workflows/`):
-- `ci.yml` (every PR, push to master or a tag, manual run): all checks in one workflow. Its last job,
+- `ci.yml` (every PR, push to master or a tag, nightly on master, manual run): all checks in one workflow. Its last job,
   **CI passed**, is green only if every other job succeeded; it is the one check branch protection
   is meant to require (TODO 0.9; checked 2026-10-21: the `master` ruleset requires a PR and blocks
   force pushes and deletion, but requires no status check yet). Branch pushes without a PR get no run (use Actions > ci > Run workflow);
   a PR with merge conflicts gets no run either, so **CI passed** shows as missing.
   A PR that changes only documentation (`docs/`, Markdown at the top level or directly in `addon/`)
   skips the macOS job (`changes` job decides; GitHub's macOS runners can queue for many minutes);
-  **CI passed** accepts that skip and nothing else. Other paths never skip macOS or Windows: add-on
+  **CI passed** accepts that skip and nothing else. Pushes to master skip macOS too (Kajetan, 2026-10-27:
+  the merged PR ran it); a nightly scheduled run (02:17 UTC) and tags run it on master. Each push to
+  master gets its own concurrency group, so close merges no longer cancel each other's runs.
+  Other paths never skip macOS or Windows: add-on
   Python broke on Windows only before (#18), and Qt-GUI/bench-only PRs, the only other safe skip, never occurred.
   - `format`: `ci/lint.sh` (src/ and tests/) with clang-format pinned to 23.1.3 (pip); bump on purpose.
   - `qt-app (linux)`: qmake app and `ar_bench`, `ci/smoke_test.sh` on both (1,200-2,400 quads).

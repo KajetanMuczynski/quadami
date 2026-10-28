@@ -245,6 +245,9 @@ void SingularitySimplifier::buildFramesAndConnection()
     }
     m_connection.assign(corners, 0.0);
     m_sharpCorner.assign(corners, false);
+    const std::vector<char> sharpCorners = nullptr != m_sharpEdges
+        ? featureCornerFlags(m_mesh, *m_sharpEdges)
+        : std::vector<char>(corners, 0);
     for (size_t c = 0; c < corners; ++c) {
         const size_t other = m_mesh.oppositeCorner(c);
         if (other == SurfaceMesh::npos)
@@ -252,7 +255,11 @@ void SingularitySimplifier::buildFramesAndConnection()
         const size_t f = m_mesh.cornerFace(c), g = m_mesh.cornerFace(other);
         const Vector3 edge = m_mesh.edgeVector(c);
         m_connection[c] = std::atan2(Vector3::dotProduct(edge, m_frameV[g]), Vector3::dotProduct(edge, m_frameU[g])) - std::atan2(Vector3::dotProduct(edge, m_frameV[f]), Vector3::dotProduct(edge, m_frameU[f]));
-        m_sharpCorner[c] = m_mesh.normalAngle(c) >= m_sharpEdgeDegrees * M_PI / 180.0;
+        // Concave sharp edges only (normalAngle > 0), as before the set:
+        // freezing the convex ones too keeps cones from reaching the convex
+        // corners they belong to (inferred), and measured worse (TODO 2.6:
+        // cad set: SJ p1 0.61 -> 0.59, UV flips x1.3 summed).
+        m_sharpCorner[c] = 0 != sharpCorners[c] && m_mesh.normalAngle(c) > 0.0;
     }
 }
 

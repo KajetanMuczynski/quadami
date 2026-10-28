@@ -18,7 +18,7 @@
  * You should have received a copy of the GNU General Public License
  * along with QEx.  If not, see <http://www.gnu.org/licenses/>.
  *
- * Modified by the Quadami fork, 2026-10-21 (TODO 6.1b): connectivity checks, step budget and grid-vertex cap (Guards.hh); getNextConnectedLeiWithHE returns null instead of an edge without a halfedge; add_face refuses local edges connected one way only and a previous edge without a halfedge; faces of more than 4 boundary grid vertices (boundary caps) are not added; no log output.
+ * Modified by the Quadami fork, 2026-10-21 (TODO 6.1b): connectivity checks, step budget and grid-vertex cap (Guards.hh); getNextConnectedLeiWithHE returns null instead of an edge without a halfedge; add_face refuses local edges connected one way only and a previous edge without a halfedge, and stops when a vertex rotation does not close; faces of more than 4 boundary grid vertices (boundary caps) are not added; no log output.
  * See thirdparty/libQEx/PATCHES.md.
  */
 
@@ -3347,8 +3347,9 @@ typename PolyMeshT::FaceHandle MeshExtractorT<TMeshT>::add_face(PolyMeshT &qmesh
         }
     }
 
+    // Quadami fork: bounded, see adjustOutgoingHalfedgeBounded (Guards.hh).
     for (typename LEI_VEC::iterator lei_it = leis.begin(), lei_end = leis.end(); lei_it != lei_end; ++lei_it) {
-        qmesh.adjust_outgoing_halfedge(qmesh.vertex_handle((*lei_it)->connected_to_idx));
+        adjustOutgoingHalfedgeBounded(qmesh, qmesh.vertex_handle((*lei_it)->connected_to_idx), "while adding faces");
     }
 
     return newFh;
