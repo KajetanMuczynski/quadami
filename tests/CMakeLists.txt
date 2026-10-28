@@ -61,6 +61,10 @@ add_executable(input_cleanup_test input_cleanup_test.cpp)
 target_link_libraries(input_cleanup_test PRIVATE autoremesher_core)
 add_test(NAME input_cleanup COMMAND input_cleanup_test)
 
+add_executable(input_sanitizer_test input_sanitizer_test.cpp)
+target_link_libraries(input_sanitizer_test PRIVATE autoremesher_core)
+add_test(NAME input_sanitizer COMMAND input_sanitizer_test)
+
 add_executable(qex_guard_test qex_guard_test.cpp)
 target_link_libraries(qex_guard_test PRIVATE autoremesher_core)
 add_test(NAME qex_guard COMMAND qex_guard_test "${CMAKE_CURRENT_SOURCE_DIR}/data/qex-budget-ellipsoid.obj"
@@ -81,3 +85,6 @@ add_test(NAME thin_parts COMMAND thin_parts_test)
 add_executable(quad_smoothing_test quad_smoothing_test.cpp)
 target_link_libraries(quad_smoothing_test PRIVATE autoremesher_core)
 add_test(NAME quad_smoothing COMMAND quad_smoothing_test)
+add_executable(feature_edges_test feature_edges_test.cpp)
+target_link_libraries(feature_edges_test PRIVATE autoremesher_core)
+add_test(NAME feature_edges COMMAND feature_edges_test)

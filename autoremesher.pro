@@ -273,11 +273,17 @@ HEADERS += include/AutoRemesher/ConstrainedLeastSquares
 SOURCES += src/AutoRemesher/mixedintegerleastsquares.cpp
 HEADERS += src/AutoRemesher/mixedintegerleastsquares.h
 HEADERS += include/AutoRemesher/MixedIntegerLeastSquares
+SOURCES += src/AutoRemesher/featureedges.cpp
+HEADERS += src/AutoRemesher/featureedges.h
+HEADERS += include/AutoRemesher/FeatureEdges
 SOURCES += src/AutoRemesher/foldrepair.cpp
 HEADERS += src/AutoRemesher/foldrepair.h
 HEADERS += include/AutoRemesher/FoldRepair
 SOURCES += src/AutoRemesher/thinparts.cpp
 HEADERS += src/AutoRemesher/thinparts.h
+
+SOURCES += src/AutoRemesher/inputsanitizer.cpp
+HEADERS += src/AutoRemesher/inputsanitizer.h
 HEADERS += include/AutoRemesher/ThinParts
 SOURCES += src/AutoRemesher/framefield.cpp
 HEADERS += src/AutoRemesher/framefield.h
