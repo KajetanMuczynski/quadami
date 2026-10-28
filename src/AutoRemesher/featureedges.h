@@ -39,9 +39,13 @@ namespace AutoRemesher {
 // at least the Sharp Edge angle minus kSharpEdgeToleranceDegrees.  Without
 // the tolerance a right angle at the default 90 degrees is a coin flip:
 // axis-aligned and Blender float32 right angles compute a hair above or
-// below 90 degrees edge by edge.  Boundary edges are not in the set; every
-// stage handles them as boundary.
-constexpr double kSharpEdgeToleranceDegrees = 1.0;
+// below 90 degrees edge by edge, by up to 0.009 degrees on the cad and
+// primitives sets (thin cap triangles).  The tolerance stays well below
+// the edges that are genuinely a little under the angle: on organic meshes
+// 80-90 % of the edges within 1 degree of 90 are 0.1 degrees or more off,
+// and a 1 degree tolerance marked them too (ext_corset: holes 1.3 -> 3.3).
+// Boundary edges are not in the set; every stage handles them as boundary.
+constexpr double kSharpEdgeToleranceDegrees = 0.1;
 
 struct FeatureEdgeSet {
     // Bit of `flags` reserved for hard (user-marked) edges, TODO 5.4.

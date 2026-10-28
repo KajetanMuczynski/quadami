@@ -130,8 +130,24 @@ bool rightAnglesAreSharpOnEveryRotation()
     std::vector<Vector3> flatVertices;
     Faces flatTriangles;
     box(1.0, 1.0, 1.0, 4, &flatVertices, &flatTriangles);
-    const FeatureEdgeSet at89 = AutoRemesher::classifySharpEdges(flatVertices, flatTriangles, 91.5);
-    ok = check(at89.empty(), "at 91.5 degrees no right angle is sharp") && ok;
+    const FeatureEdgeSet above = AutoRemesher::classifySharpEdges(flatVertices, flatTriangles, 90.5);
+    ok = check(above.empty(), "at 90.5 degrees no right angle is sharp") && ok;
+    // A hinge whose normals are 89.5 degrees apart is not a right angle.
+    for (const double normalDegrees : { 89.5, 89.95 }) {
+        const double open = (180.0 - normalDegrees) * M_PI / 180.0;
+        const std::vector<Vector3> hinge = { Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.0, 0.0),
+            Vector3(0.5, 1.0, 0.0), Vector3(0.5, std::cos(open), std::sin(open)) };
+        const Faces hingeTriangles = { { 0, 1, 2 }, { 1, 0, 3 } };
+        const AutoRemesher::SurfaceMesh hingeMesh(hinge, hingeTriangles);
+        double measured = 0.0;
+        for (size_t c = 0; c < hingeMesh.cornerCount(); ++c)
+            if (hingeMesh.oppositeCorner(c) != AutoRemesher::SurfaceMesh::npos)
+                measured = std::fabs(hingeMesh.normalAngle(c)) * 180.0 / M_PI;
+        const bool sharp = !AutoRemesher::classifySharpEdges(hinge, hingeTriangles, 90.0).empty();
+        std::printf("  a hinge at %.3f degrees is %s\n", measured, sharp ? "sharp" : "not sharp");
+        ok = check(std::fabs(measured - normalDegrees) < 1e-6, "the hinge has the angle it was built with") && ok;
+        ok = check(sharp == (normalDegrees > 89.9), "a hinge 0.5 degrees under 90 is not sharp, 0.05 under is") && ok;
+    }
     ok = check(AutoRemesher::classifySharpEdges(flatVertices, flatTriangles, 0.0).empty(), "0 degrees means no sharp edges") && ok;
     ok = check(AutoRemesher::classifySharpEdges(flatVertices, flatTriangles, 180.0).empty(), "180 degrees means no sharp edges") && ok;
     return ok;
