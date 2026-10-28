@@ -20,8 +20,8 @@
 // Marked edges (RemeshRequest::featureEdges, TODO 5.4): Blender's Sharp
 // marks reach the core as vertex pairs.  Malformed lists are rejected, pairs
 // that are not an edge of the mesh are ignored and counted, a marked line on
-// a smooth surface gets a row of output edges, and marks on nearly every edge
-// are not used.
+// a smooth surface gets a row of output edges, marks on an open seam follow
+// the seam weld, and marks on nearly every edge are not used.
 
 #include <AutoRemesher/Remesh>
 #include <algorithm>
@@ -170,6 +170,44 @@ int main()
     const double withoutMarks = AutoRemesher::RemeshStatus::Ok == result.status ? followedShare(equator, result.mesh) : 1.0;
     ok &= check("equator followed", withMarks >= 0.8 && withoutMarks < 0.5, result);
     printf("  followed with marks %.2f, without %.2f\n", withMarks, withoutMarks);
+
+    // The same equator as an open seam (an unwelded export: the southern
+    // half has its own copy of the equator) with the copy marked: the weld
+    // keeps the lower copy, and the marks go with it.
+    AutoRemesher::RemeshRequest seam = sphere(16, 32);
+    seam.parameters.targetQuadCount = 1500;
+    {
+        const uint32_t segments = 32, equatorStart = (16 / 2 - 1) * segments;
+        const uint32_t north = (uint32_t)(seam.positions.size() / 3) - 2, copyStart = north + 2;
+        for (uint32_t j = 0; j < segments; ++j) {
+            for (int k = 0; k < 3; ++k)
+                seam.positions.push_back(seam.positions[3 * (equatorStart + j) + k]);
+        }
+        // A triangle is southern when no corner lies above the equator.
+        const auto southern = [&](size_t t) {
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t v = seam.triangles[t + k];
+                if (north == v || (v < north && v < equatorStart))
+                    return false;
+            }
+            return true;
+        };
+        for (size_t t = 0; t < seam.triangles.size(); t += 3) {
+            if (!southern(t))
+                continue;
+            for (int k = 0; k < 3; ++k) {
+                uint32_t& v = seam.triangles[t + k];
+                if (v >= equatorStart && v < equatorStart + segments)
+                    v = copyStart + (v - equatorStart);
+            }
+        }
+        for (uint32_t& v : seam.featureEdges)
+            v = copyStart + (v - equatorStart);
+    }
+    result = AutoRemesher::remesh(seam, {});
+    const double onSeam = AutoRemesher::RemeshStatus::Ok == result.status ? followedShare(seam, result.mesh) : 0.0;
+    ok &= check("marks on a welded seam", 0 == result.report.ignoredFeatureEdgeCount && onSeam >= 0.8, result);
+    printf("  ignored %zu, followed %.2f\n", result.report.ignoredFeatureEdgeCount, onSeam);
 
     // Every edge marked, as an FBX import marks them: not used, and said so.
     AutoRemesher::RemeshRequest flood = sphere(16, 32);

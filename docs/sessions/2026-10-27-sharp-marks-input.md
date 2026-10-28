@@ -21,5 +21,7 @@
 - 2026-10-28: moved onto 2.6's `FeatureEdgeSet` (#139): the marks are its hard edges; the halfedge
   mesh's own `marked` flag became `hard()` on the feature flags; meshopt locks hard ends; the
   singularity freeze takes hard corners both ways. `marked` set against #139: 0.34 → 0.69.
+  With #112's seam weld and pinch split, marked pairs follow the renumbering (a mark on the
+  dropped copy of an open seam was ignored before; test `marks on a welded seam`).
 - Next: face-set and
   material borders as sources; 5.2's sector rule for acute and crossing marks.

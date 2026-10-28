@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -48,6 +49,29 @@ class OutputDiff(unittest.TestCase):
         self.assertEqual(ab.output_diff(b, h, (0, 1)), (1, [(("a", "quality", 2000), 1)], []))
         _, _, failed = ab.output_diff(b, runs(a="1"), (0, 1))
         self.assertEqual([u for _, u, *_ in failed], [1])
+
+
+class LaneRunArgs(unittest.TestCase):
+    def test_lane_runs_with_every_run_option(self):
+        # lane built its run arguments by hand and missed --metrics-timeout when it was added (2026-10-28).
+        seen = []
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus = os.path.join(tmp, "corpus.json")
+            with open(corpus, "w") as fp:
+                json.dump({"sets": {"s": {"targets": [2000]}}}, fp)
+            with mock.patch.object(ab, "CORPUS", corpus), \
+                    mock.patch.object(ab, "source_key", side_effect=lambda ref, *a: ref), \
+                    mock.patch.object(ab, "git", return_value="0"), \
+                    mock.patch.object(ab, "load_set", return_value=({}, [])), \
+                    mock.patch.object(ab, "cmd_run", side_effect=seen.append), \
+                    mock.patch.object(ab, "load_runs", return_value={}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                ab.cmd_lane(ab.parser().parse_args(["lane", "base", "head", "--work", tmp]))
+        run = vars(ab.parser().parse_args(["run", "x"]))
+        self.assertEqual(len(seen), 2)
+        for ra in seen:
+            self.assertEqual(set(vars(ra)), set(run))
+            self.assertEqual((ra.no_metrics, ra.replicates, ra.timeout, ra.work), (True, 1, 1200, tmp))
 
 
 class MetricsAddedLater(unittest.TestCase):
@@ -92,6 +116,17 @@ class MetricsAddedLater(unittest.TestCase):
         self.assertEqual((calls, rec["metrics"]), (1, {"measured": True}))
 
 
+    def test_timed_out_run_is_measured_again_only_with_a_longer_limit(self):
+        # Measuring it again under the same limit would stall every later run for that long.
+        with open(os.path.join(self.d, "record.json"), "w") as fp:
+            json.dump({"mesh": "m", "rc": 0, "metrics": None, "metrics_error": "timeout", "metrics_timeout": 1800}, fp)
+        for limit, expected in ((1800, 0), (600, 0), (3600, 1), (None, 1)):
+            with mock.patch.object(ab, "measure") as m:
+                ab.run_one("cli", self.mesh, "corpus", 2000, "quality", 0, self.out, [], self.work, True, 1,
+                           metrics_timeout=limit)
+            self.assertEqual(m.call_count, expected, limit)
+
+
 class Measure(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -124,6 +159,26 @@ class Measure(unittest.TestCase):
         rec, calls = self.measure([None, None])
         self.assertEqual((calls, rec["metrics"]), (2, None))
         self.assertIn("MemoryError", rec["metrics_error"])
+
+    def test_timeout_is_recorded_and_not_retried(self):
+        def hang(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        rec = {"metrics": {"old": True}}
+        with mock.patch.object(ab.subprocess, "run", side_effect=hang) as m:
+            ab.measure(rec, self.d, {"id": "m"}, 2000, "in.obj", self.d, timeout=5)
+        self.assertEqual((m.call_count, rec["metrics"], rec["metrics_timeout"]), (1, None, 5))
+        self.assertIn("timeout", rec["metrics_error"])
+
+    def test_a_real_metrics_py_is_killed_at_the_limit(self):
+        # subprocess.run kills the child on timeout; a sleeping stand-in for metrics.py must not outlive it.
+        with mock.patch.object(ab, "METRICS", os.path.join(self.d, "slow.py")):
+            with open(ab.METRICS, "w") as fp:
+                fp.write("import time\ntime.sleep(30)\n")
+            t0 = time.time()
+            rec = {}
+            ab.measure(rec, self.d, {"id": "m"}, 2000, "in.obj", self.d, timeout=1)
+        self.assertLess(time.time() - t0, 10)
+        self.assertEqual((rec["metrics"], rec["metrics_timeout"]), (None, 1))
 
 
 class Compare(unittest.TestCase):

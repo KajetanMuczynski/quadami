@@ -171,6 +171,10 @@ struct RemeshMesh {
 // An input vertex farther than this many planned quad widths from the
 // output is in a lost part (QualityReport::farInputVertexCount).
 const double LostPartQuadWidths = 3.0;
+// Since 1.10.  A far input vertex is in a thin part if the other side of the
+// part (a vertex whose normal faces it) lies within this many quad widths
+// (QualityReport::thinLostVertexCount).
+const double ThinLostPartQuadWidths = 2.0;
 
 // Measured on the result mesh.  Field definitions are in INTERFACE.md §3.1.
 struct QualityReport {
@@ -224,6 +228,19 @@ struct QualityReport {
     // by that ratio.
     double farthestInputQuadWidths = 0.0;
     size_t farInputVertexCount = 0;
+    // Since 1.10.  The far input vertices by cause: on a piece of the input
+    // (connected by shared vertices) with no output within one h0 at all
+    // (lostPieceCount such pieces); in a thin part, whose other side (a
+    // vertex with its normal facing back) lies within ThinLostPartQuadWidths
+    // h0; otherwise within that distance of an open edge (an edge of one
+    // input triangle: a leaf, a petal, cloth); or none of these.  The thin,
+    // open edge and other counts are estimated from a sample of at most 1024
+    // far vertices.
+    size_t pieceLostVertexCount = 0;
+    size_t lostPieceCount = 0;
+    size_t thinLostVertexCount = 0;
+    size_t openEdgeLostVertexCount = 0;
+    size_t otherLostVertexCount = 0;
     size_t collapsedIslandCount = 0;
     size_t smallestCollapsedIslandFaces = 0;
     size_t smallestCollapsedIslandTargetQuads = 0;

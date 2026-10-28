@@ -5,7 +5,7 @@
     ab.py run REF [--set corpus] [--targets 2000,10000] [--resolutions fast,quality]
                   [--only a,b | --skip a,b] [--replicates N] [--cli-arg=--adaptivity=0 ...]
                   [--cmake-arg=-DX=1 ...] [--jobs 2] [--no-metrics] [--remeasure]
-                  [--timeout S] [--work DIR]
+                  [--timeout S] [--metrics-timeout S] [--work DIR]
     ab.py compare A B [--set corpus] [--per-run] [--work DIR]
     ab.py build REF [--cmake-arg=... ...] [--work DIR]
     ab.py lane BASE HEAD [--sets closed,corpus,...] [--replicates 1] [--jobs 2] [--work DIR]
@@ -187,17 +187,26 @@ def metrics_tool():
     return _TOOL[0]
 
 
-def prepare_input(src, work):
-    """Fills metrics.py's input cache once per mesh, so runs started together don't each fill it."""
-    subprocess.call([sys.executable, METRICS, "--input", src, "--input-cache", metrics_cache(work), "--prepare-input"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def prepare_input(src, work, timeout=None):
+    """Fills metrics.py's input cache once per mesh, so runs started together don't each fill it. Past
+    `timeout` it is given up; the runs' own measurement then fills the cache under their limit."""
+    try:
+        subprocess.call([sys.executable, METRICS, "--input", src, "--input-cache", metrics_cache(work),
+                         "--prepare-input"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
 
 
-def measure(rec, d, mesh, target, src, work):
+def measure(rec, d, mesh, target, src, work, timeout=None):
     """metrics.json of one run into rec["metrics"]. A failure (seen: out of memory with several large
     inputs measured at once) is tried once more; if that fails too, rec["metrics"] is None and
     rec["metrics_error"] holds the end of metrics.py's error output, and the next `run` measures it
-    again instead of reusing the record without metrics."""
+    again instead of reusing the record without metrics.
+
+    metrics.py is killed after `timeout` seconds (seen: ext_rubber_plant at 3k ran for hours in
+    input_folds, research/measurement-audit-2026-10-27.md §11). A timeout is not tried again: the
+    record keeps metrics None, the error and rec["metrics_timeout"], and only a later `run` with a
+    longer limit (or none) measures it again."""
     mj = os.path.join(d, "metrics.json")
     cmd = [sys.executable, METRICS, "--input", src, "--output", os.path.join(d, "out.obj"),
            "--target-quads", str(target), "--samples", "100000", "--json", mj, "--input-cache", metrics_cache(work)]
@@ -212,10 +221,18 @@ def measure(rec, d, mesh, target, src, work):
     if "--sharp-edge" in args[:-1]:  # A1theta and bent quads at the run's own sharp-edge angle
         cmd += ["--sharp-degrees", args[args.index("--sharp-edge") + 1]]
     error = ""
+    rec.pop("metrics_timeout", None)
     for _ in range(2):
         if os.path.exists(mj):  # a failed --remeasure must not leave the old metrics in place
             os.remove(mj)
-        p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        t0 = time.time()
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=timeout)
+        except subprocess.TimeoutExpired:  # subprocess.run has killed it
+            error = f"timeout: metrics.py killed after {timeout:g} s"
+            rec["metrics_timeout"] = timeout
+            break
+        rec["metrics_seconds"] = round(time.time() - t0, 1)
         try:
             rec["metrics"] = json.load(open(mj))
             rec["metrics_tool"] = metrics_tool()
@@ -273,7 +290,15 @@ def call_measured(cmd, log, timeout):
         time.sleep(0.05)
 
 
-def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jobs, remeasure=False, timeout=None):
+def needs_metrics(rec, metrics_timeout):
+    """A finished run without metrics is measured by the next run that wants them, unless metrics.py
+    already timed out on it with at least this limit."""
+    limit = rec.get("metrics_timeout")
+    return rec.get("metrics") is None and not (limit and metrics_timeout and metrics_timeout <= limit)
+
+
+def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jobs, remeasure=False, timeout=None,
+            metrics_timeout=None):
     d = os.path.join(out, setname, mesh["id"], f"{res}-t{target}", f"u{k}")
     record_path = os.path.join(d, "record.json")
     src = os.path.join(work, "meshes", mesh["file"])
@@ -282,9 +307,9 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
         # A finished run is never repeated, but its metrics can be recomputed after metrics.py changed,
         # and are added to a run made with --no-metrics (e.g. by `lane`), or whose measurement failed,
         # once a run asks for them.
-        if (remeasure or (metrics and rec.get("metrics") is None)) and rec["rc"] == 0 \
+        if (remeasure or (metrics and needs_metrics(rec, metrics_timeout))) and rec["rc"] == 0 \
                 and os.path.exists(os.path.join(d, "out.obj")):
-            measure(rec, d, mesh, target, src, work)
+            measure(rec, d, mesh, target, src, work, metrics_timeout)
             with open(record_path, "w") as fp:
                 json.dump(rec, fp, indent=1)
         return rec
@@ -317,7 +342,7 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
     except (OSError, ValueError) as ex:
         rec["stage_error"] = str(ex)
     if metrics and rc == 0 and os.path.exists(os.path.join(d, "out.obj")):
-        measure(rec, d, mesh, target, src, work)
+        measure(rec, d, mesh, target, src, work, metrics_timeout)
     with open(record_path, "w") as fp:
         json.dump(rec, fp, indent=1)
     return rec
@@ -380,21 +405,24 @@ def cmd_run(a):
     targets = [int(t) for t in a.targets.split(",")] if a.targets else defaults["targets"]
     resolutions = a.resolutions.split(",") if a.resolutions else defaults["resolutions"]
     jobs = [(m, t, r, k) for m in meshes for t in targets for r in resolutions for k in range(a.replicates + 1)]
+    metrics_timeout = a.metrics_timeout or None  # 0: no limit
     print(f"{len(jobs)} runs into {out}", flush=True)
     with cf.ThreadPoolExecutor(max_workers=a.jobs) as pool:
         if not a.no_metrics:
             pending = {m["id"]: m for m, t, r, k in jobs
                        if a.remeasure or not has_metrics(os.path.join(out, a.set, m["id"], f"{r}-t{t}", f"u{k}"))}
-            list(pool.map(lambda m: prepare_input(os.path.join(a.work, "meshes", m["file"]), a.work), pending.values()))
+            list(pool.map(lambda m: prepare_input(os.path.join(a.work, "meshes", m["file"]), a.work, metrics_timeout),
+                          pending.values()))
         futs = [pool.submit(run_one, cli, m, a.set, t, r, k, out, a.cli_arg, a.work, not a.no_metrics,
-                            a.jobs, a.remeasure, a.timeout)
+                            a.jobs, a.remeasure, a.timeout, metrics_timeout)
                 for m, t, r, k in jobs]
         for f in futs:
             rec = f.result()
             o, d = rec.get("output") or {}, rec.get("diagnostics") or {}
             print(f"{rec['mesh']:20s} {rec['res']:7s} {rec['target']:6d} u{rec['replicate']} rc={rec['rc']} "
                   f"quads={o.get('quads')} non_quads={o.get('non_quads')} flips={d.get('uv_flipped_triangles')} "
-                  f"same_topology={topology_ok(rec)} t={rec.get('time')}", flush=True)
+                  f"same_topology={topology_ok(rec)} t={rec.get('time')}"
+                  + (f" metrics_error={rec['metrics_error'][:60]!r}" if rec.get("metrics_error") else ""), flush=True)
     print(out)
 
 
@@ -730,9 +758,12 @@ def cmd_lane(a):
     same, differ, failed = 0, [], []
     for setname in sets:
         for ref in (a.base, a.head):
-            ra = argparse.Namespace(ref=ref, set=setname, only=None, skip=None, targets=None, resolutions=None,
-                                    replicates=a.replicates, cli_arg=[], cmake_arg=[], jobs=a.jobs, no_metrics=True,
-                                    remeasure=False, timeout=a.timeout, work=a.work)
+            # Parsed like a `run` command line, so every run option keeps its default (a hand-built
+            # Namespace missed --metrics-timeout and broke lane, 2026-10-28).
+            ra = parser().parse_args(["run", ref, "--set", setname, "--replicates", str(a.replicates),
+                                      "--jobs", str(a.jobs), "--no-metrics"]
+                                     + (["--timeout", repr(a.timeout)] if a.timeout else []))
+            ra.work = a.work
             with open(os.devnull, "w") as quiet:
                 stdout, sys.stdout = sys.stdout, quiet
                 try:
@@ -757,7 +788,7 @@ def cmd_lane(a):
     return 0
 
 
-def main():
+def parser():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--work", default=os.environ.get("AR_WORK", os.path.expanduser("~/ar-work")))
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -783,6 +814,9 @@ def main():
     r.add_argument("--remeasure", action="store_true",
                    help="recompute metrics.json of finished runs (after metrics.py changed); outputs are kept")
     r.add_argument("--timeout", type=float, help="kill a run after this many seconds; recorded as rc \"timeout\"")
+    r.add_argument("--metrics-timeout", type=float, default=1800,
+                   help="kill metrics.py on one run after this many seconds (default 1800, 0 = no limit); "
+                        "recorded as metrics None with metrics_error")
     c = sub.add_parser("compare", help="compare run folder (or ref) A with B")
     c.add_argument("a")
     c.add_argument("b")
@@ -798,7 +832,11 @@ def main():
     ln.add_argument("--timeout", type=float, default=1200)
     for p in (b, r, c, ln):
         p.add_argument("--work", default=argparse.SUPPRESS)
-    a = ap.parse_args()
+    return ap
+
+
+def main():
+    a = parser().parse_args()
     a.work = os.path.abspath(a.work)
     if a.cmd == "build":
         print(build(a.ref, a.work, a.jobs, a.cmake_arg)[1])

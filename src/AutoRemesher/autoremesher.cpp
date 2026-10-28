@@ -20,6 +20,7 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *  SOFTWARE.
  */
+#include "inputsanitizer.h"
 #include "measuremesh.h"
 #include "qexextraction.h"
 #include <AutoRemesher/AutoRemesher>
@@ -38,9 +39,11 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <sstream>
 // Qt defines `emit` as a macro, which collides with TBB profiling.h's `void emit()`.
 // macOS `<mach/mach.h>` also defines `emit`. Undefine before including TBB headers.
@@ -124,6 +127,27 @@ namespace {
     const double maximumMarkedEdgeDensity = 0.25;
     const size_t maximumIslandRetries = 4;
     const double maximumRetriedIslandTriangleCount = 1024.0;
+
+    // A sliver is a strip-shaped island (area below 1e-3 of its bounding
+    // diagonal squared) whose mean width, area over diagonal, is under half
+    // the edge length T asks of it: there is no quad to put across it, and
+    // the isotropic remesh cannot shape it.  Such islands come from a bmesh
+    // bisect at zero threshold plus Mirror (area 3e-7 to 1e-3 of the diagonal
+    // squared); sized by area their T edge came out far shorter than the
+    // island and the run took minutes and gigabytes or crashed, sized by
+    // extent T still grew until the parametrization ran out of memory
+    // (research/input-sanitizer-2026-10-26.md).  They are left out and
+    // counted.  The width bound comes from lone flat ribbons of length 1 at
+    // 2,000 and 8,000 quads, Quality (width over T edge in brackets):
+    // 5e-4 (1.4, 2.8) and 1e-4 at 8,000 (1.25) remesh well, 5e-5 at 8,000
+    // (0.88) nearly; 1e-4 at 2,000 (0.62) gives a broken strip in a minute,
+    // 2e-5 at 8,000 (0.56) takes over ten; below 0.5 every ribbon came out
+    // broken, or not at all with 2-13 GB.  A sliver beside a larger body gets
+    // the small-island floor, so its T edge is long against its width (under
+    // 0.25 for the bisect slivers).  Ribbons between 0.5 and about 1 stay in
+    // and are the thin-part warning's business.
+    const double maximumSliverAreaPerSquaredDiagonal = 1e-3;
+    const double maximumSliverWidthPerEdge = 0.5;
 
     using SurfaceTopology = AutoRemesher::SurfaceTopology;
 
@@ -294,6 +318,30 @@ namespace {
 const double AutoRemesher::m_defaultSharpEdgeDegrees = 90;
 
 namespace {
+    // Renumbers the marked pairs after a step that changed only triangle
+    // corners (the seam weld, the pinch split): a marked edge takes the
+    // corners of the first triangle side that was it.  Pairs that were no
+    // edge stay as they are, for keepMarkedMeshEdges() to drop.
+    void followCornerChanges(const std::vector<std::vector<size_t>>& before,
+        const std::vector<std::vector<size_t>>& after,
+        std::vector<std::pair<size_t, size_t>>* marked)
+    {
+        std::map<std::pair<size_t, size_t>, std::pair<size_t, size_t>> renamed;
+        for (const auto& edge : *marked)
+            renamed.emplace(std::pair<size_t, size_t>(std::minmax(edge.first, edge.second)), edge);
+        std::set<std::pair<size_t, size_t>> done;
+        for (size_t t = 0; t < before.size(); ++t) {
+            for (size_t i = 0; i < 3; ++i) {
+                const std::pair<size_t, size_t> edge = std::minmax(before[t][i], before[t][(i + 1) % 3]);
+                auto found = renamed.find(edge);
+                if (found != renamed.end() && done.insert(edge).second)
+                    found->second = std::make_pair(after[t][i], after[t][(i + 1) % 3]);
+            }
+        }
+        marked->clear();
+        for (const auto& it : renamed)
+            marked->push_back(it.second);
+    }
     // Sorts the marked pairs low index first, drops repeats, and keeps those
     // that are an edge of the triangles.  Returns how many distinct pairs
     // were dropped.
@@ -1046,7 +1094,32 @@ bool AutoRemesher::remeshIslands()
     auto t_start = std::chrono::high_resolution_clock::now();
     const double cpuStart = processCpuSeconds();
 
+    // Open seams first: welding can leave zero-length edges and duplicate
+    // triangles, which the next two steps remove.  Pinched vertices are split
+    // last, once no merge can make new ones.
+    // The marked edges follow the weld and the split; a copy of the
+    // triangles is kept only when there are marks.
+    std::vector<std::vector<size_t>> trianglesBefore;
+    if (!m_markedEdges.empty())
+        trianglesBefore = m_triangles;
+    const SeamWeldStats seams = weldSeams(m_vertices, m_triangles,
+        seamWeldRelativeTolerance * usedBoundingDiagonal(m_vertices, m_triangles));
+    if (!m_markedEdges.empty() && 0 != seams.weldedVertices)
+        followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
     InputCleanupStats cleanup = cleanInput(m_vertices, m_triangles, inputCleanupTolerance(m_vertices));
+    cleanup.weldedEdges = seams.weldedEdges;
+    cleanup.weldedVertices = seams.weldedVertices;
+    cleanup.weldKeptParts = seams.keptParts;
+    // A duplicate triangle makes its edges non-manifold, so a mesh without
+    // such an edge skips the sort.
+    if (0 != seams.nonManifoldEdges)
+        cleanup.duplicateTriangles = removeDuplicateTriangles(m_triangles);
+    if (!m_markedEdges.empty())
+        trianglesBefore = m_triangles;
+    cleanup.splitVertices = splitPinchedVertices(m_vertices, m_triangles);
+    if (!m_markedEdges.empty() && 0 != cleanup.splitVertices)
+        followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
+    trianglesBefore = std::vector<std::vector<size_t>>();
     orientInput(m_vertices, m_triangles, &cleanup);
     // A marked edge between two vertices the cleanup merged is gone with it.
     const size_t markedEdgesGiven = m_markedEdges.size();
@@ -1115,6 +1188,10 @@ bool AutoRemesher::remeshIslands()
         long long inputTwiceHandles = -1;
         double voxelSize;
         double area;
+        // Of the island's bounding box.
+        double diagonal = 0.0;
+        // A sliver: not remeshed, comes out empty.
+        bool leftOut = false;
         double targetQuadCount;
         double scaling;
         double adaptivity;
@@ -1163,6 +1240,7 @@ bool AutoRemesher::remeshIslands()
             context.triangles.push_back(std::move(triangle));
         }
         context.area = calculateMeshArea(context.vertices, context.triangles);
+        context.diagonal = usedBoundingDiagonal(context.vertices, context.triangles);
         context.inputTopology = surfaceTopology(context.triangles, context.vertices.size());
         context.inputTwiceHandles = 0 == context.inputTopology.nonManifoldEdges
             ? twiceHandleCount(context.vertices.size(), context.triangles)
@@ -1243,6 +1321,23 @@ bool AutoRemesher::remeshIslands()
         context.targetQuadCount = 0.5 * floorTriangleCount;
         context.voxelSize = std::sqrt(context.area
             / (context.targetQuadCount * m_trianglesPerQuad * triangleAreaPerSquaredEdge));
+    }
+    size_t sliverIslands = 0;
+    m_leftOutVertices.clear();
+    for (size_t i = 0; i < islandContexes.size(); ++i) {
+        auto& context = islandContexes[i];
+        if (!(context.area < maximumSliverAreaPerSquaredDiagonal * context.diagonal * context.diagonal)
+            || !(context.area < maximumSliverWidthPerEdge * context.voxelSize * context.diagonal))
+            continue;
+        for (const auto& triangle : trianglesIslands[i])
+            m_leftOutVertices.insert(m_leftOutVertices.end(), triangle.begin(), triangle.end());
+        context.leftOut = true;
+        context.vertices.clear();
+        context.triangles.clear();
+        context.targetQuadCount = 0.0;
+        context.markedEdges.clear();
+        context.followMarks = false;
+        ++sliverIslands;
     }
     for (auto& context : islandContexes)
         applyMarkedEdgeDensity(context);
@@ -1489,8 +1584,10 @@ bool AutoRemesher::remeshIslands()
 
     tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
         [&](const tbb::blocked_range<size_t>& range) {
-            for (size_t i = range.begin(); i != range.end(); ++i)
-                resampleIsland(i, islandContexes[i], islandRuns[i], &decimationStats);
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                if (!islandContexes[i].leftOut)
+                    resampleIsland(i, islandContexes[i], islandRuns[i], &decimationStats);
+            }
         });
     auto t_isotropicEnd = std::chrono::high_resolution_clock::now();
     throwIfCancelled();
@@ -1529,7 +1626,7 @@ bool AutoRemesher::remeshIslands()
     std::vector<size_t> islandsToRetry;
     for (size_t i = 0; i < islandContexes.size(); ++i) {
         const auto& ctx = islandContexes[i];
-        if ((double)trianglesIslands[i].size() < minimumIslandTriangleCount
+        if (ctx.leftOut || (double)trianglesIslands[i].size() < minimumIslandTriangleCount
             || 2.0 * ctx.targetQuadCount > maximumRetriedIslandTriangleCount)
             continue;
         if (!isHealthyIslandResult(ctx.inputTopology, islandRuns[i].remeshedVertices, islandRuns[i].remeshedQuads))
@@ -1653,8 +1750,8 @@ bool AutoRemesher::remeshIslands()
 
     m_islandCount = islandRuns.size();
     m_islandsWithoutOutput = 0;
-    for (const auto& run : islandRuns) {
-        if (run.remeshedQuads.empty())
+    for (size_t i = 0; i < islandRuns.size(); ++i) {
+        if (islandRuns[i].remeshedQuads.empty() && !islandContexes[i].leftOut)
             ++m_islandsWithoutOutput;
     }
 
@@ -1916,6 +2013,12 @@ bool AutoRemesher::remeshIslands()
         run.set("input_zero_area_triangles", (double)cleanup.zeroAreaTriangles);
         run.set("input_flipped_triangles", (double)cleanup.flippedTriangles);
         run.set("input_non_orientable_pieces", (double)cleanup.nonOrientablePieces);
+        run.set("input_welded_edges", (double)cleanup.weldedEdges);
+        run.set("input_welded_vertices", (double)cleanup.weldedVertices);
+        run.set("input_weld_kept_parts", (double)cleanup.weldKeptParts);
+        run.set("input_duplicate_triangles", (double)cleanup.duplicateTriangles);
+        run.set("input_split_vertices", (double)cleanup.splitVertices);
+        run.set("input_sliver_islands", (double)sliverIslands);
         if (markedEdgesGiven > 0) {
             run.set("input_marked_edges", (double)markedEdgesGiven);
             run.set("input_marked_edges_ignored", (double)m_ignoredMarkedEdgeCount);
