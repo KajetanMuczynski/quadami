@@ -360,9 +360,6 @@ SurfaceProjector::SurfaceProjector(const std::vector<Vector3>* vertices,
     m_triangleBoxes.reset(new std::vector<AxisAlignedBoudingBox>(m_triangles->size()));
     std::vector<size_t> triangleIndices(m_triangles->size());
     AxisAlignedBoudingBox triangleGroupBox;
-    // (edge, triangle) for every triangle side
-    std::vector<std::pair<std::pair<size_t, size_t>, size_t>> edges;
-    edges.reserve(m_triangles->size() * 3);
     for (size_t i = 0; i < m_triangles->size(); ++i) {
         const auto& triangle = (*m_triangles)[i];
         m_triangleNormals[i] = Vector3::crossProduct(points[triangle[1]] - points[triangle[0]],
@@ -371,16 +368,25 @@ SurfaceProjector::SurfaceProjector(const std::vector<Vector3>* vertices,
         for (size_t k = 0; k < 3; ++k) {
             (*m_triangleBoxes)[i].update(toBoxVector(points[triangle[k]]));
             triangleGroupBox.update(toBoxVector(points[triangle[k]]));
-            const size_t a = triangle[k];
-            const size_t b = triangle[(k + 1) % 3];
-            edges.emplace_back(std::make_pair(std::min(a, b), std::max(a, b)), i);
         }
         (*m_triangleBoxes)[i].updateCenter();
         triangleIndices[i] = i;
     }
     triangleGroupBox.updateCenter();
-    m_triangleTree.reset(new AxisAlignedBoudingBoxTree(m_triangleBoxes.get(), triangleIndices, triangleGroupBox));
 
+    // The side list is sorted and dropped before the tree is built, so the
+    // two never take memory at the same time.
+    // (edge, triangle) for every triangle side
+    std::vector<std::pair<std::pair<size_t, size_t>, size_t>> edges;
+    edges.reserve(m_triangles->size() * 3);
+    for (size_t i = 0; i < m_triangles->size(); ++i) {
+        const auto& triangle = (*m_triangles)[i];
+        for (size_t k = 0; k < 3; ++k) {
+            const size_t a = triangle[k];
+            const size_t b = triangle[(k + 1) % 3];
+            edges.emplace_back(std::make_pair(std::min(a, b), std::max(a, b)), i);
+        }
+    }
     std::sort(edges.begin(), edges.end());
     for (size_t i = 0; i < edges.size();) {
         size_t j = i;
@@ -392,6 +398,9 @@ SurfaceProjector::SurfaceProjector(const std::vector<Vector3>* vertices,
             m_creases.edges.push_back(edges[i].first);
         i = j;
     }
+    std::vector<std::pair<std::pair<size_t, size_t>, size_t>>().swap(edges);
+
+    m_triangleTree.reset(new AxisAlignedBoudingBoxTree(m_triangleBoxes.get(), triangleIndices, triangleGroupBox));
     buildEdgeTree(&m_boundary);
     buildEdgeTree(&m_creases);
 }
