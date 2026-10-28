@@ -625,15 +625,21 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         column.enabled = _job is None
         for name in MAIN_PARAMETERS:
             column.prop(settings, name)
-        row = layout.row(align=True)
-        row.enabled = _job is None
-        row.label(text="Follow Marks")
-        row.prop(settings, "follow_marks")
+        # The label on its own line: beside the three toggles the sidebar
+        # cut it off with an ellipsis.
+        column = layout.column(align=True)
+        column.enabled = _job is None
+        column.label(text="Follow Marks")
+        column.row(align=True).prop(settings, "follow_marks")
         line = _mark_line(context.active_object, settings.follow_marks)
         if line:
-            row = layout.row()
-            row.enabled = _job is None
-            row.label(text=line[0], icon="ERROR" if line[1] else "NONE")
+            room = _text_room(context)
+            column = layout.column(align=True)
+            column.enabled = _job is None
+            text, flood = line
+            icon = room.icon if flood else 0
+            for i, part in enumerate(report_rows.wrap(text, room.panel - icon - room.pad, room.measure)):
+                column.label(text=part, icon=("ERROR" if 0 == i else "BLANK1") if flood else "NONE")
         header, body = layout.panel(ID + "_advanced", default_closed=True)
         header.label(text="Advanced")
         if body is not None:

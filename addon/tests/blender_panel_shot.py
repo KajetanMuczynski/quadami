@@ -26,11 +26,12 @@ Linux CI under Xvfb) after the zip is installed:
 
 (a file on the command line keeps the splash screen away from the sidebar).
 
-It remeshes a sphere with a thin horn and a one-triangle speck beside it at a
-low target, so the report has missing thin parts and a missing piece, shows the
-result in the sidebar, and saves the screen at UI scale 1 and 1.5 as
-panel-<scale>.png and the sidebar as sidebar-<scale>.png (ImageMagick; --ocr
-prints the sidebar's text, read by tesseract).
+It remeshes a sphere with a thin horn, a one-triangle speck beside it and its
+equator marked Sharp at a low target, so the report has missing thin parts, a
+missing piece and followed marks, shows the result in the sidebar, and saves
+the screen at UI scale 1 and 1.5 as panel-<scale>.png and the sidebar as
+sidebar-<scale>.png (ImageMagick; --ocr prints the sidebar's text, read by
+tesseract).
 The script quits Blender with exit status 1 on any error, a blank picture or,
 with --ocr, a line of our panel that Blender cut off with an ellipsis because
 it was too wide for the sidebar.  The pictures are for a person to look at.
@@ -87,6 +88,11 @@ def setup():
     bmesh.ops.delete(bm, geom=cap, context="FACES_ONLY")
     speck = [bm.verts.new(co) for co in ((0.0, 2.0, 0.0), (0.02, 2.0, 0.0), (0.0, 2.02, 0.0))]
     bm.faces.new(speck)
+    # The equator marked Sharp, so the panel shows the mark count and the
+    # Follow Marks hint too.
+    for edge in bm.edges:
+        if all(abs(v.co.z) < 1e-6 for v in edge.verts):
+            edge.smooth = False
     bm.to_mesh(mesh)
     bm.free()
     source = bpy.data.objects.new("Thin parts", mesh)
@@ -95,10 +101,12 @@ def setup():
     source.select_set(True)
     bpy.context.view_layer.update()
 
-    positions, triangles, smooth, _marked, _flooded = addon._mesh_arrays(bpy.context, source)
     settings = getattr(bpy.context.scene, ID)
     settings.target_quads = 300
-    outcome = worker.remesh(worker.bundled_executable(), positions, triangles, settings.parameters())
+    positions, triangles, smooth, marked, _flooded = addon._mesh_arrays(bpy.context, source, settings.follow_marks)
+    assert len(marked) > 0
+    outcome = worker.remesh(worker.bundled_executable(), positions, triangles, settings.parameters(),
+                            marked_edges=marked)
     assert outcome.ok, (outcome.status, outcome.message, outcome.log)
     obj, final_report = addon._build_object(bpy.context, source, outcome, smooth)
     addon._show_result(bpy.context, obj, (source,))
