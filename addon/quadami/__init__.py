@@ -155,6 +155,23 @@ class RemeshSettings(bpy.types.PropertyGroup):
         default="laplacian",
         description="How the quads are evened out after they are found")
 
+    # Not a CLI parameter: which marks go to the remesher as marked edges
+    # (`l` lines of the input OBJ, RemeshRequest::featureEdges).
+    follow_marks: EnumProperty(
+        name="Follow Marks",
+        items=(
+            ("SHARP", "Sharp", "Edges marked Sharp"),
+            ("CREASE", "Crease", "Edges with a subdivision crease"),
+            ("SEAM", "Seam", "UV seams"),
+        ),
+        options={"ENUM_FLAG"},
+        # On (Kajetan, 2026-10-27). An FBX or OBJ import often marks nearly
+        # every edge Sharp (93 % of a sculpt's edges checked): such floods are
+        # not sent (_flooded_marks) and the panel shows the counts.
+        default={"SHARP"},
+        description="Marked edges the result keeps a row of edges along, whatever their "
+                    "angle (Sharp Edge decides only for unmarked edges)")
+
     # Not a remesh parameter: a choice next to Repair Folds and Re-run.
     flatten_spikes: BoolProperty(
         name="Also Flatten Needle Spikes", default=False,
@@ -187,9 +204,69 @@ ADVANCED_PARAMETERS = ("resolution", "anisotropy", "edge_scaling", "smooth_norma
 KEEP_OPTIONS = ("keep_attributes", "keep_uvs")
 
 
-def _mesh_arrays(context, obj):
+def _edge_vertices(mesh):
+    edges = np.empty(len(mesh.edges) * 2, dtype=np.int32)
+    mesh.edges.foreach_get("vertices", edges)
+    return edges.reshape(-1, 2)
+
+
+def _marked_pairs(mesh, kinds):
+    """Vertex pairs (E, 2) of the mesh's edges that carry any of the marks
+    in kinds (follow_marks values)."""
+    marks = transfer.marked_edges(mesh)
+    wanted = np.zeros(len(mesh.edges), dtype=bool)
+    for kind in kinds:
+        values = marks.get(kind.lower())
+        if values is not None:
+            wanted |= values > 0
+    return _edge_vertices(mesh)[wanted]
+
+
+MARK_NAMES = (("sharp", "Sharp"), ("crease", "Crease"), ("seam", "Seam"))
+
+
+def _mark_counts(mesh):
+    """{kind: number of edges} of mesh's marks, marked kinds only."""
+    marks = transfer.marked_edges(mesh) if len(mesh.edges) else {}
+    return {kind: int(np.count_nonzero(values > 0)) for kind, values in marks.items()}
+
+
+def _flooded_marks(mesh, counts, kinds):
+    """The followed kinds (follow_marks values) that mark most edges of a
+    mesh of over 1000 edges: an import's marks rather than edges to keep.
+    A cube or cylinder has most of its edges marked too, but few edges."""
+    edges = len(mesh.edges)
+    return [kind for kind in kinds if edges > 1000 and 2 * counts.get(kind.lower(), 0) > edges]
+
+
+def _flood_warning(flooded):
+    if not flooded:
+        return None
+    labels = dict((kind.upper(), label) for kind, label in MARK_NAMES)
+    return ("Follow Marks left out %s: more than half of the edges carry it, as after an FBX or OBJ "
+            "import, rather than the edges to keep" % " and ".join(labels[kind] for kind in flooded))
+
+
+def _mark_line(obj, kinds):
+    """Panel line with how many edges of obj carry each mark, and whether
+    a followed mark floods the mesh."""
+    if obj is None or obj.type != "MESH":
+        return None
+    counts = _mark_counts(obj.data)
+    if not counts:
+        return None
+    text = "Marked: " + ", ".join("%s %d" % (label, counts[kind]) for kind, label in MARK_NAMES if kind in counts)
+    flood = bool(_flooded_marks(obj.data, counts, kinds))
+    if flood:
+        text += " (most edges: not followed)"
+    return text, flood
+
+
+def _mesh_arrays(context, obj, follow_marks=()):
     """Vertex positions and triangles of the evaluated mesh, in object space,
-    and whether most of its faces are smooth shaded."""
+    whether most of its faces are smooth shaded, the vertex pairs of the
+    edges carrying the marks in follow_marks, and the marks left out because
+    they flood the mesh (_flooded_marks)."""
     depsgraph = context.evaluated_depsgraph_get()
     evaluated = obj.evaluated_get(depsgraph)
     mesh = evaluated.to_mesh()
@@ -201,10 +278,22 @@ def _mesh_arrays(context, obj):
         mesh.loop_triangles.foreach_get("vertices", triangles)
         smooth_faces = np.empty(len(mesh.polygons), dtype=bool)
         mesh.polygons.foreach_get("use_smooth", smooth_faces)
+        marked = np.empty((0, 2), dtype=np.int32)
+        flooded = []
+        if follow_marks:
+            # Smooth by Angle (Shade Auto Smooth) marks every edge above its
+            # angle Sharp on the evaluated mesh. Where the modifiers keep the
+            # edges as they are, the user's own marks are the original's.
+            base = obj.data
+            same = len(base.vertices) == len(mesh.vertices) and np.array_equal(
+                _edge_vertices(base), _edge_vertices(mesh))
+            source = base if same else mesh
+            flooded = _flooded_marks(source, _mark_counts(source), follow_marks)
+            marked = _marked_pairs(source, [kind for kind in follow_marks if kind not in flooded])
     finally:
         evaluated.to_mesh_clear()
     smooth = bool(smooth_faces.size) and 2 * np.count_nonzero(smooth_faces) >= smooth_faces.size
-    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth
+    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth, marked, flooded
 
 
 def _source(obj):
@@ -371,16 +460,17 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         elif self.repair_folds:
             self.report({"ERROR"}, "The original object is gone; select it and remesh again")
             return {"CANCELLED"}
-        positions, triangles, self._smooth = _mesh_arrays(context, obj)
+        settings = _settings(context)
+        positions, triangles, self._smooth, marked, flooded = _mesh_arrays(context, obj, settings.follow_marks)
         if len(triangles) == 0:
             self.report({"ERROR"}, "The mesh has no faces")
             return {"CANCELLED"}
-        parameters = _settings(context).parameters()
+        parameters = settings.parameters()
         if self.repair_folds:
             parameters["repair_folds"] = True
             if self.flatten_spikes:
                 parameters["flatten_spikes"] = True
-        job = worker.RemeshJob(executable, positions, triangles, parameters)
+        job = worker.RemeshJob(executable, positions, triangles, parameters, marked)
         try:
             job.start()
         except (OSError, ValueError) as error:
@@ -391,7 +481,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         _cancel_from_panel = False
         _last_status, _last_message, _last_report = "running", "", None
         self._source_name = obj.name
-        self._warnings = [w for w in (_uneven_scale_warning(obj),) if w]
+        self._warnings = [w for w in (_uneven_scale_warning(obj), _flood_warning(flooded)) if w]
         self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
         self._status_text(context)
@@ -535,6 +625,21 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         column.enabled = _job is None
         for name in MAIN_PARAMETERS:
             column.prop(settings, name)
+        # The label on its own line: beside the three toggles the sidebar
+        # cut it off with an ellipsis.
+        column = layout.column(align=True)
+        column.enabled = _job is None
+        column.label(text="Follow Marks")
+        column.row(align=True).prop(settings, "follow_marks")
+        line = _mark_line(context.active_object, settings.follow_marks)
+        if line:
+            room = _text_room(context)
+            column = layout.column(align=True)
+            column.enabled = _job is None
+            text, flood = line
+            icon = room.icon if flood else 0
+            for i, part in enumerate(report_rows.wrap(text, room.panel - icon - room.pad, room.measure)):
+                column.label(text=part, icon=("ERROR" if 0 == i else "BLANK1") if flood else "NONE")
         header, body = layout.panel(ID + "_advanced", default_closed=True)
         header.label(text="Advanced")
         if body is not None:

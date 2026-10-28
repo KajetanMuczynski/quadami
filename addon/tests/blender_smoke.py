@@ -101,10 +101,25 @@ try:
     mesh.attributes.new("crease_edge", "FLOAT", "EDGE").data.foreach_set("value", [0.5 * e for e in equator])
     bpy.context.view_layer.update()
 
-    positions, triangles, smooth = addon._mesh_arrays(bpy.context, source)
+    positions, triangles, smooth, marked, flooded = addon._mesh_arrays(bpy.context, source, {"SHARP"})
     assert positions.shape[1] == 3 and triangles.shape[1] == 3, (positions.shape, triangles.shape)
     assert len(triangles) == 128 * 2 + 128 * 62 * 2, len(triangles)
     assert smooth
+    # Follow Marks: the equator's 128 edges, as vertex pairs; none when off.
+    assert marked.shape == (128, 2) and abs(positions[marked.ravel(), 2]).max() < 1e-4, marked.shape
+    assert len(addon._mesh_arrays(bpy.context, source)[3]) == 0 and not flooded
+    # Sharp by default; the panel counts the marks (a small share of the edges: no flood).
+    assert getattr(bpy.context.scene, names.ID).follow_marks == {"SHARP"}
+    line = addon._mark_line(source, {"SHARP"})
+    assert line and "Sharp 128" in line[0] and "Seam 128" in line[0] and not line[1], line
+    # Every edge marked Sharp on a mesh of over 1000 edges: left out, with a warning.
+    flood = bpy.data.meshes.new("Flood")
+    flood.from_pydata([(x, y, 0.0) for y in range(30) for x in range(30)], [],
+                      [(30 * y + x, 30 * y + x + 1, 30 * y + x + 31, 30 * y + x + 30) for y in range(29) for x in range(29)])
+    flood.attributes.new("sharp_edge", "BOOLEAN", "EDGE").data.foreach_set("value", [True] * len(flood.edges))
+    assert addon._flooded_marks(flood, addon._mark_counts(flood), {"SHARP"}) == ["SHARP"], len(flood.edges)
+    assert addon._flood_warning(["SHARP"]).startswith("Follow Marks left out Sharp")
+    bpy.data.meshes.remove(flood)
 
     # Uneven scale warns (shear from a rotated parent counts too); even scale does not.
     assert addon._uneven_scale_warning(source) is None
@@ -127,8 +142,10 @@ try:
     if installed:
         # package.py copies the bundled program's id, so the panel shows no mismatch.
         assert build != "dev" and worker.worker_build_id(executable) == build, build
-    outcome = worker.remesh(executable, positions, triangles, settings.parameters())
+    outcome = worker.remesh(executable, positions, triangles, settings.parameters(), marked_edges=marked)
     assert outcome.ok, (outcome.status, outcome.message, outcome.log)
+    assert outcome.report["input"]["feature_edges"] == 128, outcome.report["input"]
+    assert outcome.report["input"]["ignored_feature_edges"] == 0, outcome.report["input"]
 
     obj, final_report = addon._build_object(bpy.context, source, outcome, smooth, ["test warning"])
     addon._show_result(bpy.context, obj, (source,))

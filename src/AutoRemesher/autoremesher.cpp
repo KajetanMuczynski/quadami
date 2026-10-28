@@ -21,6 +21,7 @@
  *  SOFTWARE.
  */
 #include "inputsanitizer.h"
+#include "measuremesh.h"
 #include "qexextraction.h"
 #include <AutoRemesher/AutoRemesher>
 #include <AutoRemesher/FeatureEdges>
@@ -38,9 +39,11 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <sstream>
 // Qt defines `emit` as a macro, which collides with TBB profiling.h's `void emit()`.
 // macOS `<mach/mach.h>` also defines `emit`. Undefine before including TBB headers.
@@ -119,6 +122,9 @@ namespace {
     // minimum above, so that a triangle soup is not retried triangle by
     // triangle.
     const double islandRetryGrowth = 1.25;
+    // Marked length per quad-edge length above which an island's marks are
+    // not used (applyMarkedEdgeDensity).
+    const double maximumMarkedEdgeDensity = 0.25;
     const size_t maximumIslandRetries = 4;
     const double maximumRetriedIslandTriangleCount = 1024.0;
 
@@ -310,6 +316,86 @@ namespace {
 }
 
 const double AutoRemesher::m_defaultSharpEdgeDegrees = 90;
+
+namespace {
+    // Renumbers the marked pairs after a step that changed only triangle
+    // corners (the seam weld, the pinch split): a marked edge takes the
+    // corners of the first triangle side that was it.  Pairs that were no
+    // edge stay as they are, for keepMarkedMeshEdges() to drop.
+    void followCornerChanges(const std::vector<std::vector<size_t>>& before,
+        const std::vector<std::vector<size_t>>& after,
+        std::vector<std::pair<size_t, size_t>>* marked)
+    {
+        std::map<std::pair<size_t, size_t>, std::pair<size_t, size_t>> renamed;
+        for (const auto& edge : *marked)
+            renamed.emplace(std::pair<size_t, size_t>(std::minmax(edge.first, edge.second)), edge);
+        std::set<std::pair<size_t, size_t>> done;
+        for (size_t t = 0; t < before.size(); ++t) {
+            for (size_t i = 0; i < 3; ++i) {
+                const std::pair<size_t, size_t> edge = std::minmax(before[t][i], before[t][(i + 1) % 3]);
+                auto found = renamed.find(edge);
+                if (found != renamed.end() && done.insert(edge).second)
+                    found->second = std::make_pair(after[t][i], after[t][(i + 1) % 3]);
+            }
+        }
+        marked->clear();
+        for (const auto& it : renamed)
+            marked->push_back(it.second);
+    }
+    // Sorts the marked pairs low index first, drops repeats, and keeps those
+    // that are an edge of the triangles.  Returns how many distinct pairs
+    // were dropped.
+    size_t keepMarkedMeshEdges(const std::vector<std::vector<size_t>>& triangles,
+        std::vector<std::pair<size_t, size_t>>* marked)
+    {
+        for (auto& edge : *marked) {
+            if (edge.first > edge.second)
+                std::swap(edge.first, edge.second);
+        }
+        std::sort(marked->begin(), marked->end());
+        marked->erase(std::unique(marked->begin(), marked->end()), marked->end());
+        std::vector<std::pair<size_t, size_t>> meshEdges;
+        meshEdges.reserve(triangles.size() * 3);
+        for (const auto& triangle : triangles) {
+            for (size_t i = 0; i < 3; ++i) {
+                const size_t a = triangle[i], b = triangle[(i + 1) % 3];
+                meshEdges.emplace_back(std::min(a, b), std::max(a, b));
+            }
+        }
+        std::sort(meshEdges.begin(), meshEdges.end());
+        const size_t given = marked->size();
+        marked->erase(std::remove_if(marked->begin(), marked->end(),
+                          [&](const std::pair<size_t, size_t>& edge) {
+                              return !std::binary_search(meshEdges.begin(), meshEdges.end(), edge);
+                          }),
+            marked->end());
+        return given - marked->size();
+    }
+
+    // The marked edges (sorted, as keepMarkedMeshEdges leaves them) of one
+    // island, in the island's own vertex numbering.
+    std::vector<std::pair<size_t, size_t>> islandMarkedEdges(const std::vector<std::vector<size_t>>& islandTriangles,
+        const std::unordered_map<size_t, size_t>& islandIndexOfVertex,
+        const std::vector<std::pair<size_t, size_t>>& marked)
+    {
+        std::vector<std::pair<size_t, size_t>> edges;
+        if (marked.empty())
+            return edges;
+        for (const auto& triangle : islandTriangles) {
+            for (size_t i = 0; i < 3; ++i) {
+                const std::pair<size_t, size_t> edge(std::min(triangle[i], triangle[(i + 1) % 3]),
+                    std::max(triangle[i], triangle[(i + 1) % 3]));
+                if (!std::binary_search(marked.begin(), marked.end(), edge))
+                    continue;
+                const size_t a = islandIndexOfVertex.at(edge.first), b = islandIndexOfVertex.at(edge.second);
+                edges.emplace_back(std::min(a, b), std::max(a, b));
+            }
+        }
+        std::sort(edges.begin(), edges.end());
+        edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+        return edges;
+    }
+}
 
 double AutoRemesher::calculateAverageEdgeLength(const std::vector<Vector3>& vertices,
     const std::vector<std::vector<size_t>>& faces)
@@ -682,7 +768,6 @@ bool AutoRemesher::decimateIfTooDense(std::vector<Vector3>& vertices,
         stats->trianglesBefore += triangles.size();
         stats->trianglesAfter += decimatedTriangles.size();
     }
-
 #if AUTO_REMESHER_DEBUG
     std::cerr << "Island[" << islandIndex << "]: Decimated " << triangles.size()
               << " triangles to " << decimatedTriangles.size()
@@ -1012,8 +1097,15 @@ bool AutoRemesher::remeshIslands()
     // Open seams first: welding can leave zero-length edges and duplicate
     // triangles, which the next two steps remove.  Pinched vertices are split
     // last, once no merge can make new ones.
+    // The marked edges follow the weld and the split; a copy of the
+    // triangles is kept only when there are marks.
+    std::vector<std::vector<size_t>> trianglesBefore;
+    if (!m_markedEdges.empty())
+        trianglesBefore = m_triangles;
     const SeamWeldStats seams = weldSeams(m_vertices, m_triangles,
         seamWeldRelativeTolerance * usedBoundingDiagonal(m_vertices, m_triangles));
+    if (!m_markedEdges.empty() && 0 != seams.weldedVertices)
+        followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
     InputCleanupStats cleanup = cleanInput(m_vertices, m_triangles, inputCleanupTolerance(m_vertices));
     cleanup.weldedEdges = seams.weldedEdges;
     cleanup.weldedVertices = seams.weldedVertices;
@@ -1022,8 +1114,16 @@ bool AutoRemesher::remeshIslands()
     // such an edge skips the sort.
     if (0 != seams.nonManifoldEdges)
         cleanup.duplicateTriangles = removeDuplicateTriangles(m_triangles);
+    if (!m_markedEdges.empty())
+        trianglesBefore = m_triangles;
     cleanup.splitVertices = splitPinchedVertices(m_vertices, m_triangles);
+    if (!m_markedEdges.empty() && 0 != cleanup.splitVertices)
+        followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
+    trianglesBefore = std::vector<std::vector<size_t>>();
     orientInput(m_vertices, m_triangles, &cleanup);
+    // A marked edge between two vertices the cleanup merged is gone with it.
+    const size_t markedEdgesGiven = m_markedEdges.size();
+    m_ignoredMarkedEdgeCount = m_markedEdges.empty() ? 0 : keepMarkedMeshEdges(m_triangles, &m_markedEdges);
     if (m_triangles.empty()) {
         std::cerr << "Input mesh has only degenerate triangles" << std::endl;
         if (nullptr != m_progressHandler)
@@ -1103,6 +1203,18 @@ bool AutoRemesher::remeshIslands()
         FeatureEdgeSet featureEdges;
         // Input vertex of each island vertex.
         std::vector<size_t> inputVertices;
+        // The user's marked edges in the island's input vertex numbering
+        // (they join featureEdges as hard edges, islandFeatureEdges), and
+        // how many hard edges T has.
+        std::vector<std::pair<size_t, size_t>> markedEdges;
+        size_t inputMarkedEdgeCount = 0;
+        size_t isotropicMarkedEdgeCount = 0;
+        // Cleared for the run without marks (marked-edge fallback below).
+        bool followMarks = true;
+        // Marked length over the length of all edges of the planned quads,
+        // 2 area / h for a quad width h (applyMarkedEdgeDensity).
+        double markedEdgeDensity = 0.0;
+        bool markedEdgesTooDense = false;
     };
 
     // Copies one island out of the input, with its own vertex numbering.
@@ -1134,6 +1246,8 @@ bool AutoRemesher::remeshIslands()
             ? twiceHandleCount(context.vertices.size(), context.triangles)
             : -1;
         context.inputBoundary = QuadExtractor::findBoundary(context.vertices, context.triangles);
+        context.markedEdges = islandMarkedEdges(island, oldToNewVertexMap, m_markedEdges);
+        context.inputMarkedEdgeCount = context.markedEdges.size();
 
         context.scaling = m_scaling;
         context.voxelSize = m_voxelSize;
@@ -1142,6 +1256,38 @@ bool AutoRemesher::remeshIslands()
         context.sharpEdgeDegrees = m_sharpEdgeDegrees;
         context.smoothNormalDegrees = m_smoothNormalDegrees;
         context.featureEdges = classifySharpEdges(context.vertices, context.triangles, context.sharpEdgeDegrees);
+    };
+
+    // Marks the quads cannot follow as a whole: an FBX import marks most edges
+    // Sharp, and following them all costs minutes and folds the result.
+    // Above a quarter of the quad edges the island's marks are not used.
+    const auto applyMarkedEdgeDensity = [](IslandContext& context) {
+        if (context.markedEdges.empty() || context.targetQuadCount <= 0.0 || context.area <= 0.0)
+            return;
+        double length = 0.0;
+        for (const auto& edge : context.markedEdges)
+            length += (context.vertices[edge.first] - context.vertices[edge.second]).length();
+        const double quadWidth = std::sqrt(context.area / context.targetQuadCount);
+        context.markedEdgeDensity = length * quadWidth / (2.0 * context.area);
+        if (context.markedEdgeDensity > maximumMarkedEdgeDensity) {
+            context.markedEdges.clear();
+            context.followMarks = false;
+            context.markedEdgesTooDense = true;
+        }
+    };
+
+    // The island's sharp edges with its followed marks as hard edges
+    // (FeatureEdgeSet::Hard), in its input vertex numbering.
+    const auto islandFeatureEdges = [](const IslandContext& context) {
+        FeatureEdgeSet set = context.featureEdges;
+        if (!context.followMarks || context.markedEdges.empty())
+            return set;
+        for (const auto& edge : context.markedEdges) {
+            set.edges.push_back(edge);
+            set.flags.push_back(FeatureEdgeSet::Hard);
+        }
+        set.normalize();
+        return set;
     };
 
     if (nullptr != m_progressHandler)
@@ -1189,8 +1335,12 @@ bool AutoRemesher::remeshIslands()
         context.vertices.clear();
         context.triangles.clear();
         context.targetQuadCount = 0.0;
+        context.markedEdges.clear();
+        context.followMarks = false;
         ++sliverIslands;
     }
+    for (auto& context : islandContexes)
+        applyMarkedEdgeDensity(context);
     auto t_buildEnd = std::chrono::high_resolution_clock::now();
     throwIfCancelled();
     if (nullptr != m_progressHandler)
@@ -1252,7 +1402,7 @@ bool AutoRemesher::remeshIslands()
 
         const CreaseLengths inputCreases = creaseLengths(ctx.vertices, ctx.triangles, ctx.sharpEdgeDegrees);
         auto t0 = std::chrono::high_resolution_clock::now();
-        run.isotropicFeatureEdges = ctx.featureEdges;
+        run.isotropicFeatureEdges = islandFeatureEdges(ctx);
         SharpEdgeStats sharpEdgeStats;
         resample(ctx.vertices, ctx.triangles, ctx.inputTopology, ctx.voxelSize, ctx.adaptivity,
             ctx.sharpEdgeDegrees, run.isotropicFeatureEdges, &sharpEdgeStats, ctx.smoothNormalDegrees, islandIndex, stats,
@@ -1293,6 +1443,8 @@ bool AutoRemesher::remeshIslands()
         run.features.set("set_t_classified", (double)sharpEdgeStats.classified);
         run.features.set("set_t_edges", (double)run.isotropicFeatureEdges.size());
         run.features.set("set_t_length_rel_h", featureEdgeLength(run.isotropicFeatureEdges, ctx.vertices) / h);
+        ctx.isotropicMarkedEdgeCount = (size_t)std::count_if(run.isotropicFeatureEdges.flags.begin(),
+            run.isotropicFeatureEdges.flags.end(), [](unsigned char flags) { return 0 != (flags & FeatureEdgeSet::Hard); });
 
         updateProgress(islandIndex, islandResampleEnd);
     };
@@ -1392,9 +1544,10 @@ bool AutoRemesher::remeshIslands()
                 // island's own input faces (TODO 2.8).
                 const auto projectStart = std::chrono::high_resolution_clock::now();
                 FeatureEdgeSet creases;
-                for (const auto& edge : ctx.featureEdges.edges)
+                const FeatureEdgeSet islandCreases = islandFeatureEdges(ctx);
+                for (const auto& edge : islandCreases.edges)
                     creases.edges.emplace_back(ctx.inputVertices[edge.first], ctx.inputVertices[edge.second]);
-                creases.flags = ctx.featureEdges.flags;
+                creases.flags = islandCreases.flags;
                 creases.normalize();
                 SurfaceProjector projector(&m_vertices, &trianglesIslands[islandIndex], &creases);
                 const auto projection = projector.project(&run.remeshedVertices, run.remeshedQuads);
@@ -1497,6 +1650,7 @@ bool AutoRemesher::remeshIslands()
                     buildIslandContext(i, ctx);
                     ctx.voxelSize = voxelSize;
                     ctx.targetQuadCount = targetQuadCount;
+                    applyMarkedEdgeDensity(ctx);
                     IslandRun run;
                     resampleIsland(i, ctx, run, &retryDecimationStats);
                     parameterizeIsland(i, ctx, run);
@@ -1522,6 +1676,76 @@ bool AutoRemesher::remeshIslands()
                 }
             }
         });
+
+    // Marked edges the quads cannot follow (a mark across the field that
+    // creases set, many short lines that cross; TODO 5.2) fold the result.
+    // Such an island is run again without its marks.  A run is faithful if
+    // it is healthy, keeps the island's Euler characteristic (no hole closed
+    // or cut) and has at least half the planned quads.  A faithful run beats
+    // one that is not; between two alike the one with fewer folded faces and
+    // non-quads is kept, and a tie, or 2 faces more, keeps the marks.  Only
+    // islands with marks and such a defect pay for the second run.
+    std::vector<char> markedEdgesDropped(islandContexes.size(), 0);
+    if (!m_markedEdges.empty()) {
+        const auto badFaces = [](const IslandRun& run, bool* faithful, const IslandContext& ctx) {
+            RemeshMesh mesh;
+            for (const auto& v : run.remeshedVertices) {
+                mesh.positions.push_back(v.x());
+                mesh.positions.push_back(v.y());
+                mesh.positions.push_back(v.z());
+            }
+            for (const auto& face : run.remeshedQuads) {
+                mesh.faceSizes.push_back((uint32_t)face.size());
+                for (size_t v : face)
+                    mesh.faceIndices.push_back((uint32_t)v);
+            }
+            QualityReport report;
+            measureMesh(mesh, &report);
+            *faithful = isHealthyIslandResult(ctx.inputTopology, run.remeshedVertices, run.remeshedQuads)
+                && surfaceTopology(run.remeshedQuads, run.remeshedVertices.size()).eulerCharacteristic == ctx.inputTopology.eulerCharacteristic
+                && (double)report.quadCount >= 0.5 * ctx.targetQuadCount;
+            return report.foldedFaceCount + report.nonQuadCount + report.degenerateFaceCount;
+        };
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t i = range.begin(); i != range.end(); ++i) {
+                    if (!islandContexes[i].followMarks || islandContexes[i].markedEdges.empty())
+                        continue;
+                    bool markedFaithful = false;
+                    const size_t markedBad = badFaces(islandRuns[i], &markedFaithful, islandContexes[i]);
+                    if (markedFaithful && 0 == markedBad)
+                        continue;
+                    IslandContext ctx;
+                    buildIslandContext(i, ctx);
+                    ctx.voxelSize = islandContexes[i].voxelSize;
+                    ctx.targetQuadCount = islandContexes[i].targetQuadCount;
+                    ctx.markedEdges.clear();
+                    ctx.followMarks = false;
+                    IslandRun run;
+                    resampleIsland(i, ctx, run, &retryDecimationStats);
+                    parameterizeIsland(i, ctx, run);
+                    bool plainFaithful = false;
+                    const size_t plainBad = badFaces(run, &plainFaithful, ctx);
+                    const bool drop = (plainFaithful && !markedFaithful) || (plainFaithful == markedFaithful && markedBad > plainBad + 2);
+                    IslandRun& dropped = drop ? islandRuns[i] : run;
+                    IslandRun& kept = drop ? run : islandRuns[i];
+                    for (auto& record : dropped.diagnostics) {
+                        if (record.stage == "extractor")
+                            kept.diagnostics.push_back(std::move(record.label("superseded", "yes")));
+                    }
+                    if (drop) {
+                        ctx.inputMarkedEdgeCount = islandContexes[i].inputMarkedEdgeCount;
+                        islandContexes[i] = std::move(ctx);
+                        islandRuns[i] = std::move(run);
+                        markedEdgesDropped[i] = 1;
+                    }
+                }
+            });
+    }
+    m_markedEdgesDroppedIslandCount = (size_t)std::count(markedEdgesDropped.begin(), markedEdgesDropped.end(), 1);
+    m_markedEdgesTooDenseIslandCount = 0;
+    for (const auto& ctx : islandContexes)
+        m_markedEdgesTooDenseIslandCount += ctx.markedEdgesTooDense ? 1 : 0;
     auto t_parallelEnd = std::chrono::high_resolution_clock::now();
 
     m_islandCount = islandRuns.size();
@@ -1795,6 +2019,10 @@ bool AutoRemesher::remeshIslands()
         run.set("input_duplicate_triangles", (double)cleanup.duplicateTriangles);
         run.set("input_split_vertices", (double)cleanup.splitVertices);
         run.set("input_sliver_islands", (double)sliverIslands);
+        if (markedEdgesGiven > 0) {
+            run.set("input_marked_edges", (double)markedEdgesGiven);
+            run.set("input_marked_edges_ignored", (double)m_ignoredMarkedEdgeCount);
+        }
         {
             run.set("input_fold_repair", m_repairInputFolds ? 1.0 : 0.0);
             run.set("input_folded_triangles", (double)folds.foldedTriangles);
@@ -1888,6 +2116,13 @@ bool AutoRemesher::remeshIslands()
             record.set("output_quads", (double)quads);
             record.set("thin_area_share", thinParts[i].area > 0.0 ? thinParts[i].thinArea / thinParts[i].area : 0.0);
             record.set("thin_spots", (double)thinParts[i].spots);
+            if (!m_markedEdges.empty()) {
+                record.set("marked_edges", (double)islandContexes[i].inputMarkedEdgeCount);
+                record.set("isotropic_marked_edges", (double)islandContexes[i].isotropicMarkedEdgeCount);
+                record.set("marked_edges_dropped", (double)markedEdgesDropped[i]);
+                record.set("marked_edge_density", islandContexes[i].markedEdgeDensity);
+                record.set("marked_edges_too_dense", islandContexes[i].markedEdgesTooDense ? 1.0 : 0.0);
+            }
             m_diagnostics.push_back(std::move(record));
         }
         for (size_t i = 0; i < islandRuns.size(); ++i) {

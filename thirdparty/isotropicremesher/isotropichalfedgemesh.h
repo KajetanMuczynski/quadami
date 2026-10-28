@@ -32,6 +32,10 @@
 class IsotropicHalfedgeMesh
 {
 public:
+    // Bit of Halfedge::featureFlags for a hard (user-marked) edge; the same
+    // bit as AutoRemesher::FeatureEdgeSet::Hard.
+    static const unsigned char kHardFeature = 0x1;
+
     struct Halfedge;
       
     struct Vertex
@@ -49,6 +53,9 @@ public:
         size_t debugIndex = 0;
         size_t outputIndex = 0;
         bool featured = false;
+        // On a hard feature edge: never moved or removed except by a
+        // collapse along the hard line.
+        bool marked = false;
         double targetEdgeLength = 0.0; // 0 = use global default in split/collapse
         Vertex *_allocLink = nullptr;
     };
@@ -72,9 +79,15 @@ public:
         Halfedge *previousHalfedge = nullptr;
         Halfedge *oppositeHalfedge = nullptr;
         // A feature edge (both halfedges carry it), from the caller's set:
-        // split halves inherit it, a flip clears it.
+        // split halves inherit it, a flip clears it unless it is hard.
         bool feature = false;
         unsigned char featureFlags = 0;
+        // A hard (user-marked) feature edge: never flipped, split on its
+        // line, kept by collapses (collapseEdge).
+        bool hard() const
+        {
+            return feature && 0 != (featureFlags & kHardFeature);
+        }
         size_t debugIndex = 0;
         Halfedge *_allocLink = nullptr;
     };
@@ -85,7 +98,11 @@ public:
     
     double averageEdgeLength();
     void breakEdge(Halfedge *halfedge);
-    bool collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared);
+    // collapseTo: where the kept vertex goes; nullptr = the edge's midpoint.
+    bool collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared, const Vector3 *collapseTo=nullptr);
+    // On exactly two hard edges that meet at 150 degrees or more: a point
+    // of a hard line that a collapse along the line may remove.
+    bool isStraightHardChainVertex(Vertex *vertex);
     bool flipEdge(Halfedge *halfedge);
     void relaxVertex(Vertex *vertex);
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);
