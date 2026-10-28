@@ -122,6 +122,14 @@ namespace {
     const size_t maximumIslandRetries = 4;
     const double maximumRetriedIslandTriangleCount = 1024.0;
 
+    // libQEx fails on some rounded maps, and the island then falls back to our
+    // own tracing (TODO 6.1b), which leaves n-gons.  Which maps fail does not
+    // follow the count (the dragon's welded body failed at 4 of 10 counts
+    // within 3 % of each other), so such an island, of any size, is solved
+    // again at a count this far off, once each way, and the first attempt
+    // libQEx extracts is kept.  Only failing islands pay for it.
+    const double qexRetryGrowth[] = { 1.02, 1.0 / 1.02 };
+
     // A sliver is a strip-shaped island (area below 1e-3 of its bounding
     // diagonal squared) whose mean width, area over diagonal, is under half
     // the edge length T asks of it: there is no quad to put across it, and
@@ -1236,6 +1244,8 @@ bool AutoRemesher::remeshIslands()
         FeatureEdgeSet isotropicFeatureEdges;
         bool parameterized = false;
         bool extracted = false;
+        // libQEx ran and failed, so our own tracing extracted the island.
+        bool qexFellBack = false;
         long long resampleUs = 0;
         long long parameterizeUs = 0;
         long long extractUs = 0;
@@ -1370,6 +1380,7 @@ bool AutoRemesher::remeshIslands()
                 makeStageProgress(islandIndex, islandParameterizeEnd, 1.0f, 1.0f));
             const bool extracted = extractor.extract();
             const QexOutcome& qex = extractor.qexOutcome();
+            run.qexFellBack = qex.attempted && !qex.used;
             if (qex.attempted) {
                 DiagnosticRecord record("extractor");
                 record.label("used", qex.used ? "qex" : "trace");
@@ -1517,6 +1528,46 @@ bool AutoRemesher::remeshIslands()
                     }
                     if (healthy) {
                         ++islandsRepaired;
+                        break;
+                    }
+                }
+            }
+        });
+
+    std::atomic<size_t> qexIslandsRecovered(0);
+    std::vector<size_t> islandsToResolve;
+    for (size_t i = 0; i < islandContexes.size(); ++i) {
+        if (!islandContexes[i].leftOut && islandRuns[i].qexFellBack)
+            islandsToResolve.push_back(i);
+    }
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, islandsToResolve.size()),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t k = range.begin(); k != range.end(); ++k) {
+                const size_t i = islandsToResolve[k];
+                const bool wasHealthy = isHealthyIslandResult(islandContexes[i].inputTopology,
+                    islandRuns[i].remeshedVertices, islandRuns[i].remeshedQuads);
+                for (const double growth : qexRetryGrowth) {
+                    ++islandRetryAttempts;
+                    ++islandRetryAttemptCounts[i];
+                    IslandContext ctx;
+                    buildIslandContext(i, ctx);
+                    ctx.voxelSize = islandContexes[i].voxelSize / std::sqrt(growth);
+                    ctx.targetQuadCount = islandContexes[i].targetQuadCount * growth;
+                    IslandRun run;
+                    resampleIsland(i, ctx, run, &retryDecimationStats);
+                    parameterizeIsland(i, ctx, run);
+                    const bool replace = run.extracted && !run.qexFellBack
+                        && (!wasHealthy || isHealthyIslandResult(ctx.inputTopology, run.remeshedVertices, run.remeshedQuads));
+                    IslandRun& dropped = replace ? islandRuns[i] : run;
+                    IslandRun& kept = replace ? run : islandRuns[i];
+                    for (auto& record : dropped.diagnostics) {
+                        if (record.stage == "extractor")
+                            kept.diagnostics.push_back(std::move(record.label("superseded", "yes")));
+                    }
+                    if (replace) {
+                        islandContexes[i] = std::move(ctx);
+                        islandRuns[i] = std::move(run);
+                        ++qexIslandsRecovered;
                         break;
                     }
                 }
@@ -1845,6 +1896,8 @@ bool AutoRemesher::remeshIslands()
         }
         run.set("retried_islands", (double)islandsToRetry.size());
         run.set("repaired_islands", (double)islandsRepaired.load());
+        run.set("qex_retried_islands", (double)islandsToResolve.size());
+        run.set("qex_recovered_islands", (double)qexIslandsRecovered.load());
         m_diagnostics.push_back(std::move(run));
 
         {
