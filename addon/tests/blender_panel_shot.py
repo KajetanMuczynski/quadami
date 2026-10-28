@@ -95,7 +95,7 @@ def setup():
     source.select_set(True)
     bpy.context.view_layer.update()
 
-    positions, triangles, smooth = addon._mesh_arrays(bpy.context, source)
+    positions, triangles, smooth, _marked, _flooded = addon._mesh_arrays(bpy.context, source)
     settings = getattr(bpy.context.scene, ID)
     settings.target_quads = 300
     outcome = worker.remesh(worker.bundled_executable(), positions, triangles, settings.parameters())
