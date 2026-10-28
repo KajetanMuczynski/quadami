@@ -137,6 +137,39 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(lines, [("1 of 3 islands", True, True), ("produced no faces", False, True)])
         self.assertEqual(report.warning_lines({"status": "ok"}), [])
 
+    def test_warnings_wrap_to_pixels(self):
+        # The panel passes its width in pixels and the font's measure: here
+        # 10 pixels per character, and "W" twice as wide.
+        def measure(text):
+            return 10 * len(text) + 10 * text.count("W")
+        self.assertEqual(report.wrap("1 of 3 islands produced no faces", 200, measure),
+                         ["1 of 3 islands", "produced no faces"])
+        self.assertEqual(report.wrap("WWWW WWWW", 160, measure), ["WWWW", "WWWW"])
+        # A word wider than the panel is split rather than cut off.
+        self.assertEqual(report.wrap("abcdefghij", 40, measure), ["abcd", "efgh", "ij"])
+        lines = report.warning_lines({"status": "ok", "warnings": ["Parts thinner than one quad are missing"]},
+                                     150, measure)
+        self.assertTrue(all(measure(text) <= 150 for text, _, _ in lines))
+        self.assertEqual(" ".join(text for text, _, _ in lines), "Parts thinner than one quad are missing")
+
+    def test_summary_columns_fit(self):
+        def measure(text):
+            return 10 * len(text)
+        rows = [("Quads", "276 of 300 target (92%)", False), ("Non-manifold vertices", "0", False)]
+        # Wide enough: the label column fits the widest label, nothing wraps.
+        factor, laid = report.summary_columns(rows, 600, 8, 8, measure)
+        self.assertEqual(laid, [(["Quads"], ["276 of 300 target (92%)"], False),
+                                (["Non-manifold vertices"], ["0"], False)])
+        self.assertGreaterEqual((600 - 8) * factor - 8, measure("Non-manifold vertices"))
+        # Narrow: labels get at most 60 %, and every line fits its column.
+        factor, laid = report.summary_columns(rows, 300, 8, 8, measure)
+        self.assertEqual(factor, 0.6)
+        for labels, values, _ in laid:
+            self.assertTrue(all(measure(line) <= (300 - 8) * 0.6 - 8 for line in labels))
+            self.assertTrue(all(measure(line) <= (300 - 8) * 0.4 - 8 for line in values))
+        self.assertEqual(" ".join(laid[0][1]), "276 of 300 target (92%)")
+        self.assertEqual(" ".join(laid[1][0]), "Non-manifold vertices")
+
     def test_holes_in_a_closed_input(self):
         # Kajetan's closed head at 10k quads (2026-10-21).
         holes = {
