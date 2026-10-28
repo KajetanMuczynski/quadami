@@ -229,6 +229,7 @@ Everything we know about and deliberately left undone, with the reason and what 
 | **7.2** Stage B quantization | Only if Stage A misses the target | Gate 7.1 | C | 2026-10-14 |
 | **8.1** CHOLMOD backend | Solves are 14–27 % of a run, under the ≈20 % bar at small sizes; whole run −1 % to +13 % | Re-measure after 3.3 and 7.4 | C | 2026-10-14 |
 | Notches on kept boundary loops (M15 follow-up) | Filling only the notch needs loop splitting | 6.2 worklist rewrite | C | 2026-10-15 |
+| Raise Target Quads to bring lost parts back (Kajetan, 2026-10-28; after 0.2) | Designed in [RAISE-TO-CLEAR.md](RAISE-TO-CLEAR.md): fixed-distance goal, a tried rung (2×, 4×, 8×) and an opt-in search of real runs, no predicted N | #138's lost-part classes; the research thread's gates G1–G6 (RAISE-TO-CLEAR §8); Kajetan's OK on the design | C | 2026-10-28 |
 
 ### Not started, no blocker known
 
