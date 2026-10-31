@@ -85,6 +85,10 @@
 
 namespace AutoRemesher {
 
+// C++14 needs the definition of a static constexpr member that is bound to a
+// reference (std::vector::assign takes one); clang links without inlining it.
+constexpr uint32_t AutoRemesher::NoPlanIsland;
+
 namespace {
     const float parallelPhaseBegin = 0.03f;
     const float parallelPhaseEnd = 0.95f;
