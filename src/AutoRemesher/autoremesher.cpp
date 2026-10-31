@@ -1363,12 +1363,11 @@ bool AutoRemesher::remeshIslands()
     m_progressSum = 0.0;
 
     // Everything one island's run produces: its quads, and the intermediate
-    // meshes and maps the Qt app previews.
+    // meshes and maps the Qt app previews (kept only with m_keepPreviewData).
+    // The isotropic mesh is the island context's own vertices and triangles.
     struct IslandRun {
         std::vector<Vector3> decimatedVertices;
         std::vector<std::vector<size_t>> decimatedTriangles;
-        std::vector<Vector3> isotropicVertices;
-        std::vector<std::vector<size_t>> isotropicTriangles;
         std::vector<std::vector<Vector2>> capturedUvs;
         std::vector<std::vector<Vector2>> capturedOriginalUvs;
         std::vector<uint8_t> capturedExtractedConnectionMoved;
@@ -1412,15 +1411,17 @@ bool AutoRemesher::remeshIslands()
         run.resampleUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
         resampleTime += run.resampleUs;
 
-        run.isotropicVertices = ctx.vertices;
-        run.isotropicTriangles = ctx.triangles;
         run.decimatedTopology = surfaceTopology(run.decimatedTriangles, run.decimatedVertices.size());
-        run.isotropicTopology = surfaceTopology(run.isotropicTriangles, run.isotropicVertices.size());
+        run.isotropicTopology = surfaceTopology(ctx.triangles, ctx.vertices.size());
 
         // Crease length (relative to the target edge) that each stage still has.
         const double h = ctx.voxelSize > 0.0 ? ctx.voxelSize : 1.0;
         const CreaseLengths decimatedCreases = creaseLengths(run.decimatedVertices, run.decimatedTriangles, ctx.sharpEdgeDegrees);
-        const CreaseLengths isotropicCreases = creaseLengths(run.isotropicVertices, run.isotropicTriangles, ctx.sharpEdgeDegrees);
+        const CreaseLengths isotropicCreases = creaseLengths(ctx.vertices, ctx.triangles, ctx.sharpEdgeDegrees);
+        if (!m_keepPreviewData) {
+            std::vector<Vector3>().swap(run.decimatedVertices);
+            std::vector<std::vector<size_t>>().swap(run.decimatedTriangles);
+        }
         run.features = DiagnosticRecord("features");
         run.features.set("sharp_edge_degrees", ctx.sharpEdgeDegrees);
         run.features.set("input_ge_theta_rel_h", inputCreases.geTheta / h);
@@ -1505,11 +1506,13 @@ bool AutoRemesher::remeshIslands()
             std::unique_ptr<std::vector<std::vector<Vector2>>> uvs = parameterizer.takeTriangleUvs();
             if (uvs) {
                 // Save a copy of UVs for the [param] preview overlay
-                run.capturedUvs = *uvs;
+                if (m_keepPreviewData)
+                    run.capturedUvs = *uvs;
                 run.capturedOriginalUvs = parameterizer.originalTriangleUvs();
             }
             // Capture singular vertex positions for the [param] preview
-            run.capturedSingularVertices = parameterizer.singularVertexPositions();
+            if (m_keepPreviewData)
+                run.capturedSingularVertices = parameterizer.singularVertexPositions();
             run.capturedSingularVertexIndices = parameterizer.singularVertexIndices();
             QuadExtractor extractor(&vertices, &triangles, uvs.get());
             extractor.setOriginalTriangleUvs(&run.capturedOriginalUvs);
@@ -1521,6 +1524,11 @@ bool AutoRemesher::remeshIslands()
             extractor.setProgressHandler(
                 makeStageProgress(islandIndex, islandParameterizeEnd, 1.0f, 1.0f));
             const bool extracted = extractor.extract();
+            if (!m_keepPreviewData) {
+                // Only the extraction read them.
+                std::vector<std::vector<Vector2>>().swap(run.capturedOriginalUvs);
+                std::vector<size_t>().swap(run.capturedSingularVertexIndices);
+            }
             const QexOutcome& qex = extractor.qexOutcome();
             if (qex.attempted) {
                 DiagnosticRecord record("extractor");
@@ -1536,8 +1544,10 @@ bool AutoRemesher::remeshIslands()
             }
             if (extracted) {
                 run.extracted = true;
-                run.capturedExtractedConnections = extractor.extractedConnections();
-                run.capturedExtractedConnectionMoved = extractor.extractedConnectionMoved();
+                if (m_keepPreviewData) {
+                    run.capturedExtractedConnections = extractor.extractedConnections();
+                    run.capturedExtractedConnectionMoved = extractor.extractedConnectionMoved();
+                }
                 run.remeshedVertices = extractor.remeshedVertices();
                 run.remeshedQuads = extractor.remeshedQuads();
                 // The extractor leaves the output on T; this puts it on the
@@ -1599,8 +1609,8 @@ bool AutoRemesher::remeshIslands()
     tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
         [&](const tbb::blocked_range<size_t>& range) {
             for (size_t i = range.begin(); i != range.end(); ++i) {
-                const auto& vertices = islandRuns[i].isotropicVertices;
-                const auto& triangles = islandRuns[i].isotropicTriangles;
+                const auto& vertices = islandContexes[i].vertices;
+                const auto& triangles = islandContexes[i].triangles;
                 double area = 0.0;
                 for (const auto& triangle : triangles) {
                     if (3 == triangle.size())
@@ -1763,9 +1773,9 @@ bool AutoRemesher::remeshIslands()
         auto mergeIslands = [&](bool decimated,
                                 std::vector<Vector3>& mergedVertices,
                                 std::vector<std::vector<size_t>>& mergedTriangles) {
-            for (const auto& run : islandRuns) {
-                const auto& islandVertices = decimated ? run.decimatedVertices : run.isotropicVertices;
-                const auto& islandTriangles = decimated ? run.decimatedTriangles : run.isotropicTriangles;
+            for (size_t i = 0; i < islandRuns.size(); ++i) {
+                const auto& islandVertices = decimated ? islandRuns[i].decimatedVertices : islandContexes[i].vertices;
+                const auto& islandTriangles = decimated ? islandRuns[i].decimatedTriangles : islandContexes[i].triangles;
                 const size_t vertexOffset = mergedVertices.size();
                 mergedVertices.insert(mergedVertices.end(),
                     islandVertices.begin(), islandVertices.end());
@@ -1783,10 +1793,11 @@ bool AutoRemesher::remeshIslands()
         m_isotropicTriangles.clear();
         m_decimatedVertices.clear();
         m_decimatedTriangles.clear();
-        mergeIslands(false, m_isotropicVertices, m_isotropicTriangles);
         m_decimated = decimationStats.islandsDecimated.load() + retryDecimationStats.islandsDecimated.load() > 0;
-        if (m_decimated) {
-            mergeIslands(true, m_decimatedVertices, m_decimatedTriangles);
+        if (m_keepPreviewData) {
+            mergeIslands(false, m_isotropicVertices, m_isotropicTriangles);
+            if (m_decimated)
+                mergeIslands(true, m_decimatedVertices, m_decimatedTriangles);
         }
     }
 
@@ -2125,15 +2136,18 @@ bool AutoRemesher::remeshIslands()
             }
             m_diagnostics.push_back(std::move(record));
         }
+        // Moved, not copied: on inputs with thousands of islands the records
+        // take hundreds of MB, and a copy doubled them at the peak.
         for (size_t i = 0; i < islandRuns.size(); ++i) {
             if (!islandRuns[i].features.values.empty()) {
-                m_diagnostics.push_back(islandRuns[i].features);
+                m_diagnostics.push_back(std::move(islandRuns[i].features));
                 m_diagnostics.back().island = i;
             }
-            for (const auto& record : islandRuns[i].diagnostics) {
-                m_diagnostics.push_back(record);
+            for (auto& record : islandRuns[i].diagnostics) {
+                m_diagnostics.push_back(std::move(record));
                 m_diagnostics.back().island = i;
             }
+            std::vector<DiagnosticRecord>().swap(islandRuns[i].diagnostics);
         }
     }
 

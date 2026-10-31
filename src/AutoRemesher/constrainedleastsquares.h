@@ -116,8 +116,19 @@ private:
     bool solveReduced(std::vector<double>* solution);
     bool solveWithLagrangeMultipliers(std::vector<double>* solution);
 
+    size_t energyCount() const
+    {
+        return m_energyWeights.size();
+    }
+
     size_t m_variableCount;
-    std::vector<LinearEquation> m_energyEquations;
+    // Energy rows in one flat array, not a vector per row (a few hundred
+    // thousand to millions of short rows): row i's coefficients are
+    // m_energyCoefficients[m_energyStart[i], m_energyStart[i + 1]).
+    std::vector<std::pair<size_t, double>> m_energyCoefficients;
+    std::vector<size_t> m_energyStart = std::vector<size_t>(1, 0);
+    std::vector<double> m_energyRightHandSides;
+    std::vector<double> m_energyWeights;
     std::vector<LinearEquation> m_constraintEquations;
     std::vector<std::pair<size_t, double>> m_fixedVariables;
 

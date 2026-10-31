@@ -3,7 +3,7 @@
 schema_version = "1.0.0"
 
 id = "quadami"
-version = "0.1.0"
+version = "0.2.0"
 name = "Quadami"
 tagline = "Automatic quad remeshing in a separate process"
 maintainer = "Quadami contributors <quadami.contact@gmail.com>"

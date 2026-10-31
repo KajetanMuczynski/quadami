@@ -161,6 +161,15 @@ public:
         m_tangentialQuadSmoothing = tangential;
     }
 
+    // Keep the intermediate meshes, UVs and extraction connections of every
+    // island for the preview getters (decimatedVertices() and the like).
+    // Hosts that show no preview turn it off: on inputs with thousands of
+    // islands these copies took a third of the peak memory.
+    void setKeepPreviewData(bool keep)
+    {
+        m_keepPreviewData = keep;
+    }
+
     // Untangle folded-over input triangles before remeshing (FoldRepair).
     void setRepairInputFolds(bool repair)
     {
@@ -338,6 +347,14 @@ public:
         return m_diagnostics;
     }
 
+    // Hands the records over and leaves diagnostics() empty.
+    std::vector<DiagnosticRecord> takeDiagnostics()
+    {
+        std::vector<DiagnosticRecord> records;
+        records.swap(m_diagnostics);
+        return records;
+    }
+
     // What cleanInput() changed in the input.
     struct InputCleanupStats {
         // Vertices merged into another across an edge no longer than the
@@ -473,6 +490,7 @@ private:
     size_t m_markedEdgesTooDenseIslandCount = 0;
     double m_smoothNormalDegrees = 0.0;
     bool m_useQex = true;
+    bool m_keepPreviewData = true;
     bool m_repairInputFolds = false;
     bool m_flattenSpikes = false;
     bool m_tangentialQuadSmoothing = false;
