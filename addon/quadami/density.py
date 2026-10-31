@@ -16,7 +16,7 @@
 
 """Density preview: the planned quad size drawn over the mesh (docs/PREVIEW.md).
 
-The worker plans the run once (autoremesher-cli --plan-only, a few percent
+The worker plans the run once (autoremesher-cli --plan-only, a fraction
 of a run): the quad edge each vertex would get and each part's quads.  The
 plan, the mesh arrays it was made from and a GPU batch stay in memory here.
 Changing the preview count only changes one number the shader reads: every

@@ -716,8 +716,10 @@ class OBJECT_OT_remesh_quads_cancel(bpy.types.Operator):
 
 
 class OBJECT_OT_density_preview(bpy.types.Operator):
-    """Plan the remesh at Target Quads (a few percent of a run) and draw the planned quad size """ \
-        """over the mesh; drag Change to try nearby counts. Click again to hide it (Esc cancels)"""
+    """Plan the remesh at Target Quads (a fraction of a run) and draw the planned quad size over """ \
+        """the mesh; drag Change to try nearby counts. A planned size, on average 10-15 % off the """ \
+        """result's, less reliable on hard-surface and thin parts. Click again to hide it """ \
+        """(Esc cancels)"""
     bl_idname = "object." + ID + "_density_preview"
     bl_label = "Preview Density"
 
