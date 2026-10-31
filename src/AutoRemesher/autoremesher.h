@@ -233,6 +233,43 @@ public:
         return m_remeshedIslands;
     }
 
+    // Stop after the decimation and only plan the run: the quad edge
+    // length each input vertex would get and the quads of each island
+    // (planVertexEdgeLengths() and the like); remesh() then makes no quads.
+    void setPlanOnly(bool planOnly)
+    {
+        m_planOnly = planOnly;
+    }
+
+    // One island of the plan.  Its quads at another target N (same other
+    // settings) are about max(N * areaShare, floorQuads), and its edge
+    // lengths go with the inverse square root of that count.
+    struct PlanIsland {
+        double areaShare = 0.0;
+        double plannedQuads = 0.0;
+        double floorQuads = 0.0;
+        // A sliver: not remeshed, so it gets no quads (see remeshIslands).
+        bool leftOut = false;
+    };
+    static constexpr uint32_t NoPlanIsland = 0xffffffffu;
+
+    // Per vertex given to the constructor: the planned quad edge length at
+    // scaling 1 (0 where there is none), and the island it belongs to
+    // (NoPlanIsland for a vertex no face uses).  A vertex the input cleanup
+    // merged away takes the values of the nearest planned vertex.
+    const std::vector<float>& planVertexEdgeLengths() const
+    {
+        return m_planVertexEdgeLengths;
+    }
+    const std::vector<uint32_t>& planVertexIslands() const
+    {
+        return m_planVertexIslands;
+    }
+    const std::vector<PlanIsland>& planIslands() const
+    {
+        return m_planIslands;
+    }
+
     // Input vertices of the sliver islands remeshIslands() left out, so the
     // lost-part measure does not count them as lost.
     const std::vector<size_t>& leftOutVertices() const
@@ -494,6 +531,10 @@ private:
     bool m_repairInputFolds = false;
     bool m_flattenSpikes = false;
     bool m_tangentialQuadSmoothing = false;
+    bool m_planOnly = false;
+    std::vector<float> m_planVertexEdgeLengths;
+    std::vector<uint32_t> m_planVertexIslands;
+    std::vector<PlanIsland> m_planIslands;
     ModelType m_modelType = ModelType::Organic;
     AutoRemesherProgressHandler m_progressHandler = nullptr;
     void* m_tag = nullptr;
@@ -533,7 +574,8 @@ private:
         std::atomic<long long>* adaptiveFieldTimeUs,
         const ProgressHandler* progressHandler,
         std::vector<Vector3>* decimatedVerticesOut,
-        std::vector<std::vector<size_t>>* decimatedTrianglesOut);
+        std::vector<std::vector<size_t>>* decimatedTrianglesOut,
+        bool stopAfterDecimation = false);
     static double calculateMeshArea(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles);
 };

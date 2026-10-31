@@ -365,7 +365,9 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
                "--target-quads", str(asked)] + cli_args
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     else:
-        cmd = [cli, "--input", inp, "--output", os.path.join(d, "out.obj"), "--target-quads", str(asked),
+        # A plan (--plan-only, docs/PREVIEW.md) writes raw arrays, not a mesh: no out.obj, no metrics.
+        output = "plan.bin" if "--plan-only" in cli_args else "out.obj"
+        cmd = [cli, "--input", inp, "--output", os.path.join(d, output), "--target-quads", str(asked),
                "--resolution", res, "--report-json", os.path.join(d, "report.json"),
                "--stage-diagnostics", os.path.join(d, "stages.jsonl")] + cli_args
     rss_file = os.path.join(d, "rss.txt")

@@ -72,6 +72,11 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "                              how the extracted quads are smoothed: tangential\n"
                           "                              slides them along the surface and keeps ridges\n"
                           "                              and creases (default laplacian)\n"
+                          "  --plan-only                 only plan the run (input handling, decimation and\n"
+                          "                              quad sizes): --output then gets, per\n"
+                          "                              input vertex, the planned quad edge length as\n"
+                          "                              float32 and then its island as uint32, both\n"
+                          "                              little-endian; the islands are in the report\n"
                           "  --stdin-control             cancel when stdin receives the line \"cancel\"\n"
                           "                              or is closed; the report then says \"cancelled\"\n"
                           "  -h, --help                  show this text\n"
@@ -88,6 +93,7 @@ struct Options {
     std::string stageDiagnosticsPath;
     RemeshParameters parameters;
     bool stdinControl = false;
+    bool planOnly = false;
 };
 
 // Above this many quads the run needs gigabytes, so the command line says
@@ -142,6 +148,10 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
         }
         if ("--stdin-control" == name) {
             options->stdinControl = true;
+            continue;
+        }
+        if ("--plan-only" == name) {
+            options->planOnly = true;
             continue;
         }
         if (!hasValue) {
@@ -263,14 +273,25 @@ int run(const std::vector<std::string>& arguments)
         callbacks.progress = printProgress;
         if (options.stdinControl)
             callbacks.cancel = &g_stdinCancelToken;
-        result = remesh(request, callbacks);
+        result = options.planOnly ? planRemesh(request, callbacks) : remesh(request, callbacks);
     } else {
         result.status = RemeshStatus::InvalidInput;
         result.message = error;
         result.parameters = options.parameters;
     }
 
-    if (RemeshStatus::Ok == result.status && !Cli::writeObj(options.outputPath, result.mesh, &error)) {
+    if (RemeshStatus::Ok == result.status && options.planOnly) {
+        const RemeshPlan& plan = result.plan;
+        std::string bytes(plan.vertexEdgeLengths.size() * 4 + plan.vertexIslands.size() * 4, '\0');
+        if (!plan.vertexEdgeLengths.empty())
+            std::memcpy(&bytes[0], plan.vertexEdgeLengths.data(), plan.vertexEdgeLengths.size() * 4);
+        if (!plan.vertexIslands.empty())
+            std::memcpy(&bytes[plan.vertexEdgeLengths.size() * 4], plan.vertexIslands.data(), plan.vertexIslands.size() * 4);
+        if (!Cli::writeTextFile(options.outputPath, bytes, &error)) {
+            result.status = RemeshStatus::Failed;
+            result.message = error;
+        }
+    } else if (RemeshStatus::Ok == result.status && !Cli::writeObj(options.outputPath, result.mesh, &error)) {
         result.status = RemeshStatus::Failed;
         result.message = error;
     }
@@ -286,7 +307,10 @@ int run(const std::vector<std::string>& arguments)
             diagnosticsToJsonLines(result.stageDiagnostics, context), &error);
     }
 
-    if (RemeshStatus::Ok == result.status) {
+    if (RemeshStatus::Ok == result.status && options.planOnly) {
+        std::printf("Planned: about %.0f quads on %zu islands in %.2f s\n",
+            result.plan.plannedQuads, result.plan.islands.size(), result.report.seconds);
+    } else if (RemeshStatus::Ok == result.status) {
         const QualityReport& report = result.report;
         std::printf("Remeshed: %zu quads, %zu other faces, %zu vertices in %.2f s\n",
             report.quadCount, report.nonQuadCount, report.vertexCount, report.seconds);

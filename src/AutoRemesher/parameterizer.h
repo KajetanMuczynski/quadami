@@ -120,6 +120,13 @@ public:
 
     bool parameterize();
 
+    // The quad edge length the cover asks of each triangle, in input units:
+    // scaling times the base edge times the scaling field (with anisotropy
+    // the geometric mean of the two directions).  The same sizing as
+    // parameterize() uses, without the field and the cover (the plan,
+    // RemeshPlan).
+    std::vector<double> plannedFaceEdgeLengths() const;
+
     // Records of the field, simplification and cover solves of the last
     // parameterize(), also after a failure.  Their island is left unset.
     std::vector<DiagnosticRecord> takeDiagnostics()
@@ -147,6 +154,12 @@ private:
     ProgressHandler m_progressHandler;
     std::vector<DiagnosticRecord> m_diagnostics;
 
+    // Face areas, vertex normals and the scaling field of the triangles.
+    std::vector<double> computeSizing(std::vector<double>* faceAreas,
+        std::vector<Vector3>* vertexNormals) const;
+    // Where the face scaling is 1: the island's share of the requested quads
+    // spread over its area, or `fallback` without a target.
+    double baseEdgeLength(const std::vector<double>& faceAreas, double fallback) const;
     std::vector<double> computeFaceScalingField(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles,
         const std::vector<double>& faceAreas,

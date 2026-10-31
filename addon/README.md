@@ -53,6 +53,14 @@ This file is for building and packaging. **Using** the add-on: [docs/USER-GUIDE.
   still there after saving the file. A failed or cancelled run shows its
   status and message instead; the worker's last output lines go to Blender's
   console.
+- **Preview Density** (`density.py`) runs the worker with `--plan-only` and
+  draws the planned quad size over the active mesh (a `gpu` draw handler; no
+  data is written to the mesh). The plan, the mesh arrays and one GPU batch
+  stay in memory; **Change** (−50 % to +100 %, it sets Target Quads) and
+  Target Quads only change a shader uniform. The preview is dropped when the
+  object's geometry changes or a file loads, and hidden with "preview again"
+  when a planning setting changes or Target Quads leaves ½×-2× of the plan
+  (docs/PREVIEW.md §4.4).
 - **Copy Report** (in the result box) puts one text block for a bug report on
   the clipboard (`report.copy_text`): build ids, Blender, system, the run's
   settings (the core's `parameters` plus the panel-only ones the add-on stores
