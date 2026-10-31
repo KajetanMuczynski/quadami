@@ -233,7 +233,7 @@ public:
         return m_remeshedIslands;
     }
 
-    // Stop after the isotropic remesh and only plan the run: the quad edge
+    // Stop after the decimation and only plan the run: the quad edge
     // length each input vertex would get and the quads of each island
     // (planVertexEdgeLengths() and the like); remesh() then makes no quads.
     void setPlanOnly(bool planOnly)
@@ -574,7 +574,8 @@ private:
         std::atomic<long long>* adaptiveFieldTimeUs,
         const ProgressHandler* progressHandler,
         std::vector<Vector3>* decimatedVerticesOut,
-        std::vector<std::vector<size_t>>* decimatedTrianglesOut);
+        std::vector<std::vector<size_t>>* decimatedTrianglesOut,
+        bool stopAfterDecimation = false);
     static double calculateMeshArea(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles);
 };

@@ -36,10 +36,13 @@ import numpy as np
 PLAN_SETTINGS = ("adaptivity", "sharp_edge_degrees", "resolution", "edge_scaling",
                  "smooth_normal_degrees", "follow_marks")
 
-# The preview's range around the count it was planned at: the swipe goes
-# from count / RANGE to count * RANGE.  Within it the rescaled plan agrees
-# with a fresh plan at that count (docs/PREVIEW.md §4.4).
-RANGE = 1.25
+# The preview's range around the count it was planned at: Change goes
+# from count / RANGE to count * RANGE.  Within it the rescaled plan stays
+# within about 5 % of a fresh plan at that count (docs/PREVIEW.md §4.4).
+# A narrower bar would hardly show anything: the quad edge goes with one
+# over the square root of the count, so +-20 % quads is only -9 to +12 %
+# edge, less than the plan's own error.
+RANGE = 2.0
 
 # The overlay is pushed this many planned quad edges towards the eye, so it
 # wins against its own mesh and a result that lies within a fraction of a
@@ -47,9 +50,15 @@ RANGE = 1.25
 PUSH_EDGES = 0.25
 
 
-def swipe_quads(planned, swipe):
-    """Target Quads the preview shows for a swipe in [-1, 1]."""
-    return max(1, int(round(planned * RANGE ** max(-1.0, min(1.0, swipe)))))
+# The Change bar's limits in percent: count / RANGE to count * RANGE.
+CHANGE_MIN = round(100.0 * (1.0 / RANGE - 1.0), 6)
+CHANGE_MAX = round(100.0 * (RANGE - 1.0), 6)
+
+
+def change_quads(planned, change):
+    """Target Quads for a Change of `change` percent from the planned count."""
+    change = max(CHANGE_MIN, min(CHANGE_MAX, change))
+    return max(1, int(round(planned * (1.0 + change / 100.0))))
 
 
 def settings_key(settings):

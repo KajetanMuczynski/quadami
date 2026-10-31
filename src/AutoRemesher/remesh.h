@@ -297,9 +297,9 @@ struct RemeshResult {
 RemeshResult remesh(const RemeshRequest& request,
     const RemeshCallbacks& callbacks = RemeshCallbacks());
 
-// Since 1.11.  Runs remesh()'s input handling, sizing and isotropic remesh
-// (about a tenth of a run) and returns the plan in RemeshResult::plan,
-// without a mesh.  The report holds the input counts, times and diagnostics.
+// Since 1.11.  Runs remesh()'s input handling, island split and decimation,
+// sizes the quads on the decimated islands as the run would, and returns
+// the plan in RemeshResult::plan, without a mesh (docs/PREVIEW.md).  The report holds the input counts, times and diagnostics.
 RemeshResult planRemesh(const RemeshRequest& request,
     const RemeshCallbacks& callbacks = RemeshCallbacks());
 
