@@ -13,8 +13,12 @@ Per run and plan:
   size     per quad of the run: sqrt(quad area) (for a quad of sides su, sv that is sqrt(su sv), the
            edge the plan gives), against the plan at the input vertex nearest the quad's centre;
            r2 = share of the variance of log2 size the plan explains (bias removed, as P1 asks),
+           r2s = the same after both sides are averaged over each quad's 16 nearest quads (the
+           size of a region, which is what the overlay's colours show; single quads also carry
+           the extraction's quad-to-quad noise, which no plan predicts),
            bias = median log2(run / plan), err = median |log2(run / plan)| (with the bias: what a
-           user reads off the overlay), p90 = its 90th percentile
+           user reads off the overlay), errA = the same weighted by quad area (share of the
+           surface), p90 = its 90th percentile
   count    run quads / planned quads at N (gate P2: within 10 %)
   time     plan seconds / run seconds at the same target (gate P3: median <= 0.15)
   replan   (N0 != N) median |log2| between the rescaled plan and the fresh plan at N, per input
@@ -92,15 +96,30 @@ def quad_sizes(v, faces):
     return p.mean(axis=1), np.sqrt(a)
 
 
-def size_stats(run_size, plan_size):
+SMOOTH_QUADS = 16
+
+
+def explained(y, x):
+    """Share of the variance of y that x explains, a constant offset removed."""
+    var = float(np.var(y))
+    return 1.0 - float(np.var(y - x)) / var if var > 0 else None
+
+
+def size_stats(centres, run_size, plan_size):
     ok = (run_size > 0) & (plan_size > 0)
-    if ok.sum() < 10:
+    if ok.sum() < 2 * SMOOTH_QUADS:
         return None
-    lr, lp = np.log2(run_size[ok]), np.log2(plan_size[ok])
+    centres, run_size, plan_size = centres[ok], run_size[ok], plan_size[ok]
+    lr, lp = np.log2(run_size), np.log2(plan_size)
     resid = lr - lp
-    var = float(np.var(lr))
-    r2 = 1.0 - float(np.var(resid)) / var if var > 0 else None
-    return {"r2": r2, "bias": float(np.median(resid)), "err": float(np.median(np.abs(resid))),
+    _, near = cKDTree(centres).query(centres, k=SMOOTH_QUADS)
+    # Region size: sqrt of the mean quad area around each quad, on both sides.
+    sr = 0.5 * np.log2((run_size[near] ** 2).mean(axis=1))
+    sp = 0.5 * np.log2((plan_size[near] ** 2).mean(axis=1))
+    area = run_size ** 2
+    return {"r2": explained(lr, lp), "r2s": explained(sr, sp),
+            "bias": float(np.median(resid)), "err": float(np.median(np.abs(resid))),
+            "errA": float(np.average(np.abs(resid), weights=area)),
             "p90": float(np.percentile(np.abs(resid), 90)), "n": int(ok.sum())}
 
 
@@ -155,7 +174,7 @@ def main():
             for n0, (edge, island, islands, preport) in plans.items():
                 scaled = rescale(edge, island, islands, n0, n)
                 row = {"mesh": mesh, "n0": n0, "n": n, "ratio": n / n0,
-                       "size": size_stats(size, scaled[nearest]),
+                       "size": size_stats(centres, size, scaled[nearest]),
                        "planned_quads": float(island_quads(islands, n).sum()),
                        "run_quads": report["output"]["quads"]}
                 row["count_ratio"] = row["run_quads"] / row["planned_quads"] if row["planned_quads"] else None
@@ -182,18 +201,25 @@ def main():
 
     ratios = sorted({round(r["ratio"], 2) for r in rows})
     print(f"set {a.set}: {len({r['mesh'] for r in rows})} meshes, medians over (mesh, N0) pairs")
-    print(f"{'N/N0':>6} {'pairs':>5} {'r2':>5} {'min r2':>6} {'bias':>6} {'err':>5} {'p90':>5} "
-          f"{'count':>6} {'in10%':>6} {'replan':>6}")
+    print(f"{'N/N0':>6} {'pairs':>5} {'r2':>5} {'r2s':>5} {'min r2s':>7} {'bias':>6} {'err':>5} {'errA':>5} "
+          f"{'p90':>5} {'count':>6} {'in10%':>6} {'replan':>6}")
     for ratio in ratios:
         sel = [r for r in rows if round(r["ratio"], 2) == ratio and r["size"]]
         r2 = [r["size"]["r2"] for r in sel if r["size"]["r2"] is not None]
+        r2s = [r["size"]["r2s"] for r in sel if r["size"]["r2s"] is not None]
         counts = [r["count_ratio"] for r in sel if r["count_ratio"]]
         within = sum(1 for c in counts if abs(c - 1) <= 0.10) / len(counts) if counts else None
-        print(f"{ratio:6.2f} {len(sel):5d} {fmt(med(r2))} {fmt(min(r2) if r2 else None):>6} "
+        print(f"{ratio:6.2f} {len(sel):5d} {fmt(med(r2))} {fmt(med(r2s))} {fmt(min(r2s) if r2s else None):>7} "
               f"{fmt(med([r['size']['bias'] for r in sel])):>6} {fmt(med([r['size']['err'] for r in sel])):>5} "
+              f"{fmt(med([r['size']['errA'] for r in sel])):>5} "
               f"{fmt(med([r['size']['p90'] for r in sel])):>5} {fmt(med(counts), 3):>6} {fmt(within):>6} "
               f"{fmt(med([r.get('replan') for r in sel]), 3):>6}")
     fresh = [r for r in rows if r["n0"] == r["n"]]
+    print("fresh plans (N = N0), per mesh: r2, r2s, errA (medians over targets)")
+    for mesh in sorted({r["mesh"] for r in fresh}):
+        sel = [r["size"] for r in fresh if r["mesh"] == mesh and r["size"]]
+        print(f"  {mesh:24s} {fmt(med([x['r2'] for x in sel]))} {fmt(med([x['r2s'] for x in sel]))} "
+              f"{fmt(med([x['errA'] for x in sel]))}")
     times = [r["time_ratio"] for r in fresh if r.get("time_ratio")]
     if times:
         print(f"P3 plan time / run time at the same target: median {med(times):.3f}, max {max(times):.3f} "

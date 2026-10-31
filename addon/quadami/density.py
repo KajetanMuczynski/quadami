@@ -28,8 +28,6 @@ not drawn while a setting it depends on (PLAN_SETTINGS) differs from the
 one it was made with or the object is gone.
 """
 
-import math
-
 import numpy as np
 
 # Settings that change the plan beyond the count; a change asks for a new plan.
@@ -142,9 +140,9 @@ def show(preview):
     _redraw_all()
 
 
-def geometry_changed(depsgraph):
+def geometry_changed(_scene, depsgraph):
     """depsgraph_update_post: drop the plan once its object's mesh changed."""
-    if _preview is None:
+    if _preview is None or depsgraph is None:
         return
     for update in depsgraph.updates:
         obj = getattr(update.id, "original", update.id)
@@ -176,23 +174,19 @@ def _remove_handler():
         _handler = None
 
 
+# Push constants stay within the 128 bytes every GPU backend has: the
+# object-to-clip matrix, the eye in object space (w = 1: a position, w = 0:
+# the direction towards the viewer of an orthographic view) and four numbers.
 VERTEX_SOURCE = """
 void main()
 {
-    float q = max(quads * share, floorq);
+    float q = max(settings.x * share, floorq);
     float e = (a > 0.0 && q > 0.0) ? a / sqrt(q) : 0.0;
     edge = e;
+    vec3 toEye = eye.w > 0.5 ? normalize(eye.xyz - pos) : eye.xyz;
+    vec3 moved = pos + toEye * (settings.z * e);
     objectPos = pos;
-    vec4 v = modelView * vec4(pos, 1.0);
-    float d = push * e;
-    if (perspective > 0.5) {
-        v.xyz *= max(0.0, 1.0 - d / max(length(v.xyz), 1e-12));
-    }
-    else {
-        v.z += d;
-    }
-    viewPos = v.xyz;
-    gl_Position = projection * v;
+    gl_Position = modelViewProjection * vec4(moved, 1.0);
 }
 """
 
@@ -202,14 +196,15 @@ void main()
 FRAGMENT_SOURCE = """
 void main()
 {
-    vec3 n = normalize(cross(dFdx(viewPos), dFdy(viewPos)));
-    float light = 0.45 + 0.55 * abs(n.z);
+    vec3 n = normalize(cross(dFdx(objectPos), dFdy(objectPos)));
+    vec3 toEye = eye.w > 0.5 ? normalize(eye.xyz - objectPos) : eye.xyz;
+    float light = 0.45 + 0.55 * abs(dot(n, toEye));
     vec3 colour = vec3(0.55);
     if (edge > 0.0) {
-        float t = clamp(log2(edge / reference) * 0.5, -1.0, 1.0);
+        float t = clamp(log2(edge / settings.y) * 0.5, -1.0, 1.0);
         vec3 middle = vec3(0.93, 0.91, 0.86);
         colour = t < 0.0 ? mix(middle, vec3(0.92, 0.36, 0.10), -t) : mix(middle, vec3(0.18, 0.42, 0.85), t);
-        if (cells > 0.5) {
+        if (settings.w > 0.5) {
             float size = exp2(floor(log2(edge) * 4.0 + 0.5) * 0.25);
             vec3 c = floor(objectPos / size);
             colour *= mix(1.0, 0.8, mod(c.x + c.y + c.z, 2.0));
@@ -229,13 +224,10 @@ def _get_shader():
         interface.smooth("VEC3", "objectPos")
         interface.smooth("VEC3", "viewPos")
         info = gpu.types.GPUShaderCreateInfo()
-        info.push_constant("MAT4", "modelView")
-        info.push_constant("MAT4", "projection")
-        info.push_constant("FLOAT", "quads")
-        info.push_constant("FLOAT", "reference")
-        info.push_constant("FLOAT", "push")
-        info.push_constant("FLOAT", "perspective")
-        info.push_constant("FLOAT", "cells")
+        info.push_constant("MAT4", "modelViewProjection")
+        info.push_constant("VEC4", "eye")
+        # x: preview count, y: the colour scale's middle edge, z: PUSH_EDGES, w: checker on.
+        info.push_constant("VEC4", "settings")
         info.vertex_in(0, "VEC3", "pos")
         info.vertex_in(1, "FLOAT", "a")
         info.vertex_in(2, "FLOAT", "share")
@@ -256,8 +248,6 @@ draw_state = None
 
 def _draw():
     import bpy
-    import gpu
-    from gpu_extras.batch import batch_for_shader
 
     preview = _preview
     if preview is None or draw_state is None:
@@ -265,29 +255,41 @@ def _draw():
     state = draw_state()
     if state is None:
         return
-    quads, cells = state
     obj = bpy.data.objects.get(preview.object_name)
     rv3d = bpy.context.region_data
     if obj is None or rv3d is None:
         return
+    quads, cells = state
+    draw_preview(preview, obj.matrix_world, rv3d.view_matrix, rv3d.window_matrix, rv3d.is_perspective, quads, cells)
+
+
+def draw_preview(preview, matrix, view_matrix, window_matrix, perspective, quads, cells):
+    """Draws the preview's mesh at matrix (object to world) with the planned
+    quad size at `quads`, into whatever framebuffer is bound."""
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+    from mathutils import Vector
+
     shader = _get_shader()
     if preview.batch is None:
         a, share, floor = vertex_attributes(preview.plan)
         preview.batch = batch_for_shader(shader, "TRIS", {
             "pos": preview.positions, "a": a, "share": share, "floorq": floor},
             indices=preview.triangles)
-    matrix = obj.matrix_world
-    scale = sum(abs(s) for s in matrix.to_scale()) / 3.0
+    inverse = matrix.inverted_safe()
+    view_inverse = view_matrix.inverted_safe()
+    if perspective:
+        eye = inverse @ view_inverse.translation
+        eye = (eye.x, eye.y, eye.z, 1.0)
+    else:
+        towards = (inverse.to_3x3() @ (view_inverse.to_3x3() @ Vector((0.0, 0.0, 1.0)))).normalized()
+        eye = (towards.x, towards.y, towards.z, 0.0)
     gpu.state.depth_test_set("LESS_EQUAL")
     gpu.state.depth_mask_set(True)
     shader.bind()
-    shader.uniform_float("modelView", rv3d.view_matrix @ matrix)
-    shader.uniform_float("projection", rv3d.window_matrix)
-    shader.uniform_float("quads", float(quads))
-    shader.uniform_float("reference", preview.reference)
-    shader.uniform_float("push", PUSH_EDGES * scale)
-    shader.uniform_float("perspective", 1.0 if rv3d.is_perspective else 0.0)
-    shader.uniform_float("cells", 1.0 if cells else 0.0)
+    shader.uniform_float("modelViewProjection", window_matrix @ view_matrix @ matrix)
+    shader.uniform_float("eye", eye)
+    shader.uniform_float("settings", (float(quads), preview.reference, PUSH_EDGES, 1.0 if cells else 0.0))
     preview.batch.draw(shader)
     gpu.state.depth_mask_set(False)
     gpu.state.depth_test_set("NONE")
