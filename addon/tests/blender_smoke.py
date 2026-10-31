@@ -49,10 +49,11 @@ if installed:
     names = importlib.import_module(module_name + ".names")
     report = importlib.import_module(module_name + ".report")
     worker = importlib.import_module(module_name + ".worker")
+    guide_tool = importlib.import_module(module_name + ".guide_tool")
 else:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     import quadami as addon  # noqa: E402
-    from quadami import names, report, worker  # noqa: E402
+    from quadami import guide_tool, names, report, worker  # noqa: E402
 
     addon.register()
 try:
@@ -101,7 +102,7 @@ try:
     mesh.attributes.new("crease_edge", "FLOAT", "EDGE").data.foreach_set("value", [0.5 * e for e in equator])
     bpy.context.view_layer.update()
 
-    positions, triangles, smooth, marked, flooded = addon._mesh_arrays(bpy.context, source, {"SHARP"})
+    positions, triangles, smooth, marked, flooded, _guide_edges = addon._mesh_arrays(bpy.context, source, {"SHARP"})
     assert positions.shape[1] == 3 and triangles.shape[1] == 3, (positions.shape, triangles.shape)
     assert len(triangles) == 128 * 2 + 128 * 62 * 2, len(triangles)
     assert smooth
@@ -239,6 +240,74 @@ try:
     source.scale = (1.0, 1.0, 3.0)
     bpy.context.view_layer.update()
     assert "scaled unevenly" in panel_labels()
+
+    # Guides (guide_tool.py). Draw Guide's modal handler, driven with
+    # stand-ins for the viewport: each click picks the next vertex of a ring
+    # tilted across the sphere's rings, and the last click lands on the
+    # first point, which closes the loop.
+    import numpy as np
+    from mathutils import Vector
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=64, ring_count=32, location=(5.0, 0.0, 0.0))
+    sphere = bpy.context.active_object
+    assert guide_tool.OBJECT_OT_quadami_draw_guide.poll(bpy.context)
+    coordinates = np.empty(len(sphere.data.vertices) * 3)
+    sphere.data.vertices.foreach_get("co", coordinates)
+    coordinates = coordinates.reshape(-1, 3)
+    normal = np.array([0.0, 0.5, 0.866])
+    across = np.cross(normal, [1.0, 0.0, 0.0])
+    clicks = []
+    for angle in np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False):
+        point = np.cos(angle) * np.array([1.0, 0.0, 0.0]) + np.sin(angle) * across
+        clicks.append(int(np.argmin(np.linalg.norm(coordinates - point, axis=1))))
+    tool_class = guide_tool.OBJECT_OT_quadami_draw_guide
+
+    class Stroke:
+        pass
+
+    for name in ("modal", "_add_point", "_near_first", "_finish", "_cancel", "_end", "_world",
+                 "draft_points", "draft_lines", "_over_controls"):
+        setattr(Stroke, name, tool_class.__dict__[name])
+    stroke = Stroke()
+    messages = []
+    stroke.report = lambda kind, text: messages.append(text)
+    stroke._object = sphere
+    stroke._positions = coordinates
+    stroke._edges = guide_tool._edge_vertices(sphere.data)
+    stroke._graph = guide_tool.guides.EdgeGraph(coordinates, stroke._edges)
+    stroke._lifted = coordinates
+    stroke._matrix = sphere.matrix_world.copy()
+    stroke._points, stroke._legs, stroke._last_mouse, stroke._dragging = [], [], None, False
+    pending = iter(clicks)
+    stroke._vertex_under = lambda context, event: next(pending)
+    stroke._screen = lambda context, vertex: Vector((10.0, 10.0)) if vertex == clicks[0] else Vector((500.0, 500.0))
+    area = types.SimpleNamespace(header_text_set=lambda text: None, tag_redraw=lambda: None)
+    viewport = types.SimpleNamespace(area=area, view_layer=bpy.context.view_layer, space_data=None,
+                                     region=types.SimpleNamespace(width=1000, height=800),
+                                     preferences=bpy.context.preferences)
+
+    def event(kind, value, x=300, y=300):
+        return types.SimpleNamespace(type=kind, value=value, alt=False, ctrl=False, mouse_region_x=x, mouse_region_y=y)
+
+    for _ in clicks:
+        assert stroke.modal(viewport, event("LEFTMOUSE", "PRESS")) == {"RUNNING_MODAL"}
+        stroke.modal(viewport, event("LEFTMOUSE", "RELEASE"))
+    assert len(stroke._points) == len(clicks) and len(stroke.draft_lines()) == 2 * sum(map(len, stroke._legs))
+    assert stroke.modal(viewport, event("LEFTMOUSE", "PRESS", 12, 9)) == {"FINISHED"}, messages
+    assert guide_tool.guide_counts(sphere.data) == (1, 0), guide_tool.guide_counts(sphere.data)
+    # Remesh sends the guide whatever Follow Marks says.
+    sent = addon._mesh_arrays(bpy.context, sphere, set())
+    assert len(sent[3]) == len(guide_tool.guide_pairs(sphere.data)) == sent[5] > 0
+    labels = panel_labels()
+    assert "Guides: 1 loop" in labels, labels
+    # Edit Mode: Clear Guide on every selected edge removes it, Mark Guide adds them back.
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    assert bpy.ops.object.quadami_mark_guide(clear=True) == {"FINISHED"}
+    bpy.ops.object.mode_set(mode="OBJECT")
+    assert guide_tool.guide_counts(sphere.data) == (0, 0)
+    assert bpy.ops.object.quadami_clear_guides.poll()
+    assert bpy.ops.object.quadami_clear_guides() == {"FINISHED"}
+    assert sphere.data.attributes.get(guide_tool.GUIDE) is None
     print("blender_smoke: OK, Blender %s" % bpy.app.version_string)
 finally:
     if installed:

@@ -206,9 +206,13 @@ def warning_lines(report, width=WARNING_WIDTH, measure=len):
     for warning in report.get("warnings", []):
         add(warning, True)
     marks = report.get("input", {}).get("feature_edges", 0) - report.get("input", {}).get("ignored_feature_edges", 0)
-    if report.get("status") == "ok" and marks > 0:
-        add("Followed %d marked edges (Follow Marks). If you don't want quads along them, untick "
-            "Follow Marks and remesh again." % marks, False)
+    guides = min(report.get("guide_edges", 0), marks)
+    if report.get("status") == "ok" and marks > guides:
+        add("Followed %d marked edges (Follow Marks%s). If you don't want quads along them, untick "
+            "Follow Marks and remesh again." % (marks - guides, ", besides the guides" if guides else ""), False)
+    if report.get("status") == "ok" and guides > 0:
+        add("Followed %d guide edges. To remesh without them, click the X next to Draw Guide "
+            "(Clear Guides) and remesh again." % guides, False)
     if report.get("kept"):
         add("Copied from the original: %s." % kept_text(report["kept"]), False)
     if report.get("status") == "ok" and report.get("islands", {}).get("holes", 0):

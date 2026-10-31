@@ -111,14 +111,23 @@ class EdgeGraph:
         points = list(points)
         if closed and len(points) > 1:
             points.append(points[0])
-        used = {}
+        legs = []
         for start, goal in zip(points, points[1:]):
             leg = self.shortest_path(start, goal)
             if leg is None:
                 return None
-            for edge in leg:
-                used[edge] = used.get(edge, 0) + 1
-        return sorted(edge for edge, count in used.items() if count % 2)
+            legs.append(leg)
+        return join_legs(legs)
+
+
+def join_legs(legs):
+    """Sorted edge indices of the paths in legs taken together; an edge used
+    an even number of times (the stroke doubled back over it) cancels out."""
+    used = {}
+    for leg in legs:
+        for edge in leg:
+            used[edge] = used.get(edge, 0) + 1
+    return sorted(edge for edge, count in used.items() if count % 2)
 
 
 def guide_edge_pairs(edges, guide_flags):
