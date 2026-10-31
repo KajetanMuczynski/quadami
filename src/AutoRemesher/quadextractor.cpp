@@ -2549,6 +2549,12 @@ void QuadExtractor::collapseThreeValenceDiagonals()
                 const size_t diagonalSecond = face[i + 2];
                 if (rejectedDiagonals.end() != rejectedDiagonals.find(edgeOf(diagonalFirst, diagonalSecond)))
                     continue;
+                // A point an earlier collapse made or took a neighbor from is not
+                // half of a split point: collapsing it again zips up a thin strip
+                // one quad at a time
+                if (collapsedVertices.end() != collapsedVertices.find(diagonalFirst)
+                    || collapsedVertices.end() != collapsedVertices.find(diagonalSecond))
+                    continue;
                 if (3 != vertexNeighbors[diagonalFirst].size()
                     || 3 != vertexNeighbors[diagonalSecond].size())
                     continue;
