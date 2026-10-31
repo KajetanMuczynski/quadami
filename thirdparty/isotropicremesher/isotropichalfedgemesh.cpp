@@ -831,6 +831,41 @@ bool IsotropicHalfedgeMesh::isStraightHardChainVertex(Vertex *vertex)
     return 2 == directions.size() && Vector3::dotProduct(directions[0], directions[1]) <= -0.8660254;
 }
 
+bool IsotropicHalfedgeMesh::isSmoothHardChainVertex(Vertex *vertex, double minNormalDot,
+    Vertex **first, Vertex **second)
+{
+    if (vertex->featured)
+        return false;
+    std::vector<Vertex *> neighbours;
+    bool smooth = true;
+    iterateVertexHalfedges(vertex, [&](Halfedge *halfedge) {
+        if (!halfedge->hard())
+            return true;
+        if (nullptr == halfedge->oppositeHalfedge) {
+            smooth = false;
+            return false;
+        }
+        const Vector3 normal = Vector3::normal(halfedge->previousHalfedge->startVertex->position,
+            halfedge->startVertex->position, halfedge->nextHalfedge->startVertex->position);
+        const Halfedge *opposite = halfedge->oppositeHalfedge;
+        const Vector3 oppositeNormal = Vector3::normal(opposite->previousHalfedge->startVertex->position,
+            opposite->startVertex->position, opposite->nextHalfedge->startVertex->position);
+        if (Vector3::dotProduct(normal, oppositeNormal) < minNormalDot) {
+            smooth = false;
+            return false;
+        }
+        neighbours.push_back(halfedge->nextHalfedge->startVertex);
+        return true;
+    });
+    if (!smooth || 2 != neighbours.size())
+        return false;
+    if (nullptr != first)
+        *first = neighbours[0];
+    if (nullptr != second)
+        *second = neighbours[1];
+    return true;
+}
+
 void IsotropicHalfedgeMesh::updateVertexValences()
 {
     for (Vertex *vertex = m_firstVertex; nullptr != vertex; vertex = vertex->nextVertex) {

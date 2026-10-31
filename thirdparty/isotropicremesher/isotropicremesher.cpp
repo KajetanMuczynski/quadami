@@ -447,11 +447,13 @@ void IsotropicRemesher::collapseShortEdges(double minEdgeLengthSquared, double m
                             break;
                         }
                     } else if (!from->marked ||
-                            (halfedge->hard() && m_halfedgeMesh->isStraightHardChainVertex(from))) {
+                            (halfedge->hard() && (m_halfedgeMesh->isStraightHardChainVertex(from) ||
+                                m_halfedgeMesh->isSmoothHardChainVertex(from, kMinSmoothChainNormalDot)))) {
                         // Onto a marked vertex, which stays where it is: an
                         // unmarked neighbour, or the next vertex along a
-                        // nearly straight marked line (not at a corner, an
-                        // end or a crossing).
+                        // nearly straight marked line, or along a marked
+                        // line on a smooth surface (not at a corner, an end
+                        // or a crossing).
                         if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq, &to->position)) {
                             break;
                         }
@@ -496,10 +498,31 @@ void IsotropicRemesher::shiftVertices()
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
         //if (vertex->featured)
         //    continue;
-        if (vertex->marked)
+        if (vertex->marked) {
+            relaxSmoothHardChainVertex(vertex);
             continue;
+        }
         m_halfedgeMesh->relaxVertex(vertex);
     }
+}
+
+void IsotropicRemesher::relaxSmoothHardChainVertex(IsotropicHalfedgeMesh::Vertex *vertex)
+{
+    // A hard line on a smooth surface straightens like a 1D Laplacian
+    // along itself: the vertex moves halfway to its two neighbours' midpoint,
+    // within its tangent plane; projectVertices then puts it back on the
+    // surface. Corners, ends, crossings and creases (isSmoothHardChainVertex)
+    // stay where they are.
+    IsotropicHalfedgeMesh::Vertex *first = nullptr;
+    IsotropicHalfedgeMesh::Vertex *second = nullptr;
+    if (!m_halfedgeMesh->isSmoothHardChainVertex(vertex, kMinSmoothChainNormalDot, &first, &second))
+        return;
+    Vector3 move = (first->position + second->position) * 0.5 - vertex->position;
+    move = move - vertex->_normal * Vector3::dotProduct(move, vertex->_normal);
+    const Vector3 target = vertex->position + move * 0.5;
+    if (target.containsNan() || target.containsInf() || m_halfedgeMesh->testMoveWouldDegenerate(vertex, target))
+        return;
+    vertex->position = target;
 }
 
 void IsotropicRemesher::projectVertices()
@@ -512,7 +535,9 @@ void IsotropicRemesher::projectVertices()
     for (IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr);
             nullptr != vertex;
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
-        if (vertex->featured || vertex->marked)
+        if (vertex->featured)
+            continue;
+        if (vertex->marked && !m_halfedgeMesh->isSmoothHardChainVertex(vertex, kMinSmoothChainNormalDot))
             continue;
 
         const auto &startHalfedge = vertex->firstHalfedge;
