@@ -678,7 +678,8 @@ def cmd_compare(a):
             print("- replicates disagree (noise, count neither way): "
                   + ", ".join(f"{name(k)} (A {sum(ta[k])}/{n}, B {sum(tb[k])}/{n})" for k in noisy))
         # Per island (validity.islands_same_as_input): also catches a handle or hole moved between
-        # islands and non-manifold vertices, which the global check above cannot see.
+        # islands, an island dropped (shrunk to a blob of the same topology) and non-manifold vertices,
+        # which the global check above cannot see.
         ia = [island_ok(A[k][u]) for k in keys for u in reps]
         ib = [island_ok(B[k][u]) for k in keys for u in reps]
         if None not in ia + ib:
