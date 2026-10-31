@@ -46,9 +46,11 @@ named *_rel_edge, which are relative to the output mean edge length):
               input area farther than one output edge from the output
               (area_uncovered) or that near but under an output face facing the
               other way (area_wrong_side: thin parts collapsed into one sheet,
-              pleats), islands_same_as_input. Input islands that are not
-              manifold themselves have no right topology: they are counted in
+              pleats), islands_same_as_input (none dropped, split, merged or
+              changed, output manifold). Input islands that are not manifold
+              themselves have no right topology: they are counted in
               islands_input_non_manifold and left out of the topology counts
+              (a dropped one still counts as dropped)
   normal_deviation_deg  angle between output face and (oriented) input normal at the closest point (D3)
   distance    one-sided mean / max and two-sided Hausdorff on area samples
   symmetry    (with --sym-axis) input reflection error, output geometric
@@ -846,10 +848,12 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
                        "vertex_to_in_median": float(np.median(d_out[-len(used):]) / diag)}
     out["validity"] = validity(inp, V, faces, sizes, normals, E, bnd, used, lab, cf, reversed_out, mean_edge,
                                in_tri, d_in[:len(Pin_area)], tri_face[out_tri[:len(Pin_area)]], Ftri)
-    # same_as_input per island: no island changed its Euler characteristic or boundary loops, split
-    # or merged with another, and the output is manifold at edges and vertices.
+    # same_as_input per island: no island dropped (a part shrunk to a blob can keep its topology and
+    # its own output island), changed its Euler characteristic or boundary loops, split or merged with
+    # another, and the output is manifold at edges and vertices.
     vd = out["validity"]
-    vd["islands_same_as_input"] = bool(vd["islands_topology_changed"] == 0 and vd["islands_merged"] == 0
+    vd["islands_same_as_input"] = bool(vd["islands_dropped"] == 0 and vd["islands_topology_changed"] == 0
+                                       and vd["islands_merged"] == 0
                                        and vd["non_manifold_vertices"] == 0 and t["non_manifold_edges"] == 0)
 
     if sym_axis:
