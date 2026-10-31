@@ -103,8 +103,18 @@ public:
     // On exactly two hard edges that meet at 150 degrees or more: a point
     // of a hard line that a collapse along the line may remove.
     bool isStraightHardChainVertex(Vertex *vertex);
+    // On exactly two hard edges, each between two faces whose normals are
+    // at least minNormalDot apart (cosine): a point of a hard line drawn on
+    // a smooth surface, such as a guide loop, which may slide along the line
+    // and be collapsed into its neighbour on the line. A path of mesh edges
+    // zigzags at the input's edge scale; kept as it is, each kink becomes a
+    // cone of the cross field on the line, and the edge loop along it does
+    // not close (TODO 5.7). Sets the two neighbours on the line when given.
+    bool isSmoothHardChainVertex(Vertex *vertex, double minNormalDot,
+        Vertex **first=nullptr, Vertex **second=nullptr);
     bool flipEdge(Halfedge *halfedge);
     void relaxVertex(Vertex *vertex);
+    bool testMoveWouldDegenerate(Vertex *vertex, const Vector3 &target);
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);
     Face *moveToNextFace(Face *face);
     Vertex *moveToNextVertex(Vertex *vertex);
@@ -174,7 +184,6 @@ private:
         double maxEdgeLengthSquared);
     bool isVertexPairConnected(Vertex *first, Vertex *second);
     bool isFaceOfVertex(Vertex *vertex, Vertex *second, Vertex *third);
-    bool testMoveWouldDegenerate(Vertex *vertex, const Vector3 &target);
     bool testCollapseWouldFoldOrDegenerate(Vertex *vertex,
         Vertex *otherVertex,
         const Vector3 &collapseTo,

@@ -235,6 +235,37 @@ defaults and change one thing at a time.
 Settings other than these defaults work, but the project's quality targets are checked at the defaults,
 so expect a bit more variation.
 
+### Guides: edge loops where you want them
+
+A guide is a line you draw on the model; the quads keep a row of edges along it. Drawn as a closed loop (around a
+limb, an eye, a belt), it is meant to come out as an edge loop that Alt+click selects whole, instead of a loop that
+spirals over the model.
+
+1. Select the model and stay in **Object Mode** (Tab toggles; Draw Guide does not work in Sculpt or Edit Mode).
+2. In the Quadami panel, under **Guides**, click **Draw Guide**.
+3. Click points on the surface, or hold the left mouse button and drag. The points are joined along the model's
+   own edges (blue line). Middle mouse, the scroll wheel, Alt + left drag and the navigation circles at the top right
+   still turn and zoom the view.
+4. Click the first point again to close the loop (orange line). Enter keeps an open line instead, Backspace takes back
+   the last point, Esc or right click cancels.
+5. Click **Remesh**. The guides are always used, whatever Follow Marks says; the result says how many guide edges were
+   followed.
+
+The guides stay on the model in the .blend file, so you can remesh again with other settings. The eye icon next to
+**Guides** shows or hides them; the **X** next to Draw Guide removes them all. In Edit Mode, **Mark Guide** and
+**Clear Guide** turn the selected edges into a guide or take them out of one (Select > Select Shortest Path helps there).
+
+Known limits (0.3 preview):
+
+- A loop closes only when no pole (a vertex with 3 or 5 edges) lands on it. On the test meshes about two in five
+  guide loops come out fully closed; on a real head sculpt none did yet: the loops follow most of each guide but
+  are broken by 1 to 6 poles. The work continues.
+- Draw guides on the model you remesh, not through modifiers that change its edges (the add-on warns and leaves the
+  guides out then; apply the modifiers first). Subdivision Surface and Mirror pass the guides on (checked in Blender 5.2).
+- On a low-poly model the guide follows the model's own edges, so it zigzags where they don't run along it; the
+  remesher straightens it, but on coarse models a zigzag larger than a quad stays. Draw more points there.
+- If following the guides would fold the quads of a part, that part is remeshed without them and a warning says so.
+
 ---
 
 ## 5. Reading the result

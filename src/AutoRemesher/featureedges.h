@@ -118,6 +118,14 @@ std::vector<unsigned char> featureVertexLock(const FeatureEdgeSet& set, size_t v
 // Total length of the set's edges.
 double featureEdgeLength(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices);
 
+// Per point: 1 when it lies within `tolerance` of one of the set's edges
+// (positions from `vertices`) that carries every bit of `requiredFlags`.
+// The quad vertices the extractor puts on a hard isoline lie on T's hard
+// edges; the smoothing after extraction keeps them there, so an edge loop
+// along a guide stays on it (TODO 5.7).
+std::vector<char> pointsOnFeatureEdges(const std::vector<Vector3>& points, const FeatureEdgeSet& set,
+    const std::vector<Vector3>& vertices, unsigned char requiredFlags, double tolerance);
+
 }
 
 #endif
