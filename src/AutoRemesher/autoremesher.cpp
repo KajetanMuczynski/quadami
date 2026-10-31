@@ -964,7 +964,11 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     triangles = isotropicRemesher.remeshedTriangles();
     featureEdges = reclassifyFeatureEdges(isotropicRemesher.featureEdges(), vertices, triangles,
         sharpEdgeDegrees, nullptr != sharpEdgeStats ? &sharpEdgeStats->classified : nullptr);
-    featureEdges = dropShortFeatureComponents(featureEdges, vertices, voxelSize,
+    // Three edges, not one: on the sculpt set pieces of one to three edges
+    // still cost the map (sculpt_decimated 2k Hausdorff x2.8 at one edge,
+    // x1.3 at three) and no cad or primitives crease is that short.
+    constexpr double kMinFeatureComponentEdges = 3.0;
+    featureEdges = dropShortFeatureComponents(featureEdges, vertices, kMinFeatureComponentEdges * voxelSize,
         nullptr != sharpEdgeStats ? &sharpEdgeStats->tShort : nullptr);
     if (nullptr != sharpEdgeStats) {
         sharpEdgeStats->carried = isotropicRemesher.featureEdges().size();

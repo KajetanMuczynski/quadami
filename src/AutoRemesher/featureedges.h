@@ -130,7 +130,7 @@ FeatureEdgeSet filterDetectedChains(const FeatureEdgeSet& set,
 
 // `set` without the components (edges joined at shared vertices) shorter
 // than `minLength` that have no hard edge: the quad mesh cannot follow a
-// crease shorter than one of its edges, and the map folds around one it is
+// crease of only a few of its edges, and the map folds around one it is
 // made to (on the sculpt set, a 0.2 h piece at a horn's tip lost the
 // horn).  Applied to T's set only: in the remesh such a piece keeps a tip
 // that the remesh would cut otherwise.  `dropped` counts the dropped edges.

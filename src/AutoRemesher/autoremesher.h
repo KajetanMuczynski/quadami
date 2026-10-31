@@ -433,8 +433,8 @@ public:
         // (reclassifyFeatureEdges).
         size_t carried = 0;
         size_t classified = 0;
-        // Edges of T's set in components shorter than a T edge, left out of
-        // it (dropShortFeatureComponents).
+        // Edges of T's set in components shorter than three T edges, left
+        // out of it (dropShortFeatureComponents).
         size_t tShort = 0;
     };
 
