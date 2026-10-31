@@ -23,6 +23,10 @@ Per run and plan:
   time     plan seconds / run seconds at the same target (gate P3: median <= 0.15)
   replan   (N0 != N) median |log2| between the rescaled plan and the fresh plan at N, per input
            vertex: the error the rescale adds, without the run's own noise
+  change   (second table) how the run's region size moves between two targets A and B, against
+           how the plan rescaled from N0 says it moves: at up to 20,000 input vertices, the
+           region size (sqrt of the mean area of the 16 nearest quads) of run B over run A, in
+           log2, minus the planned log2 ratio; median |.| per mesh. This is what a swipe shows.
 
 Metric code is separate from metrics.py and preview_report.py on purpose.
 
@@ -123,6 +127,18 @@ def size_stats(centres, run_size, plan_size):
             "p90": float(np.percentile(np.abs(resid), 90)), "n": int(ok.sum())}
 
 
+def region_sizes(run_dir, points):
+    """log2 region size of a run at points: sqrt of the mean area of the SMOOTH_QUADS nearest quads."""
+    v, faces = read_obj(os.path.join(run_dir, "out.obj"))
+    centres, size = quad_sizes(v, faces)
+    ok = size > 0
+    _, near = cKDTree(centres[ok]).query(points, k=SMOOTH_QUADS)
+    return 0.5 * np.log2((size[ok][near] ** 2).mean(axis=1))
+
+
+CHANGE_PAIRS = ((4200, 5000), (5000, 6000), (3500, 5000), (5000, 7100), (2500, 5000), (5000, 10000))
+
+
 def targets_of(root, set_name, mesh):
     d = os.path.join(root, set_name, mesh)
     out = []
@@ -152,6 +168,7 @@ def main():
     corpus = json.load(open(os.path.join(HERE, "corpus.json")))
     files = {m["id"]: m["file"] for m in corpus["meshes"] if m.get("set", "corpus") == a.set}
     rows = []
+    changes = []
     for mesh in sorted(files):
         plan_targets = [t for t in targets_of(a.plans, a.set, mesh)
                         if run_ok(os.path.join(a.plans, a.set, mesh, f"quality-t{t}", "u0"), "plan.bin")]
@@ -187,10 +204,26 @@ def main():
                     ok = (fresh > 0) & (scaled > 0)
                     row["replan"] = float(np.median(np.abs(np.log2(scaled[ok] / fresh[ok])))) if ok.any() else None
                 rows.append(row)
+        n0 = min(plans, key=lambda t: abs(t - 5000))
+        edge, island, islands, _ = plans[n0]
+        sample = np.random.default_rng(0).choice(len(inp), min(len(inp), 20000), replace=False)
+        region = {}
+        for a_n, b_n in CHANGE_PAIRS:
+            if a_n not in run_targets or b_n not in run_targets:
+                continue
+            for n in (a_n, b_n):
+                if n not in region:
+                    region[n] = region_sizes(os.path.join(a.runs, a.set, mesh, f"quality-t{n}", "u0"), inp[sample])
+            pa = rescale(edge, island, islands, n0, a_n)[sample]
+            pb = rescale(edge, island, islands, n0, b_n)[sample]
+            ok = (pa > 0) & (pb > 0)
+            d = (region[b_n] - region[a_n])[ok] - np.log2(pb[ok] / pa[ok])
+            changes.append({"mesh": mesh, "a": a_n, "b": b_n, "planned": float(np.median(np.log2(pb[ok] / pa[ok]))),
+                            "err": float(np.median(np.abs(d)))})
 
     if a.json:
         with open(a.json, "w") as f:
-            json.dump(rows, f, indent=1)
+            json.dump({"rows": rows, "changes": changes}, f, indent=1)
 
     def med(xs):
         xs = [x for x in xs if x is not None and not (isinstance(x, float) and math.isnan(x))]
@@ -214,6 +247,14 @@ def main():
               f"{fmt(med([r['size']['errA'] for r in sel])):>5} "
               f"{fmt(med([r['size']['p90'] for r in sel])):>5} {fmt(med(counts), 3):>6} {fmt(within):>6} "
               f"{fmt(med([r.get('replan') for r in sel]), 3):>6}")
+    if changes:
+        print("region size change between two runs against the plan's change (log2, median |error| per mesh)")
+        for a_n, b_n in CHANGE_PAIRS:
+            sel = [c for c in changes if (c["a"], c["b"]) == (a_n, b_n)]
+            if sel:
+                worst = max(sel, key=lambda c: c["err"])
+                print(f"  {a_n:>6} -> {b_n:<6} planned {med([c['planned'] for c in sel]):+.3f}  "
+                      f"error median {med([c['err'] for c in sel]):.3f}, max {worst['err']:.3f} ({worst['mesh']})")
     fresh = [r for r in rows if r["n0"] == r["n"]]
     print("fresh plans (N = N0), per mesh: r2, r2s, errA (medians over targets)")
     for mesh in sorted({r["mesh"] for r in fresh}):
