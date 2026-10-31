@@ -24,6 +24,7 @@ The add-on's name and ids come from names.py.
 
 import collections
 import json
+import os
 
 import blf
 import bpy
@@ -48,6 +49,9 @@ _cancel_from_panel = False
 _last_status = ""
 _last_message = ""
 _last_report = None
+# The last run of this session, for Copy Report: the panel's settings, the
+# input's triangle count, the worker's last lines and the result's name.
+_last_run = None
 
 
 def _preferences(context):
@@ -361,7 +365,7 @@ def _keep(context, source, result, report, settings):
     result[REPORT_PROPERTY] = json.dumps(report)
 
 
-def _build_object(context, source, outcome, smooth, warnings=()):
+def _build_object(context, source, outcome, smooth, warnings=(), addon_settings=None):
     """The result object, linked next to the source and placed like it,
     smooth shaded if the source mostly was. No edges are marked sharp: no
     angle threshold suits both sculpts and hard surfaces (at 30 degrees 7-21 %
@@ -379,6 +383,8 @@ def _build_object(context, source, outcome, smooth, warnings=()):
         collection.objects.link(obj)
     report = dict(outcome.report)
     report["warnings"] = list(report.get("warnings", [])) + list(warnings)
+    if addon_settings:
+        report["addon"] = dict(addon_settings)
     if changed:
         report["warnings"].append("Blender's mesh validation changed the result")
     obj[REPORT_PROPERTY] = json.dumps(report)
@@ -436,7 +442,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         return self.execute(context)
 
     def execute(self, context):
-        global _job, _cancel_from_panel, _last_status, _last_message, _last_report
+        global _job, _cancel_from_panel, _last_status, _last_message, _last_report, _last_run
         preferences = _preferences(context)
         configured = bpy.path.abspath(preferences.executable) if preferences else ""
         executable = worker.find_executable(configured)
@@ -479,6 +485,9 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         _job = job
         _cancel_from_panel = False
         _last_status, _last_message, _last_report = "running", "", None
+        self._addon_settings = _addon_settings(settings)
+        _last_run = {"settings": dict(parameters, **self._addon_settings), "input_triangles": len(triangles),
+                     "log": None, "result": None}
         self._source_name = obj.name
         self._warnings = [w for w in (_uneven_scale_warning(obj), _flood_warning(flooded)) if w]
         self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
@@ -514,6 +523,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         outcome = _job.outcome()
         self._stop(context)
         _last_status, _last_message, _last_report = outcome.status, outcome.message, outcome.report
+        _last_run["log"] = outcome.log
         if not outcome.ok:
             if outcome.log:
                 print(NAME + " worker output:\n" + outcome.log)
@@ -528,7 +538,9 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             _last_message = "\"%s\" was deleted during the remesh" % self._source_name
             self.report({"ERROR"}, "%s: %s" % (NAME, _last_message))
             return {"CANCELLED"}
-        new_obj, _last_report = _build_object(context, source, outcome, self._smooth, self._warnings)
+        new_obj, _last_report = _build_object(context, source, outcome, self._smooth, self._warnings,
+                                              self._addon_settings)
+        _last_run["result"] = new_obj.name
         _keep(context, source, new_obj, _last_report, _settings(context))
         _show_result(context, new_obj, (source, bpy.data.objects.get(self._replaced) if self._replaced else None))
         output = outcome.report.get("output", {})
@@ -549,7 +561,69 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         if _job is not None:
             _job.cleanup()
             _last_status, _last_message = "cancelled", "stopped by Blender"
+            if _last_run is not None:
+                _last_run["log"] = ""
             self._stop(context)
+
+
+def _addon_settings(settings):
+    """The panel's settings that are not remesher parameters."""
+    return {"follow_marks": sorted(settings.follow_marks), "keep_attributes": settings.keep_attributes,
+            "keep_uvs": settings.keep_uvs}
+
+
+def _shown_report(context):
+    """(status, message, report, from_last_run) of the result box: a failed
+    or cancelled last run stays on show until the next run; otherwise the
+    active object's own report, if it is a result."""
+    status, message, report = _last_status, _last_message, _last_report
+    obj = context.active_object
+    if status in ("", "ok") and obj is not None and REPORT_PROPERTY in obj:
+        try:
+            report = json.loads(obj[REPORT_PROPERTY])
+            status, message = report.get("status", ""), report.get("message", "")
+        except ValueError:
+            return status, message, report, status != ""
+        return status, message, report, _last_run is not None and obj.name == _last_run["result"]
+    return status, message, report, status != ""
+
+
+def copy_report_text(context):
+    """The Copy Report text for what the result box shows."""
+    status, message, report, last = _shown_report(context)
+    preferences = _preferences(context)
+    executable = worker.find_executable(bpy.path.abspath(preferences.executable) if preferences else "")
+    if report and "parameters" in report:
+        settings = dict(report["parameters"], **report.get("addon", {}))
+    else:
+        settings = _last_run["settings"] if last and _last_run else {}
+    info = {
+        "addon_build": worker.addon_build_id(),
+        "worker_build": worker.worker_build_id(executable) if executable else None,
+        "blender": bpy.app.version_string,
+        "system": report_rows.system_text(),
+        "settings": settings,
+        "home": os.path.expanduser("~"),
+    }
+    if last and _last_run:
+        info["input_triangles"] = _last_run["input_triangles"]
+        info["log"] = _last_run["log"]
+    return report_rows.copy_text(status, message, report, info)
+
+
+class OBJECT_OT_copy_report(bpy.types.Operator):
+    """Copy the result box, settings, build, Blender and system versions and the remesher's last output to the clipboard, for a bug report. No mesh data and no user names"""
+    bl_idname = "object." + ID + "_copy_report"
+    bl_label = "Copy Report"
+
+    @classmethod
+    def poll(cls, context):
+        return _shown_report(context)[0] not in ("", "running")
+
+    def execute(self, context):
+        context.window_manager.clipboard = copy_report_text(context)
+        self.report({"INFO"}, "%s report copied: paste it into the bug report form or an e-mail" % NAME)
+        return {"FINISHED"}
 
 
 class OBJECT_OT_remesh_quads_cancel(bpy.types.Operator):
@@ -676,15 +750,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
                 for i, line in enumerate(report_rows.wrap(warning, room.panel - room.icon - room.pad, room.measure)):
                     column.label(text=line, icon="ERROR" if i == 0 else "BLANK1")
 
-        # A failed or cancelled last run stays on show until the next run;
-        # otherwise the active object's own report, if it is a result.
-        status, message, report = _last_status, _last_message, _last_report
-        if status in ("", "ok") and obj is not None and REPORT_PROPERTY in obj:
-            try:
-                report = json.loads(obj[REPORT_PROPERTY])
-                status, message = report.get("status", ""), report.get("message", "")
-            except ValueError:
-                pass
+        status, message, report, _ = _shown_report(context)
         if status not in ("", "running"):
             box = layout.box()
             box.label(text=report_rows.STATUS_TEXT.get(status, status),
@@ -710,6 +776,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
                     row.label(text=text, icon=icon)
                 if report_rows.offers_fold_repair(report) and _source(obj) is not None:
                     _draw_fold_offer(box, settings, room)
+            box.operator(OBJECT_OT_copy_report.bl_idname, icon="COPYDOWN")
 
         preferences = _preferences(context)
         _draw_build(layout, worker.find_executable(bpy.path.abspath(preferences.executable) if preferences else ""))
@@ -720,6 +787,7 @@ classes = (
     RemeshSettings,
     OBJECT_OT_remesh_quads,
     OBJECT_OT_remesh_quads_cancel,
+    OBJECT_OT_copy_report,
     VIEW3D_PT_remesh_quads,
 )
 
