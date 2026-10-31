@@ -21,6 +21,7 @@ Needs numpy and a built CLI (CMakeLists.txt; the Qt app's headless mode works to
     AUTOREMESHER_EXECUTABLE=build/cli/autoremesher-cli python3 -m unittest discover -s addon/tests -v
 """
 
+import json
 import math
 import os
 import re
@@ -438,6 +439,66 @@ class RaiseHintTest(unittest.TestCase):
         self.assertIsNone(raise_hint.load("not json"))
         self.assertIsNone(raise_hint.load("[1]"))
         self.assertEqual(raise_hint.load('{"key": "k"}'), {"key": "k"})
+
+
+class CopyReportTest(unittest.TestCase):
+    INFO = {"addon_build": "abc1234 2026-10-31", "worker_build": "abc1234 2026-10-31",
+            "blender": "4.2.3 LTS", "system": "Linux 6.8.0 x86_64 (Ubuntu 24.04.1 LTS)",
+            "settings": {"target_quads": 2000, "adaptivity": 0.5, "follow_marks": ["SHARP"], "keep_uvs": False},
+            "home": "/home/mootek"}
+
+    def test_ok_run(self):
+        result = {"status": "ok", "message": "", "parameters": {"target_quads": 2000},
+                  "input": {"vertices": 8066, "triangles": 16128, "feature_edges": 128, "ignored_feature_edges": 0},
+                  "output": {"quads": 1624, "non_quads": 2}, "islands": {"input": 1, "without_output": 0},
+                  "time": {"total_seconds": 0.8, "steps": [{"name": "remesh", "seconds": 0.5}]},
+                  "warnings": ["Parts thinner than one quad are missing (up to 4 quad widths away). " * 2]}
+        text = report.copy_text("ok", "", result, dict(self.INFO, input_triangles=16128,
+                                                       log="reading /home/mootek/sculpt.obj\ndone"))
+        lines = text.splitlines()
+        self.assertEqual(lines[:6], ["Quadami report", "Result: Done", "Add-on build: abc1234 2026-10-31",
+                                     "Remesher build: same", "Blender: 4.2.3 LTS",
+                                     "System: Linux 6.8.0 x86_64 (Ubuntu 24.04.1 LTS)"])
+        self.assertIn("Settings: adaptivity=0.5, follow_marks=SHARP, keep_uvs=False, target_quads=2000", lines)
+        self.assertIn("Input: 16128 triangles, 8066 vertices, 1 islands, 128 marked edges (0 ignored)", lines)
+        self.assertIn("  Quads: 1624 of 2000 target (81%)", lines)
+        self.assertIn("  ! Non-quads: 2", lines)
+        # A warning stays on one line, unwrapped.
+        self.assertEqual(sum(1 for line in lines if line.startswith("  - Parts thinner")), 1)
+        self.assertIn("Steps: remesh 0.50 s", lines)
+        self.assertIn("  reading ~/sculpt.obj", lines)
+        full = next(line for line in lines if line.startswith("Full report: "))
+        self.assertEqual(json.loads(full[len("Full report: "):]), result)
+        self.assertNotIn("mootek", text)
+
+    def test_failed_run_without_report(self):
+        log = "\n".join("line %d" % i for i in range(2000))
+        text = report.copy_text("failed", "the remesher exited with code -11: line 1999", None,
+                                dict(self.INFO, worker_build=None, input_triangles=500, log=log))
+        self.assertIn("Result: Failed: the remesher exited with code -11: line 1999", text)
+        self.assertIn("Remesher build: unknown", text)
+        self.assertIn("Input: 500 triangles", text)
+        self.assertNotIn("Result box:", text)
+        self.assertNotIn("Full report", text)
+        self.assertTrue(text.rstrip().endswith("line 1999"))
+        self.assertLess(len(text), report.COPY_LOG_CHARS + 2000)
+
+    def test_earlier_result_has_no_log(self):
+        text = report.copy_text("ok", "", {"status": "ok"}, dict(self.INFO, worker_build="def5678"))
+        self.assertIn("Remesher build: def5678", text)
+        self.assertIn("Remesher output: not kept", text)
+        self.assertNotIn("Input:", text)
+
+    def test_redact(self):
+        self.assertEqual(report.redact("/home/mootek/a /home/mootekx/b /home/ola/c", "/home/mootek"),
+                         "~/a /home/<user>/b /home/<user>/c")
+        self.assertEqual(report.redact("C:\\Users\\Jan Kowalski\\x C:/Users/jan/AppData", "C:\\Users\\Jan Kowalski"),
+                         "~\\x C:/Users/<user>/AppData")
+        self.assertEqual(report.redact("/Users/kim/Desktop", None), "/Users/<user>/Desktop")
+        self.assertEqual(report.redact("no path", "/"), "no path")
+
+    def test_system_text(self):
+        self.assertTrue(report.system_text())
 
 
 class EnvironmentTest(unittest.TestCase):

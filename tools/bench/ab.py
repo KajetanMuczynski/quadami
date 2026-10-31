@@ -208,6 +208,17 @@ def prepare_input(src, work, timeout=None):
         pass
 
 
+def cli_value(args, flag):
+    """Value of a CLI flag given as `flag value` or `flag=value` (the CLI accepts both), else None."""
+    value = None
+    for i, a in enumerate(args):
+        if a == flag and i + 1 < len(args):
+            value = args[i + 1]
+        elif a.startswith(flag + "="):
+            value = a[len(flag) + 1:]
+    return value
+
+
 def measure(rec, d, mesh, target, src, work, timeout=None):
     """metrics.json of one run into rec["metrics"]. A failure (seen: out of memory with several large
     inputs measured at once) is tried once more; if that fails too, rec["metrics"] is None and
@@ -228,9 +239,9 @@ def measure(rec, d, mesh, target, src, work, timeout=None):
             xs = [float(line.split()[col]) for line in open(src) if line.startswith("v ")]
             center = (min(xs) + max(xs)) / 2
         cmd += ["--sym-axis", axis, "--sym-center", repr(float(center))]
-    args = rec.get("cli_args") or []
-    if "--sharp-edge" in args[:-1]:  # A1theta and bent quads at the run's own sharp-edge angle
-        cmd += ["--sharp-degrees", args[args.index("--sharp-edge") + 1]]
+    sharp = cli_value(rec.get("cli_args") or [], "--sharp-edge")
+    if sharp is not None:  # A1theta and bent quads at the run's own sharp-edge angle
+        cmd += ["--sharp-degrees", sharp]
     error = ""
     rec.pop("metrics_timeout", None)
     for _ in range(2):
@@ -335,6 +346,12 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
         # once a run asks for them.
         if (remeasure or (metrics and needs_metrics(rec, metrics_timeout))) and rec["rc"] == 0 \
                 and os.path.exists(os.path.join(d, "out.obj")):
+            # An output is measured only against the input it was made from: a regenerated mesh
+            # (generator or corpus.json change) would pair an old out.obj with a new input.
+            if rec.get("input_sha") and rec["input_sha"] != file_hash(perturbed(src, k, work)):
+                print(f"not measured: {d} was made from another version of {mesh['file']}; delete the folder "
+                      "to run it again", file=sys.stderr)
+                return rec
             measure(rec, d, mesh, target, src, work, metrics_timeout)
             with open(record_path, "w") as fp:
                 json.dump(rec, fp, indent=1)
@@ -575,7 +592,7 @@ def value(r, k):
     if k == "crease_bent_1k": return (m.get("creases") or {}).get("bent_quads_per_1k")
     if k == "marked_cov": return (m.get("marked") or {}).get("coverage")
     if k == "marked_bevel": return (m.get("marked") or {}).get("bevel_median")
-    if k == "count_err": return abs(o["quads"] / r["target"] - 1) if o.get("quads") else None
+    if k == "count_err": return abs(o["quads"] / r["target"] - 1) if o.get("quads") is not None else None
     if k == "energy_ratio":
         e = [(c["continuous_energy"], c["rounded_energy"]) for c in r.get("cover") or []
              if c.get("continuous_energy") and c.get("rounded_energy") is not None]
@@ -635,12 +652,22 @@ def cmd_compare(a):
           f"(only in A {len(set(A) - set(B))}, only in B {len(set(B) - set(A))})\n")
     if not keys:
         return
-    failed = [(k, side) for k in keys for side, D in (("A", A), ("B", B)) if any(D[k][u]["rc"] != 0 for u in reps)]
+    # An output without faces (metrics.py's "ok": false; the CLI normally exits 2 then) failed too.
+    failed = [(k, side) for k in keys for side, D in (("A", A), ("B", B))
+              if any(D[k][u]["rc"] != 0 or (D[k][u].get("metrics") or {}).get("ok") is False for u in reps)]
     if failed:
-        print("**Failed runs** (non-zero exit in some replicate; left out below): "
+        print("**Failed runs** (non-zero exit or no output faces in some replicate; left out below): "
               + ", ".join(f"{side} {k[0]} {k[1]} {k[2]}" for k, side in failed) + "\n")
     bad = {k for k, _ in failed}
     keys = [k for k in keys if k not in bad]
+    # A and B must have run the same input: a side made before a mesh was regenerated (generator or
+    # corpus.json change) is another experiment, not a fix or a regression.
+    other = [k for k in keys if any(A[k][u].get("input_sha") and B[k][u].get("input_sha")
+                                    and A[k][u]["input_sha"] != B[k][u]["input_sha"] for u in reps)]
+    if other:
+        print("**Different inputs** (A and B ran another version of the mesh; left out below, delete the older "
+              "side's folders to run them again): " + ", ".join(f"{k[0]} {k[1]} {k[2]}" for k in other) + "\n")
+    keys = [k for k in keys if k not in set(other)]
     # metrics.py before 2026-10-22 measured flipped_vs_input against the raw input's normals and had no
     # validity block; a side measured that way is not comparable on those rows.
     for side, D, p in (("A", A, pa), ("B", B, pb)):
@@ -657,7 +684,7 @@ def cmd_compare(a):
                 if D[k][u].get("metrics"):
                     t = D[k][u].get("metrics_tool")
                     tools[side].add(json.dumps(t, sort_keys=True) if t else "unrecorded")
-    if len(set().union(*tools.values()) - {"unrecorded"}) > 1:
+    if len(set().union(*tools.values())) > 1:  # records before 2026-10-27 name no tool: a tool of their own
         print("**A and B were measured by different metrics code** (metrics.py content or numpy/scipy/libigl); "
               "metric rows can differ for that reason alone. `ab.py run <ref> --remeasure` with the same flags "
               "measures a side again with this checkout:")
@@ -691,12 +718,17 @@ def cmd_compare(a):
         agg = sum if metric in COUNTS else st.mean
         shift = 1 if metric in COUNTS else 0
         logs = [math.log((y + shift) / (x + shift)) for x, y in pairs if x + shift > 0 and y + shift > 0]
-        gm = math.exp(st.mean(logs)) if logs else float("nan")
+        # A row that can go negative (sj_p1 on folded quads) would drop exactly those runs from the ratio,
+        # so it shows the mean difference instead. (Zeros still drop out: a known item for the metrics freeze.)
+        signed = any(x < 0 or y < 0 for x, y in pairs)
+        ratio = f"Δ {st.mean(y - x for x, y in pairs):+.4g}" if signed else \
+            (f"×{math.exp(st.mean(logs)):.3f}" if logs else "×nan")
         better = sum(1 for x, y in pairs if (y > x if metric in HIGHER_IS_BETTER else y < x))
         worse = sum(1 for x, y in pairs if (y < x if metric in HIGHER_IS_BETTER else y > x))
-        print(f"| {metric} | {fmt(agg(x for x, _ in pairs))} | {fmt(agg(y for _, y in pairs))} | ×{gm:.3f} | "
+        print(f"| {metric} | {fmt(agg(x for x, _ in pairs))} | {fmt(agg(y for _, y in pairs))} | {ratio} | "
               f"{better} / {worse} |")
-    print("\nCounts are summed over runs (geo-mean of (B+1)/(A+1)), the rest averaged. time is the CLI's own "
+    print("\nCounts are summed over runs (geo-mean of (B+1)/(A+1)), the rest averaged (Δ: mean B − A on a row "
+          "with negative values). time is the CLI's own "
           "total under --jobs parallel load: use it for large effects only.\n")
     # Gates like "no run over 2× master's time or memory" look at the worst run, not the mean.
     for metric in ("time", "peak_rss_mb"):
@@ -740,18 +772,22 @@ def cmd_compare(a):
             print(f"| {metric} | {lo} | {hi} | {st.median(cvs):.2f} |" if cvs else f"| {metric} | {lo} | {hi} | – |")
         print()
 
-    # Topology: a discrete outcome, so only unanimous replicates count as a claim.
-    ta = {k: [topology_ok(A[k][u]) for u in reps] for k in keys}
-    tb = {k: [topology_ok(B[k][u]) for u in reps] for k in keys}
-    if any(None in v for v in list(ta.values()) + list(tb.values())):
-        print("Topology: not measured in every run (run without --no-metrics).")
-    else:
+    # Topology: a discrete outcome, so only unanimous replicates count as a claim. Runs not measured in
+    # every replicate on both sides (metrics.py failed or timed out, --no-metrics) are left out by name,
+    # so one of them does not hide the verdict on all the others.
+    tkeys = [k for k in keys if all(topology_ok(D[k][u]) is not None for D in (A, B) for u in reps)]
+    if len(tkeys) < len(keys):
+        print(f"Topology: {len(keys) - len(tkeys)} runs not measured in every replicate on both sides, left out: "
+              + ", ".join(f"{k[0]} {k[1]} {k[2]}" for k in keys if k not in set(tkeys)))
+    ta = {k: [topology_ok(A[k][u]) for u in reps] for k in tkeys}
+    tb = {k: [topology_ok(B[k][u]) for u in reps] for k in tkeys}
+    if tkeys:
         n = len(reps)
-        fixed = [k for k in keys if not any(ta[k]) and all(tb[k])]
-        broken = [k for k in keys if all(ta[k]) and not any(tb[k])]
-        noisy = [k for k in keys if 0 < sum(ta[k]) < n or 0 < sum(tb[k]) < n]
+        fixed = [k for k in tkeys if not any(ta[k]) and all(tb[k])]
+        broken = [k for k in tkeys if all(ta[k]) and not any(tb[k])]
+        noisy = [k for k in tkeys if 0 < sum(ta[k]) < n or 0 < sum(tb[k]) < n]
         avg = lambda T: sum(sum(v) for v in T.values()) / n  # noqa: E731
-        print(f"Topology same as input: A {avg(ta):.1f}, B {avg(tb):.1f} of {len(keys)} runs "
+        print(f"Topology same as input: A {avg(ta):.1f}, B {avg(tb):.1f} of {len(tkeys)} runs "
               f"(mean over {n} replicate{'s' if n > 1 else ''})")
         name = lambda k: f"{k[0]} {k[1]} {k[2]}"  # noqa: E731
         if n == 1:
@@ -764,10 +800,10 @@ def cmd_compare(a):
         # Per island (validity.islands_same_as_input): also catches a handle or hole moved between
         # islands, an island dropped (shrunk to a blob of the same topology) and non-manifold vertices,
         # which the global check above cannot see.
-        ia = [island_ok(A[k][u]) for k in keys for u in reps]
-        ib = [island_ok(B[k][u]) for k in keys for u in reps]
+        ia = [island_ok(A[k][u]) for k in tkeys for u in reps]
+        ib = [island_ok(B[k][u]) for k in tkeys for u in reps]
         if None not in ia + ib:
-            print(f"Topology same as input per island: A {sum(ia) / n:.1f}, B {sum(ib) / n:.1f} of {len(keys)} runs")
+            print(f"Topology same as input per island: A {sum(ia) / n:.1f}, B {sum(ib) / n:.1f} of {len(tkeys)} runs")
 
     # libQEx fallbacks (TODO 6.1b): how often B's islands went to our tracing, why, and what those
     # replicate-runs look like on both sides.

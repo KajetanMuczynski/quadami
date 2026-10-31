@@ -1540,6 +1540,10 @@ bool AutoRemesher::remeshIslands()
                 record.set("qex_non_quads", (double)qex.nonQuads);
                 record.set("qex_dropped_faces", (double)qex.droppedFaces);
                 record.set("qex_cut_vertices", (double)qex.cutVertices);
+                record.set("trace_uv_area", qex.traceUvArea);
+                record.set("trace_cross_points", (double)qex.traceCrossPoints);
+                record.set("trace_faces", (double)qex.traceFaces);
+                record.set("trace_capped", qex.traceCapped ? 1.0 : 0.0);
                 run.diagnostics.push_back(std::move(record));
             }
             if (extracted) {
