@@ -655,12 +655,17 @@ def _draw_raise_hint(box, hint, room):
     column = box.column(align=True)
     for i, line in enumerate(report_rows.wrap(text, room.box - room.icon - room.pad, room.measure)):
         column.label(text=line, icon="INFO" if i == 0 else "BLANK1")
+    if hint["state"] == "back":
+        return
+    # Beside Set the dismiss is an icon (its tooltip says what it does): two
+    # labels side by side would be cut off in a narrow sidebar.
     row = box.row(align=True)
     row.enabled = _job is None
     if hint.get("next"):
         operator = row.operator(OBJECT_OT_set_target_quads.bl_idname, text="Set %s" % format(hint["next"], ","))
         operator.target = hint["next"]
-    if hint["state"] != "back":
+        row.operator(OBJECT_OT_keep_quads.bl_idname, text="", icon="X")
+    else:
         row.operator(OBJECT_OT_keep_quads.bl_idname, text="Keep These Quads", icon="X")
 
 
