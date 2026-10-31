@@ -1,5 +1,22 @@
 # Changelog
 
+## Quadami 0.2.1
+
+Fix release with one new button (release notes: [docs/releases/0.2.1.md](docs/releases/0.2.1.md)).
+Changes since 0.2.0. Output is byte-identical to 0.2.0 on the standard test sets (770 runs).
+
+Blender add-on
+- Copy Report button in the result box: build, versions, settings, result rows, warnings, step
+  times, the worker's last output and the report JSON on the clipboard; no mesh data, user names
+  redacted from paths; works after a failed run
+- Keep from Original no longer copies a mark that is on more than half of a large mesh's edges
+  (zigzag sharp paths on FBX and OBJ imports)
+
+Remeshing
+- The fallback extractor leaves an island empty above libQEx's grid bound (8 per target quad +
+  1,000), checked on the map's UV area before tracing and on the traced faces after; models with
+  very many tiny thin pieces no longer run for many minutes or out of memory
+
 ## Quadami 0.2.0
 
 Release with known limits (release notes: [docs/releases/0.2.0.md](docs/releases/0.2.0.md)).

@@ -38,7 +38,7 @@ on:
         default: ''
       baseline:
         description: Commit or tag of the previous release for the ratchet (empty skips the ratchet)
-        default: v0.1.0  # the previous release (docs/RELEASING.md); 0.1.0 itself was checked against 877891d
+        default: v0.2.0  # the previous release (docs/RELEASING.md); 0.1.0 itself was checked against 877891d
       replicates:
         description: 1-ulp replicates besides the plain input
         default: '5'
