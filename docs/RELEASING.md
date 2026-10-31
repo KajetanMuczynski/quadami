@@ -40,8 +40,9 @@ is made by CI from a tag and always starts as a **draft**: nothing is public unt
 ## Versions
 
 - The manifest version is the release version, `MAJOR.MINOR.PATCH`, and changes only in a release
-  PR. While the major number is 0, the minor goes up for a release with new features or changed
-  output, the patch for fixes only.
+  PR. While the major number is 0, the minor goes up for a release with new features that change
+  output or the workflow, the patch for fixes and small additions that don't change output (Kajetan,
+  2026-10-31: 0.2.1 adds the Copy Report button).
 - Test builds between releases keep the last version; the build line in the panel tells them apart
   (`pr77 abc1234+master`, `abc1234 2026-11-03`, or `v0.1.0 ...` for the release itself).
 - Not `0.1.0+<commit>` in the manifest: Blender would show it but every build would need its own
