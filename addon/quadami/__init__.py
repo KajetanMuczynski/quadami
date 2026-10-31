@@ -137,7 +137,7 @@ class RemeshSettings(bpy.types.PropertyGroup):
         name="Resolution",
         items=(
             ("quality", "Quality", "Solves on a finer triangle mesh: cleaner quads and fewer "
-                                   "flipped quads, about 1.5 times as long as Fast"),
+                                   "flipped quads, about twice as long as Fast"),
             ("fast", "Fast", "Solves on a coarser triangle mesh: quicker, rougher quads"),
         ),
         default="quality",
@@ -237,11 +237,9 @@ def _mark_counts(mesh):
 
 
 def _flooded_marks(mesh, counts, kinds):
-    """The followed kinds (follow_marks values) that mark most edges of a
-    mesh of over 1000 edges: an import's marks rather than edges to keep.
-    A cube or cylinder has most of its edges marked too, but few edges."""
-    edges = len(mesh.edges)
-    return [kind for kind in kinds if edges > 1000 and 2 * counts.get(kind.lower(), 0) > edges]
+    """The followed kinds (follow_marks values) that flood the mesh
+    (transfer.flooded)."""
+    return [kind for kind in kinds if transfer.flooded(len(mesh.edges), counts.get(kind.lower(), 0))]
 
 
 def _flood_warning(flooded):
@@ -249,7 +247,8 @@ def _flood_warning(flooded):
         return None
     labels = dict((kind.upper(), label) for kind, label in MARK_NAMES)
     return ("Follow Marks left out %s: more than half of the edges carry it, as after an FBX or OBJ "
-            "import, rather than the edges to keep" % " and ".join(labels[kind] for kind in flooded))
+            "import, rather than the edges to keep; Keep from Original does not copy it either"
+            % " and ".join(labels[kind] for kind in flooded))
 
 
 def _mark_line(obj, kinds):

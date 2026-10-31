@@ -29,6 +29,8 @@ on:
       - tools/bench/gates.py
       - tools/bench/metrics.py
       - tools/bench/release_gate.py
+      - tools/bench/requirements.txt
+      - tools/bench/requirements-meshes.txt
   workflow_dispatch:
     inputs:
       ref:
@@ -76,7 +78,7 @@ jobs:
 
       - name: Fetch and generate the meshes
         run: |
-          python -m pip install -q numpy==2.5.4 scipy==1.18.1 manifold3d==3.5.4 scikit-image==0.26.0
+          python -m pip install -q --require-hashes --no-deps -r tools/bench/requirements-meshes.txt
           tools/bench/fetch_meshes.sh build/meshes
           python tools/bench/make_synthetic.py --downloads build/meshes/downloads --out build/meshes/synthetic
 
@@ -136,8 +138,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The imports too, under a limit: a package that hangs on import stops here, not after 4 h.
       - name: Install the metrics' packages
-        run: python -m pip install -q numpy==2.5.4 scipy==1.18.1 libigl==2.6.3
+        timeout-minutes: 10
+        run: |
+          python -m pip install -q --require-hashes --no-deps -r tools/bench/requirements.txt
+          for m in numpy scipy scipy.spatial igl; do echo "import $m"; python -c "import $m"; done
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
