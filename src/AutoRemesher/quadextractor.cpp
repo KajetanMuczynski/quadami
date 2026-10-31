@@ -56,8 +56,11 @@ bool QuadExtractor::extract()
     // repair and cleanup below run on either.
     m_qexOutcome = QexOutcome();
     const bool usedQex = m_useQex && extractWithQexFrontEnd();
-    if (!usedQex)
+    if (!usedQex) {
         traceMesh();
+        if (m_qexOutcome.traceCapped)
+            return false;
+    }
     finishMesh();
 
     // Across a fold libQEx can join two sheets into a handle that tracing the
@@ -76,6 +79,8 @@ bool QuadExtractor::extract()
             m_remeshedPolygons.clear();
             m_halfEdges.clear();
             traceMesh();
+            if (m_qexOutcome.traceCapped)
+                return false;
             finishMesh();
         }
     }
@@ -246,12 +251,32 @@ void QuadExtractor::traceMesh()
         if (m_progressHandler)
             m_progressHandler(fraction, name);
     };
+    // The tracing below costs about the square of the grid lines crossing a
+    // triangle, and the cleanup in finishMesh() grows faster than linearly in
+    // the faces, so a map that folds or is far finer than the island can take
+    // many minutes or gigabytes (ext_nemetona, a lace island at 127 quads:
+    // 28,812 quads; ext_iron_gate). Such an island is left empty, by the bound
+    // libQEx's grid has: the map's UV area (about one grid vertex per unit)
+    // before tracing, and the traced faces after.
+    const size_t cap = QexGridVerticesPerQuad * m_targetQuadCount + 1000;
+    double uvArea = 0.0;
+    for (const auto& uvs : *m_triangleUvs) {
+        if (uvs.size() == 3)
+            uvArea += 0.5 * std::abs((uvs[1][0] - uvs[0][0]) * (uvs[2][1] - uvs[0][1]) - (uvs[2][0] - uvs[0][0]) * (uvs[1][1] - uvs[0][1]));
+    }
+    m_qexOutcome.traceUvArea = uvArea;
+    if (m_targetQuadCount > 0 && uvArea > (double)cap) {
+        m_qexOutcome.traceCapped = true;
+        std::cerr << "Trace: map area " << uvArea << " for " << m_targetQuadCount << " quads, island left empty" << std::endl;
+        return;
+    }
     report(0.0f, "Extracting connections");
     std::cerr << "Extract connections..." << std::endl;
     std::vector<Vector3> crossPoints;
     std::vector<size_t> crossPointSourceTriangles;
     std::set<std::pair<size_t, size_t>> connections;
     extractConnections(&crossPoints, &crossPointSourceTriangles, &connections);
+    m_qexOutcome.traceCrossPoints = crossPoints.size();
     report(0.07f, "Holding singular lines");
     holdSingularLines(&crossPoints, &crossPointSourceTriangles, &connections);
     m_extractedConnections.clear();
@@ -350,6 +375,15 @@ void QuadExtractor::traceMesh()
     std::cerr << "Extract mesh..." << std::endl;
     extractMesh(crossPoints, crossPointSourceTriangles, edgeConnectMap, &m_remeshedPolygons);
     std::cerr << "Extract mesh done" << std::endl;
+
+    m_qexOutcome.traceFaces = m_remeshedPolygons.size();
+    if (m_targetQuadCount > 0 && m_remeshedPolygons.size() > cap) {
+        m_qexOutcome.traceCapped = true;
+        std::cerr << "Trace: " << m_remeshedPolygons.size() << " faces for " << m_targetQuadCount
+                  << " quads, island left empty" << std::endl;
+        m_remeshedVertices.clear();
+        m_remeshedPolygons.clear();
+    }
 }
 
 void QuadExtractor::extractEdges(const std::set<std::pair<size_t, size_t>>& connections,
