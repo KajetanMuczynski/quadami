@@ -141,6 +141,42 @@ class Validity(unittest.TestCase):
         self.assertAlmostEqual(v["area_uncovered"], 0.5, delta=0.02)
         self.assertFalse(v["islands_same_as_input"])
 
+    def test_split_seam_is_welded_like_the_core(self):
+        # The input's vertex ring at u = 0 is written twice (a UV seam export): the core welds it first,
+        # so a closed output is right and an output that kept the seam open added two holes.
+        inp = grid(96, 48, False, True, torus_point, quads=False)
+        r = self.run_metrics(inp, self.torus_out())
+        self.assertEqual(r["topology"]["input_welded_vertices"], 48)
+        self.assertTrue(r["topology"]["same_as_input"])
+        self.assertTrue(r["validity"]["islands_same_as_input"])
+        v = self.run_metrics(inp, grid(40, 16, False, True, torus_point))["validity"]
+        self.assertEqual((v["holes_added"], v["islands_same_as_input"]), (2, False))
+
+    def test_double_sided_sheet_is_not_welded(self):
+        # Two coincident sheets, each with its own vertices and the other winding: their triangles lie on
+        # the same side of every boundary edge, so the core keeps two sheets (inputsanitizer.cpp).
+        V, F = sheet(8, 8, 1.0)
+        V2, F2 = join((V, F), (V, [f[::-1] for f in F]))
+        Ft = np.array([t for f in F2 for t in ([f[0], f[1], f[2]], [f[0], f[2], f[3]])])
+        _, welded = metrics.weld_seams(V2, Ft, np.sqrt(2))
+        self.assertEqual(welded, 0)
+
+    def test_repeated_vertex_is_not_a_hole(self):
+        # A quad written a b c c is a degenerate face, not a boundary edge from c to c.
+        V, F = self.torus_out()
+        F = [list(f) for f in F]
+        F[0] = F[0][:3] + [F[0][2]]
+        F.append([F[0][0], F[0][2], self.torus_out()[1][0][3]])
+        r = self.run_metrics(self.torus_in(), (V, F))
+        self.assertEqual((r["topology"]["boundary_edges"], r["degenerate"]["repeated_vertex"]), (0, 1))
+        self.assertTrue(r["validity"]["islands_same_as_input"])
+
+    def test_zero_normal_face_is_flipped_in_neither_orientation(self):
+        V, F = self.torus_out()
+        V = np.vstack([V, V[F[0][0]]])
+        F = [list(f) for f in F] + [[F[0][0], len(V) - 1, F[0][1]]]  # two corners at one point: normal 0
+        for out in ((V, F), (V, [f[::-1] for f in F])):
+            self.assertEqual(self.run_metrics(self.torus_in(), out)["flipped"]["faces_vs_input"], 0)
     def test_island_shrunk_to_a_blob_is_dropped_not_same(self):
         # The second torus comes out as a much smaller torus at its centre: one output island of the
         # same topology votes for it, but none of its area lies within one output edge of the output.
