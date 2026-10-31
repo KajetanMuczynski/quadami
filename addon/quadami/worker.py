@@ -73,7 +73,12 @@ PARAMETER_FLAGS = {
 RUN_FLAGS = {
     "repair_folds": "--fold-repair",
     "flatten_spikes": "--flatten-spikes",
+    "lost_parts_reference": "--lost-parts-reference",
 }
+
+# The interface version that brought --lost-parts-reference; an older
+# configured worker would reject the flag.
+LOST_PARTS_REFERENCE_INTERFACE = (1, 11)
 
 _PROGRESS_LINE = re.compile(r"^(\d+)% done\.(?: (.*))?$")
 
@@ -170,7 +175,7 @@ def find_executable(configured=""):
 
 
 BUILD_ID_FILE = "build-id.txt"
-_worker_build_ids = {}
+_version_outputs = {}
 
 
 def addon_build_id():
@@ -184,16 +189,15 @@ def addon_build_id():
         return "dev"
 
 
-def worker_build_id(executable):
-    """The build id `executable --version` reports, or None (a build from
-    before build ids, the Qt app, or a program that does not run). Cached per
+def _version_output(executable):
+    """What `executable --version` prints, "" if it does not run. Cached per
     file, so the UI can ask on every redraw and a rebuilt program is asked again."""
     try:
         stat = os.stat(executable)
     except (OSError, TypeError):
-        return None
+        return ""
     key = (executable, stat.st_mtime_ns, stat.st_size)
-    if key not in _worker_build_ids:
+    if key not in _version_outputs:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         try:
             output = subprocess.run([executable, "--version"], capture_output=True, timeout=5,
@@ -201,9 +205,22 @@ def worker_build_id(executable):
                                     text=True, encoding="utf-8", errors="replace").stdout
         except (OSError, subprocess.SubprocessError):
             output = ""
-        match = re.search(r"\(build ([^,)]+)", output)
-        _worker_build_ids[key] = match.group(1).strip() if match else None
-    return _worker_build_ids[key]
+        _version_outputs[key] = output
+    return _version_outputs[key]
+
+
+def worker_build_id(executable):
+    """The build id `executable --version` reports, or None (a build from
+    before build ids, the Qt app, or a program that does not run)."""
+    match = re.search(r"\(build ([^,)]+)", _version_output(executable))
+    return match.group(1).strip() if match else None
+
+
+def worker_interface(executable):
+    """(major, minor) of the remesh interface `executable --version` reports,
+    or None (a build from before it said so, or the Qt app)."""
+    match = re.search(r"remesh interface (\d+)\.(\d+)", _version_output(executable))
+    return (int(match.group(1)), int(match.group(2))) if match else None
 
 
 def worker_environment(environ):

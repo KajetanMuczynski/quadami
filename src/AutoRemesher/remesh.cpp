@@ -329,7 +329,7 @@ void measureClosedIslands(const RemeshMesh& mesh,
 void measureLostParts(const std::vector<double>& positions, const std::vector<uint32_t>& triangles,
     size_t targetQuads, const RemeshMesh& mesh,
     const std::vector<::AutoRemesher::AutoRemesher::RemeshedIsland>& islands,
-    QualityReport* report, const std::vector<size_t>* leftOut)
+    QualityReport* report, const std::vector<size_t>* leftOut, size_t referenceTargetQuads)
 {
     for (const auto& island : islands) {
         if (0 == island.faceCount || island.faceCount >= 0.5 * island.targetQuads)
@@ -405,148 +405,190 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
             previousDistance = distance;
         }
     });
-    std::vector<size_t> far;
-    for (size_t i = 0; i < distances.size(); ++i) {
+    for (size_t i = 0; i < distances.size(); ++i)
         report->farthestInputQuadWidths = std::max(report->farthestInputQuadWidths, distances[i] / quadWidth);
-        if (distances[i] > radius)
-            far.push_back(i);
-    }
-    report->farInputVertexCount = far.size();
-    if (far.empty())
-        return;
 
-    // Why each far vertex is lost.  A piece of the input with no output
-    // within one quad width came out with nothing (a speck, a hair card, a
-    // whole island); a higher target does not necessarily bring it back.
-    // Otherwise the part was cut off or smoothed away: thin if its other
-    // side is close, and then the target is what limits it.
-    std::vector<uint32_t> parent(used.size());
-    std::iota(parent.begin(), parent.end(), 0u);
+    // What the classification needs besides the distances: the input's
+    // pieces (connected by shared vertices), open edges and vertex normals.
+    // The same for every width, so built once, when a vertex is far at all.
+    std::vector<uint32_t> parent;
+    std::vector<char> onOpenEdge;
+    std::vector<Vector3> normals;
     const auto root = [&](uint32_t vertex) {
         while (parent[vertex] != vertex)
             vertex = parent[vertex] = parent[parent[vertex]];
         return vertex;
     };
-    for (size_t i = 0; i < triangles.size(); i += 3) {
-        const uint32_t a = root(triangles[i]);
-        parent[root(triangles[i + 1])] = a;
-        parent[root(triangles[i + 2])] = a;
-    }
-    std::vector<char> pieceHasOutput(used.size(), 0);
-    for (size_t i = 0; i < inputVertices.size(); ++i) {
-        if (distances[i] <= quadWidth)
-            pieceHasOutput[root(inputVertices[i])] = 1;
-    }
-    std::vector<size_t> attached;
-    std::vector<uint32_t> lostPieces;
-    for (const size_t i : far) {
-        const uint32_t piece = root(inputVertices[i]);
-        if (pieceHasOutput[piece]) {
-            attached.push_back(i);
-        } else {
-            ++report->pieceLostVertexCount;
-            lostPieces.push_back(piece);
+    const auto buildTopology = [&]() {
+        if (!parent.empty())
+            return;
+        parent.resize(used.size());
+        std::iota(parent.begin(), parent.end(), 0u);
+        for (size_t i = 0; i < triangles.size(); i += 3) {
+            const uint32_t a = root(triangles[i]);
+            parent[root(triangles[i + 1])] = a;
+            parent[root(triangles[i + 2])] = a;
         }
-    }
-    std::sort(lostPieces.begin(), lostPieces.end());
-    report->lostPieceCount = (size_t)(std::unique(lostPieces.begin(), lostPieces.end()) - lostPieces.begin());
-    if (attached.empty())
-        return;
-
-    // Thickness at a sample of the attached far vertices: the distance to the
-    // nearest input vertex whose normal faces it (the part's other side),
-    // searched in a grid of cells as wide as the thin limit.  A single-sided
-    // surface (a leaf, a petal, cloth) has no other side; there the nearest
-    // open edge, an edge of one input triangle, is what is close.
-    std::vector<std::pair<uint32_t, uint32_t>> edges;
-    edges.reserve(triangles.size());
-    for (size_t i = 0; i < triangles.size(); i += 3) {
-        for (size_t k = 0; k < 3; ++k) {
-            const uint32_t a = triangles[i + k], b = triangles[i + (k + 1) % 3];
-            edges.emplace_back(std::min(a, b), std::max(a, b));
+        std::vector<std::pair<uint32_t, uint32_t>> edges;
+        edges.reserve(triangles.size());
+        for (size_t i = 0; i < triangles.size(); i += 3) {
+            for (size_t k = 0; k < 3; ++k) {
+                const uint32_t a = triangles[i + k], b = triangles[i + (k + 1) % 3];
+                edges.emplace_back(std::min(a, b), std::max(a, b));
+            }
         }
-    }
-    std::sort(edges.begin(), edges.end());
-    std::vector<char> onOpenEdge(used.size(), 0);
-    for (size_t i = 0; i < edges.size();) {
-        size_t j = i + 1;
-        while (j < edges.size() && edges[j] == edges[i])
-            ++j;
-        if (j - i == 1)
-            onOpenEdge[edges[i].first] = onOpenEdge[edges[i].second] = 1;
-        i = j;
-    }
-    std::vector<Vector3> normals(used.size());
-    for (size_t i = 0; i < triangles.size(); i += 3) {
-        const Vector3 normal = Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]),
-            point(triangles[i + 2]) - point(triangles[i]));
-        for (size_t k = 0; k < 3; ++k)
-            normals[triangles[i + k]] += normal;
-    }
-    for (auto& normal : normals)
-        normal.normalize();
-    const double cellSize = ThinLostPartQuadWidths * quadWidth;
-    Vector3 low = point(inputVertices[0]);
-    for (const uint32_t vertex : inputVertices) {
-        for (int k = 0; k < 3; ++k)
-            low[k] = std::min(low[k], point(vertex)[k]);
-    }
-    using Cell = std::array<long long, 3>;
-    const auto cellOf = [&](const Vector3& position) {
-        return Cell { (long long)std::floor((position[0] - low[0]) / cellSize),
-            (long long)std::floor((position[1] - low[1]) / cellSize),
-            (long long)std::floor((position[2] - low[2]) / cellSize) };
+        std::sort(edges.begin(), edges.end());
+        onOpenEdge.assign(used.size(), 0);
+        for (size_t i = 0; i < edges.size();) {
+            size_t j = i + 1;
+            while (j < edges.size() && edges[j] == edges[i])
+                ++j;
+            if (j - i == 1)
+                onOpenEdge[edges[i].first] = onOpenEdge[edges[i].second] = 1;
+            i = j;
+        }
+        normals.assign(used.size(), Vector3());
+        for (size_t i = 0; i < triangles.size(); i += 3) {
+            const Vector3 normal = Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]),
+                point(triangles[i + 2]) - point(triangles[i]));
+            for (size_t k = 0; k < 3; ++k)
+                normals[triangles[i + k]] += normal;
+        }
+        for (auto& normal : normals)
+            normal.normalize();
     };
-    std::vector<std::pair<Cell, uint32_t>> grid;
-    grid.reserve(inputVertices.size());
-    for (const uint32_t vertex : inputVertices)
-        grid.emplace_back(cellOf(point(vertex)), vertex);
-    std::sort(grid.begin(), grid.end());
-    const size_t sampleCount = std::min<size_t>(attached.size(), 1024);
-    std::vector<double> thickness(sampleCount, std::numeric_limits<double>::max());
-    std::vector<char> nearOpenEdge(sampleCount, 0);
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, sampleCount), [&](const tbb::blocked_range<size_t>& range) {
-        for (size_t s = range.begin(); s != range.end(); ++s) {
-            const uint32_t vertex = inputVertices[attached[s * attached.size() / sampleCount]];
-            const Vector3 position = point(vertex);
-            const Cell cell = cellOf(position);
-            for (long long dx = -1; dx <= 1; ++dx) {
-                for (long long dy = -1; dy <= 1; ++dy) {
-                    for (long long dz = -1; dz <= 1; ++dz) {
-                        const Cell near = { cell[0] + dx, cell[1] + dy, cell[2] + dz };
-                        auto it = std::lower_bound(grid.begin(), grid.end(), std::make_pair(near, (uint32_t)0));
-                        for (; it != grid.end() && it->first == near; ++it) {
-                            const double distance = (point(it->second) - position).length();
-                            if (Vector3::dotProduct(normals[it->second], normals[vertex]) < -0.5)
-                                thickness[s] = std::min(thickness[s], distance);
-                            if (onOpenEdge[it->second] && distance <= cellSize)
-                                nearOpenEdge[s] = 1;
+
+    // Counts the vertices farther than LostPartQuadWidths widths and why each
+    // is lost, with width as the quad width; the thin parts' thickness in
+    // widths goes to thinWidths.  The distances do not depend on the width.
+    const auto classify = [&](double width, LostPartCounts* counts, std::vector<double>* thinWidths) {
+        const double farRadius = LostPartQuadWidths * width;
+        std::vector<size_t> far;
+        for (size_t i = 0; i < distances.size(); ++i) {
+            if (distances[i] > farRadius)
+                far.push_back(i);
+        }
+        counts->farInputVertexCount = far.size();
+        if (far.empty())
+            return;
+        buildTopology();
+
+        // A piece of the input with no output within one quad width came out
+        // with nothing (a speck, a hair card, a whole island); a higher target
+        // does not necessarily bring it back.  Otherwise the part was cut off
+        // or smoothed away: thin if its other side is close, and then the
+        // target is what limits it.
+        std::vector<char> pieceHasOutput(used.size(), 0);
+        for (size_t i = 0; i < inputVertices.size(); ++i) {
+            if (distances[i] <= width)
+                pieceHasOutput[root(inputVertices[i])] = 1;
+        }
+        std::vector<size_t> attached;
+        std::vector<uint32_t> lostPieces;
+        for (const size_t i : far) {
+            const uint32_t piece = root(inputVertices[i]);
+            if (pieceHasOutput[piece]) {
+                attached.push_back(i);
+            } else {
+                ++counts->pieceLostVertexCount;
+                lostPieces.push_back(piece);
+            }
+        }
+        std::sort(lostPieces.begin(), lostPieces.end());
+        counts->lostPieceCount = (size_t)(std::unique(lostPieces.begin(), lostPieces.end()) - lostPieces.begin());
+        if (attached.empty())
+            return;
+
+        // Thickness at a sample of the attached far vertices: the distance to
+        // the nearest input vertex whose normal faces it (the part's other
+        // side), searched in a grid of cells as wide as the thin limit.  A
+        // single-sided surface (a leaf, a petal, cloth) has no other side;
+        // there the nearest open edge, an edge of one input triangle, is what
+        // is close.
+        const double cellSize = ThinLostPartQuadWidths * width;
+        Vector3 low = point(inputVertices[0]);
+        for (const uint32_t vertex : inputVertices) {
+            for (int k = 0; k < 3; ++k)
+                low[k] = std::min(low[k], point(vertex)[k]);
+        }
+        using Cell = std::array<long long, 3>;
+        const auto cellOf = [&](const Vector3& position) {
+            return Cell { (long long)std::floor((position[0] - low[0]) / cellSize),
+                (long long)std::floor((position[1] - low[1]) / cellSize),
+                (long long)std::floor((position[2] - low[2]) / cellSize) };
+        };
+        std::vector<std::pair<Cell, uint32_t>> grid;
+        grid.reserve(inputVertices.size());
+        for (const uint32_t vertex : inputVertices)
+            grid.emplace_back(cellOf(point(vertex)), vertex);
+        std::sort(grid.begin(), grid.end());
+        const size_t sampleCount = std::min<size_t>(attached.size(), 1024);
+        std::vector<double> thickness(sampleCount, std::numeric_limits<double>::max());
+        std::vector<char> nearOpenEdge(sampleCount, 0);
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, sampleCount), [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t s = range.begin(); s != range.end(); ++s) {
+                const uint32_t vertex = inputVertices[attached[s * attached.size() / sampleCount]];
+                const Vector3 position = point(vertex);
+                const Cell cell = cellOf(position);
+                for (long long dx = -1; dx <= 1; ++dx) {
+                    for (long long dy = -1; dy <= 1; ++dy) {
+                        for (long long dz = -1; dz <= 1; ++dz) {
+                            const Cell near = { cell[0] + dx, cell[1] + dy, cell[2] + dz };
+                            auto it = std::lower_bound(grid.begin(), grid.end(), std::make_pair(near, (uint32_t)0));
+                            for (; it != grid.end() && it->first == near; ++it) {
+                                const double distance = (point(it->second) - position).length();
+                                if (Vector3::dotProduct(normals[it->second], normals[vertex]) < -0.5)
+                                    thickness[s] = std::min(thickness[s], distance);
+                                if (onOpenEdge[it->second] && distance <= cellSize)
+                                    nearOpenEdge[s] = 1;
+                            }
                         }
                     }
                 }
             }
+        });
+        size_t thinSamples = 0;
+        size_t openEdgeSamples = 0;
+        for (size_t s = 0; s < sampleCount; ++s) {
+            if (thickness[s] <= cellSize) {
+                ++thinSamples;
+                if (nullptr != thinWidths)
+                    thinWidths->push_back(thickness[s] / width);
+            } else if (nearOpenEdge[s]) {
+                ++openEdgeSamples;
+            }
         }
-    });
-    std::vector<double> thin;
-    size_t openEdgeSamples = 0;
-    for (size_t s = 0; s < sampleCount; ++s) {
-        if (thickness[s] <= cellSize)
-            thin.push_back(thickness[s] / quadWidth);
-        else if (nearOpenEdge[s])
-            ++openEdgeSamples;
-    }
-    const auto scaled = [&](size_t samples) {
-        return (size_t)std::llround((double)attached.size() * samples / sampleCount);
+        const auto scaled = [&](size_t samples) {
+            return (size_t)std::llround((double)attached.size() * samples / sampleCount);
+        };
+        counts->thinLostVertexCount = scaled(thinSamples);
+        counts->openEdgeLostVertexCount = std::min(scaled(openEdgeSamples), attached.size() - counts->thinLostVertexCount);
+        counts->otherLostVertexCount = attached.size() - counts->thinLostVertexCount - counts->openEdgeLostVertexCount;
     };
-    report->thinLostVertexCount = scaled(thin.size());
-    report->openEdgeLostVertexCount = std::min(scaled(openEdgeSamples), attached.size() - report->thinLostVertexCount);
-    report->otherLostVertexCount = attached.size() - report->thinLostVertexCount - report->openEdgeLostVertexCount;
+
+    LostPartCounts own;
+    std::vector<double> thin;
+    classify(quadWidth, &own, &thin);
+    report->farInputVertexCount = own.farInputVertexCount;
+    report->pieceLostVertexCount = own.pieceLostVertexCount;
+    report->lostPieceCount = own.lostPieceCount;
+    report->thinLostVertexCount = own.thinLostVertexCount;
+    report->openEdgeLostVertexCount = own.openEdgeLostVertexCount;
+    report->otherLostVertexCount = own.otherLostVertexCount;
     if (!thin.empty()) {
         std::sort(thin.begin(), thin.end());
         // In quad widths; recorded only.  Neither predicts the target that
         // brings the parts back (off by up to 30 times on the ladder).
         report->diagnostics.emplace_back("lost_thin_thickness_p10", thin[thin.size() / 10]);
         report->diagnostics.emplace_back("lost_thin_thickness_p50", thin[thin.size() / 2]);
+    }
+
+    // The same count at the quad width of an earlier run's target, so a host
+    // can tell whether the parts that run lost came back: at this run's own,
+    // smaller width, finer parts count as lost too.
+    if (referenceTargetQuads > 0) {
+        report->lostPartsReferenceTarget = referenceTargetQuads;
+        classify(std::sqrt(area / (double)referenceTargetQuads), &report->referenceLostParts, nullptr);
     }
 }
 
@@ -770,7 +812,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     {
         const auto lostPartsStart = std::chrono::steady_clock::now();
         measureLostParts(request.positions, request.triangles, parameters.targetQuadCount, mesh,
-            engine.remeshedIslands(), &report, &engine.leftOutVertices());
+            engine.remeshedIslands(), &report, &engine.leftOutVertices(), parameters.lostPartsReferenceTarget);
         report.diagnostics.emplace_back("lost_parts_ms",
             1000.0 * std::chrono::duration<double>(std::chrono::steady_clock::now() - lostPartsStart).count());
     }
@@ -949,6 +991,7 @@ std::string toJson(const RemeshResult& result)
         << ", \"flatten_spikes\": " << (parameters.flattenSpikes ? "true" : "false")
         << ", \"extractor\": " << jsonString(toString(parameters.extractor))
         << ", \"quad_smoothing\": " << jsonString(toString(parameters.quadSmoothing))
+        << ", \"lost_parts_reference\": " << parameters.lostPartsReferenceTarget
         << "},\n";
     out << "  \"input\": {"
         << "\"vertices\": " << jsonCount(report.inputVertexCount)
@@ -994,7 +1037,20 @@ std::string toJson(const RemeshResult& result)
         << ", \"thin_vertices\": " << jsonCount(report.thinLostVertexCount)
         << ", \"open_edge_vertices\": " << jsonCount(report.openEdgeLostVertexCount)
         << ", \"other_vertices\": " << jsonCount(report.otherLostVertexCount)
-        << "},\n";
+        << ",\n                 \"reference\": ";
+    if (0 == report.lostPartsReferenceTarget) {
+        out << "null";
+    } else {
+        const LostPartCounts& reference = report.referenceLostParts;
+        out << "{\"target_quads\": " << jsonCount(report.lostPartsReferenceTarget)
+            << ", \"far_input_vertices\": " << jsonCount(reference.farInputVertexCount)
+            << ", \"piece_vertices\": " << jsonCount(reference.pieceLostVertexCount)
+            << ", \"pieces\": " << jsonCount(reference.lostPieceCount)
+            << ", \"thin_vertices\": " << jsonCount(reference.thinLostVertexCount)
+            << ", \"open_edge_vertices\": " << jsonCount(reference.openEdgeLostVertexCount)
+            << ", \"other_vertices\": " << jsonCount(reference.otherLostVertexCount) << "}";
+    }
+    out << "},\n";
     out << "  \"time\": {\"total_seconds\": " << jsonNumber(report.seconds) << ", \"steps\": [";
     for (size_t i = 0; i < report.stepSeconds.size(); ++i) {
         out << (0 == i ? "\n" : ",\n")

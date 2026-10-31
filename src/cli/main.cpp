@@ -72,6 +72,10 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "                              how the extracted quads are smoothed: tangential\n"
                           "                              slides them along the surface and keeps ridges\n"
                           "                              and creases (default laplacian)\n"
+                          "  --lost-parts-reference <count>\n"
+                          "                              also count lost parts in the report at the quad\n"
+                          "                              width of this target (an earlier run's), so its\n"
+                          "                              losses can be tracked (default 0: off)\n"
                           "  --stdin-control             cancel when stdin receives the line \"cancel\"\n"
                           "                              or is closed; the report then says \"cancelled\"\n"
                           "  -h, --help                  show this text\n"
@@ -173,6 +177,8 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
             valid = parseDouble(value, &parameters.sharpEdgeDegrees);
         else if ("--smooth-normal" == name)
             valid = parseDouble(value, &parameters.smoothNormalDegrees);
+        else if ("--lost-parts-reference" == name)
+            valid = parseCount(value, &parameters.lostPartsReferenceTarget);
         else if ("--extractor" == name) {
             if (!parseExtractor(value, &parameters.extractor)) {
                 std::fprintf(stderr, "Error: --extractor must be qex or trace, not %s\n", value.c_str());

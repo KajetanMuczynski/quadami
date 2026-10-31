@@ -30,6 +30,7 @@ import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
 
+from . import raise_hint
 from . import report as report_rows
 from . import transfer, worker
 from .names import ID, NAME
@@ -38,6 +39,8 @@ REPORT_PROPERTY = ID + "_report"
 # Object property (a pointer, so it survives renames): the object a result was
 # made from. Remesh and "Repair Folds and Re-run" on a result run on it.
 SOURCE_PROPERTY = ID + "_source"
+# On a source object: its runs, for the Raise Target Quads hint (raise_hint.py).
+HISTORY_PROPERTY = ID + "_history"
 # Above this ratio of the largest to the smallest scale axis the panel and the
 # report warn that the quads come out stretched (the core works in object space).
 UNEVEN_SCALE_RATIO = 1.05
@@ -362,6 +365,19 @@ def _keep(context, source, result, report, settings):
     result[REPORT_PROPERTY] = json.dumps(report)
 
 
+def _track(source, key, result, report):
+    """Add the run to the source's history and give the result's report the
+    Raise Target Quads hint for it (report["raise"])."""
+    history = raise_hint.record(raise_hint.load(source.get(HISTORY_PROPERTY)), key, report)
+    if history is None:
+        return
+    source[HISTORY_PROPERTY] = json.dumps(history)
+    hint = raise_hint.hint(history, worker.MAXIMUM_TARGET_QUADS)
+    if hint:
+        report["raise"] = hint
+        result[REPORT_PROPERTY] = json.dumps(report)
+
+
 def _build_object(context, source, outcome, smooth, warnings=()):
     """The result object, linked next to the source and placed like it,
     smooth shaded if the source mostly was. No edges are marked sharp: no
@@ -470,6 +486,13 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             parameters["repair_folds"] = True
             if self.flatten_spikes:
                 parameters["flatten_spikes"] = True
+        # After a run that lost parts, measure this one against that run's
+        # quad width too, so the panel can say whether those parts came back.
+        self._history_key = raise_hint.input_key(positions, triangles, marked, parameters)
+        reference = raise_hint.reference_target(raise_hint.load(obj.get(HISTORY_PROPERTY)), self._history_key,
+                                                parameters["target_quads"])
+        if reference and (worker.worker_interface(executable) or (0, 0)) >= worker.LOST_PARTS_REFERENCE_INTERFACE:
+            parameters["lost_parts_reference"] = reference
         job = worker.RemeshJob(executable, positions, triangles, parameters, marked)
         try:
             job.start()
@@ -531,6 +554,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             return {"CANCELLED"}
         new_obj, _last_report = _build_object(context, source, outcome, self._smooth, self._warnings)
         _keep(context, source, new_obj, _last_report, _settings(context))
+        _track(source, self._history_key, new_obj, _last_report)
         _show_result(context, new_obj, (source, bpy.data.objects.get(self._replaced) if self._replaced else None))
         output = outcome.report.get("output", {})
         self.report({"INFO"}, "%s: %d quads, %d non-quads" % (
@@ -574,6 +598,70 @@ class OBJECT_OT_remesh_quads_cancel(bpy.types.Operator):
 # the gap between the columns of a split row.  Characters (measure len) where
 # Blender gives no region.
 TextRoom = collections.namedtuple("TextRoom", "panel box icon pad space measure")
+
+
+class OBJECT_OT_set_target_quads(bpy.types.Operator):
+    """Set Target Quads to this count; press Remesh to try it"""
+    bl_idname = "object." + ID + "_set_target"
+    bl_label = "Set Target Quads"
+    bl_options = {"INTERNAL"}
+
+    target: IntProperty(min=1, max=worker.MAXIMUM_TARGET_QUADS, options={"HIDDEN", "SKIP_SAVE"})
+
+    @classmethod
+    def poll(cls, context):
+        return _job is None
+
+    def execute(self, context):
+        _settings(context).target_quads = self.target
+        self.report({"INFO"}, "Target Quads set to %s: press Remesh to try it" % format(self.target, ","))
+        return {"FINISHED"}
+
+
+class OBJECT_OT_keep_quads(bpy.types.Operator):
+    """Hide the Raise Target Quads hint for this original until its mesh or the settings change"""
+    bl_idname = "object." + ID + "_keep_quads"
+    bl_label = "Keep These Quads"
+    bl_options = {"INTERNAL", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and REPORT_PROPERTY in obj
+
+    def execute(self, context):
+        obj = context.active_object
+        try:
+            report = json.loads(obj[REPORT_PROPERTY])
+        except ValueError:
+            return {"CANCELLED"}
+        if "raise" in report:
+            report["raise"]["dismissed"] = True
+            obj[REPORT_PROPERTY] = json.dumps(report)
+        source = _source(obj)
+        history = raise_hint.load(source.get(HISTORY_PROPERTY)) if source is not None else None
+        if history is not None:
+            history["dismissed"] = True
+            source[HISTORY_PROPERTY] = json.dumps(history)
+        _redraw(context)
+        return {"FINISHED"}
+
+
+def _draw_raise_hint(box, hint, room):
+    """The Raise Target Quads hint under the warnings, with Set and dismiss."""
+    text = raise_hint.text(hint)
+    if not text:
+        return
+    column = box.column(align=True)
+    for i, line in enumerate(report_rows.wrap(text, room.box - room.icon - room.pad, room.measure)):
+        column.label(text=line, icon="INFO" if i == 0 else "BLANK1")
+    row = box.row(align=True)
+    row.enabled = _job is None
+    if hint.get("next"):
+        operator = row.operator(OBJECT_OT_set_target_quads.bl_idname, text="Set %s" % format(hint["next"], ","))
+        operator.target = hint["next"]
+    if hint["state"] != "back":
+        row.operator(OBJECT_OT_keep_quads.bl_idname, text="Keep These Quads", icon="X")
 
 
 def _text_room(context):
@@ -709,6 +797,8 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
                     row.alert = problem
                     icon = ("ERROR" if problem else "INFO") if first else "BLANK1"
                     row.label(text=text, icon=icon)
+                if report.get("raise") and status == "ok":
+                    _draw_raise_hint(box, report["raise"], room)
                 if report_rows.offers_fold_repair(report) and _source(obj) is not None:
                     _draw_fold_offer(box, settings, room)
 
@@ -721,6 +811,8 @@ classes = (
     RemeshSettings,
     OBJECT_OT_remesh_quads,
     OBJECT_OT_remesh_quads_cancel,
+    OBJECT_OT_set_target_quads,
+    OBJECT_OT_keep_quads,
     VIEW3D_PT_remesh_quads,
 )
 
