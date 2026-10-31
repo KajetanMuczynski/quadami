@@ -36,6 +36,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "quadami"))
 import names  # noqa: E402
+import raise_hint  # noqa: E402
 import report  # noqa: E402
 import worker  # noqa: E402
 
@@ -303,6 +304,143 @@ class ReportTest(unittest.TestCase):
         self.assertFalse(any(label == "Spikes flattened" for label, _, _ in report.summary_rows(plain)))
 
 
+def lossy_report(target, far, reference=None, thin=None, folds=0):
+    """A finished run's report with far lost vertices, all thin unless thin
+    says otherwise, and the reference block if reference = (target, far, thin)."""
+    lost = {"far_input_vertices": far, "thin_vertices": far if thin is None else thin,
+            "piece_vertices": 0, "open_edge_vertices": 0, "reference": None}
+    if reference:
+        lost["reference"] = {"target_quads": reference[0], "far_input_vertices": reference[1],
+                             "thin_vertices": reference[2], "piece_vertices": 0, "open_edge_vertices": 0}
+    return {"status": "ok", "parameters": {"target_quads": target}, "lost_parts": lost,
+            "output": {"quads": target, "folded_faces": folds}, "islands": {"holes": 0},
+            "time": {"total_seconds": 1.0}}
+
+
+class RaiseHintTest(unittest.TestCase):
+    MAX = worker.MAXIMUM_TARGET_QUADS
+
+    def test_round_up(self):
+        self.assertEqual([raise_hint.round_up(n) for n in (4500, 5985, 6140, 450.5, 99, 1_000_001)],
+                         [4500, 6000, 6200, 460, 99, 1_100_000])
+
+    def test_ladder(self):
+        # 1.5 times the reference, then 1.33 times the last run, up to 8 times.
+        steps, target = [], 3000
+        while target is not None:
+            steps.append(target)
+            target = raise_hint.next_target(3000, target, self.MAX)
+        self.assertEqual(steps, [3000, 4500, 6000, 8000, 11000, 15000, 20000, 24000])
+        self.assertEqual(raise_hint.next_target(3000, 3200, self.MAX), 4500)
+        self.assertIsNone(raise_hint.next_target(1_500_000, 1_500_000, self.MAX))
+
+    def test_raisable(self):
+        self.assertTrue(raise_hint.raisable({"far_input_vertices": 100, "thin_vertices": 25}))
+        self.assertTrue(raise_hint.raisable({"far_input_vertices": 100, "piece_vertices": 30}))
+        self.assertFalse(raise_hint.raisable({"far_input_vertices": 100, "thin_vertices": 24}))
+        self.assertFalse(raise_hint.raisable({"far_input_vertices": 0}))
+
+    def test_input_key(self):
+        positions = np.zeros((4, 3), dtype=np.float32)
+        triangles = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
+        marked = np.empty((0, 2), dtype=np.int32)
+        key = raise_hint.input_key(positions, triangles, marked, {"target_quads": 300, "adaptivity": 0.5})
+        self.assertEqual(key, raise_hint.input_key(positions, triangles, marked,
+                                                   {"target_quads": 900, "adaptivity": 0.5}))
+        self.assertNotEqual(key, raise_hint.input_key(positions, triangles, marked,
+                                                      {"target_quads": 300, "adaptivity": 0.25}))
+        moved = positions.copy()
+        moved[0, 0] = 1e-6
+        self.assertNotEqual(key, raise_hint.input_key(moved, triangles, marked, {"target_quads": 300,
+                                                                                 "adaptivity": 0.5}))
+        self.assertNotEqual(key, raise_hint.input_key(positions, triangles, np.array([[0, 1]]),
+                                                      {"target_quads": 300, "adaptivity": 0.5}))
+
+    def run_ladder(self, *reports, key="k"):
+        history = None
+        for item in reports:
+            history = raise_hint.record(history, key, item)
+        return history, raise_hint.hint(history, self.MAX)
+
+    def test_clean_run_no_hint(self):
+        history, hint = self.run_ladder(lossy_report(3000, 0))
+        self.assertEqual(history["reference"], 0)
+        self.assertIsNone(hint)
+        self.assertEqual(raise_hint.reference_target(history, "k", 4500), 0)
+
+    def test_other_cause_no_hint(self):
+        history, hint = self.run_ladder(lossy_report(3000, 100, thin=10))
+        self.assertIsNone(hint)
+
+    def test_try_then_partly_then_back(self):
+        history, hint = self.run_ladder(lossy_report(3000, 308, folds=5))
+        self.assertEqual((hint["state"], hint["next"]), ("try", 4500))
+        self.assertIn("Try 4,500 Target Quads", raise_hint.text(hint))
+        self.assertEqual(raise_hint.reference_target(history, "k", 4500), 3000)
+        self.assertEqual(raise_hint.reference_target(history, "other key", 4500), 0)
+        self.assertEqual(raise_hint.reference_target(history, "k", 3000), 0)
+
+        partly = lossy_report(4500, 400, reference=(3000, 130, 130), folds=6)
+        history, hint = self.run_ladder(lossy_report(3000, 308, folds=5), partly)
+        self.assertEqual((hint["state"], hint["missing"], hint["next"]), ("partly", 130, 6000))
+        self.assertEqual(raise_hint.text(hint), "178 of 308 points missing at 3,000 are back at 4,500; "
+                                                "130 are still missing. Try 6,000.")
+        # The reference stays the first lossy run, not the lossy 4,500.
+        self.assertEqual(history["reference"], 3000)
+
+        back = lossy_report(6000, 50, reference=(3000, 0, 0), folds=17)
+        history, hint = self.run_ladder(lossy_report(3000, 308, folds=5), partly, back)
+        self.assertEqual(hint["state"], "back")
+        text = raise_hint.text(hint)
+        self.assertIn("All 308 points of the original missing at 3,000 are back at 6,000.", text)
+        self.assertIn("12 more folded faces", text)
+        self.assertIn("finer parts", text)
+        self.assertEqual([run["target"] for run in history["runs"]], [3000, 4500, 6000])
+
+    def test_not_back_at_eight_times(self):
+        history, hint = self.run_ladder(lossy_report(3000, 82), lossy_report(24000, 900, reference=(3000, 10, 10)))
+        self.assertEqual(hint["state"], "not_back")
+        self.assertIn("Not back at up to 24,000 (8.0 times 3,000): 10 of 82 points", raise_hint.text(hint))
+        self.assertNotIn("Set", raise_hint.text(hint))
+
+    def test_remaining_not_thin(self):
+        _, hint = self.run_ladder(lossy_report(3000, 100), lossy_report(4500, 40, reference=(3000, 40, 0)))
+        self.assertEqual(hint["state"], "other")
+        self.assertNotIn("next", hint)
+
+    def test_new_reference_when_lower(self):
+        history, hint = self.run_ladder(lossy_report(3000, 100), lossy_report(2000, 150))
+        self.assertEqual((history["reference"], history["reference_far"], hint["state"]), (2000, 150, "try"))
+
+    def test_new_key_new_history(self):
+        history = raise_hint.record(None, "a", lossy_report(3000, 100))
+        history["dismissed"] = True
+        history = raise_hint.record(history, "a", lossy_report(4500, 0, reference=(3000, 0, 0)))
+        self.assertTrue(history["dismissed"])
+        self.assertEqual(raise_hint.text(raise_hint.hint(history, self.MAX)), "")
+        history = raise_hint.record(history, "b", lossy_report(4500, 0))
+        self.assertFalse(history["dismissed"])
+        self.assertEqual(len(history["runs"]), 1)
+
+    def test_history_limit_and_failed_runs(self):
+        history = None
+        for target in range(1000, 11000, 1000):
+            history = raise_hint.record(history, "k", lossy_report(target, 0))
+        self.assertEqual(len(history["runs"]), raise_hint.HISTORY_LIMIT)
+        self.assertIs(raise_hint.record(history, "k", {"status": "failed"}), history)
+
+    def test_missing_reference_block_no_hint(self):
+        # An older worker, or a run without the flag: nothing to judge by.
+        _, hint = self.run_ladder(lossy_report(3000, 100), lossy_report(4500, 80))
+        self.assertIsNone(hint)
+
+    def test_load(self):
+        self.assertIsNone(raise_hint.load(None))
+        self.assertIsNone(raise_hint.load("not json"))
+        self.assertIsNone(raise_hint.load("[1]"))
+        self.assertEqual(raise_hint.load('{"key": "k"}'), {"key": "k"})
+
+
 class CopyReportTest(unittest.TestCase):
     INFO = {"addon_build": "abc1234 2026-10-31", "worker_build": "abc1234 2026-10-31",
             "blender": "4.2.3 LTS", "system": "Linux 6.8.0 x86_64 (Ubuntu 24.04.1 LTS)",
@@ -442,6 +580,19 @@ class CliTest(unittest.TestCase):
 
     def test_version_has_build_id(self):
         self.assertTrue(worker.worker_build_id(EXECUTABLE))
+        self.assertGreaterEqual(worker.worker_interface(EXECUTABLE), worker.LOST_PARTS_REFERENCE_INTERFACE)
+
+    def test_lost_parts_reference_flag(self):
+        outcome = worker.remesh(EXECUTABLE, self.positions.astype(np.float32), self.triangles,
+                                {"target_quads": 500, "lost_parts_reference": 300})
+        self.assertEqual(outcome.status, "ok", outcome.message + "\n" + outcome.log)
+        self.assertEqual(outcome.report["parameters"]["lost_parts_reference"], 300)
+        reference = outcome.report["lost_parts"]["reference"]
+        self.assertEqual((reference["target_quads"], reference["far_input_vertices"]), (300, 0))
+        plain = worker.remesh(EXECUTABLE, self.positions.astype(np.float32), self.triangles, {"target_quads": 500})
+        self.assertIsNone(plain.report["lost_parts"]["reference"])
+        # Measuring only: the same output.
+        self.assertTrue(np.array_equal(plain.positions, outcome.positions))
 
     def test_remesh(self):
         updates = []
