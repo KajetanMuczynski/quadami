@@ -456,10 +456,22 @@ void IsotropicRemesher::collapseShortEdges(double minEdgeLengthSquared, double m
                 edgeMaxLenSq = std::pow(4.0 / 3.0 * edgeTarget, 2);
             }
             if (lengthSquared < edgeMinLenSq) {
-                if (!halfedge->startVertex->featured && !nextHalfedge->startVertex->featured &&
-                        !halfedge->startVertex->pinned && !nextHalfedge->startVertex->pinned) {
-                    if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq)) {
-                        break;
+                IsotropicHalfedgeMesh::Vertex *from = halfedge->startVertex;
+                IsotropicHalfedgeMesh::Vertex *to = nextHalfedge->startVertex;
+                if (!from->featured && !to->featured && !from->pinned && !to->pinned) {
+                    if (!from->marked && !to->marked) {
+                        if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq)) {
+                            break;
+                        }
+                    } else if (!from->marked ||
+                            (halfedge->hard() && m_halfedgeMesh->isStraightHardChainVertex(from))) {
+                        // Onto a marked vertex, which stays where it is: an
+                        // unmarked neighbour, or the next vertex along a
+                        // nearly straight marked line (not at a corner, an
+                        // end or a crossing).
+                        if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq, &to->position)) {
+                            break;
+                        }
                     }
                 }
             }
@@ -511,7 +523,7 @@ void IsotropicRemesher::shiftVertices()
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
         //if (vertex->featured)
         //    continue;
-        if (vertex->pinned)
+        if (vertex->pinned || vertex->marked)
             continue;
         m_halfedgeMesh->relaxVertex(vertex);
     }
@@ -527,7 +539,7 @@ void IsotropicRemesher::projectVertices()
     for (IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr);
             nullptr != vertex;
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
-        if (vertex->featured || vertex->pinned)
+        if (vertex->featured || vertex->pinned || vertex->marked)
             continue;
 
         const auto &startHalfedge = vertex->firstHalfedge;

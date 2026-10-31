@@ -68,6 +68,9 @@ public:
     // solution is linear in the right-hand sides. Returns false otherwise.
     bool scaleSolution(double factor);
     bool converged() const;
+    // Frees the factorised system once rounding is over; the solution and
+    // everything that reads it stay, but solveIteration() returns false after.
+    void releaseSystem();
     double value(size_t originalVariable) const;
     size_t kernelSize() const;
     size_t integerKernelVariableCount() const;
@@ -111,6 +114,22 @@ public:
         return m_droppedConstraintCount;
     }
 
+    // Non-zeros of the elimination (the matrix from the kernel to the
+    // variables left after the two-term constraints), and whether they grew
+    // past 64 per kernel variable. Then the elimination stops, no kernel is
+    // built and solveIteration() fails. The cover of chain-mail lace (about
+    // 1,600 holes in an island of 49 quads, ext_nemetona at 3000 quads) filled
+    // in to 326 per kernel variable, and its first solve passed 10 GB before
+    // it was stopped; other islands stay near 1.
+    size_t eliminationNonZeros() const
+    {
+        return m_eliminationNonZeros;
+    }
+    bool eliminationOverBudget() const
+    {
+        return m_eliminationOverBudget;
+    }
+
     // max |x / p - round(x / p)| over the variables given a period before
     // elimination, evaluated on the current solution.  Integers fixed in the
     // kernel can still leave an original variable fractional when the
@@ -151,6 +170,7 @@ private:
     std::vector<Coeff> throughM1(const std::vector<Coeff>& row) const;
     bool processConstraint(const std::vector<Coeff>& row);
     void recordConstraint();
+    size_t recordedConstraintCount() const;
     const std::vector<Coeff>& recordedConstraint(size_t index) const;
     void finalizeM0();
     void finalizeM1();
@@ -167,11 +187,11 @@ private:
     std::vector<int> m_period;
     std::vector<int> m_initialPeriod;
     std::vector<Coeff> m_pendingConstraint;
+    // The constraints as added, kept for constraintResidual(): constraint i
+    // is m_constraintData[m_constraintStart[i], m_constraintStart[i + 1]).
     std::vector<Coeff> m_constraintData;
-    std::vector<std::pair<size_t, size_t>> m_constraintRanges;
+    std::vector<size_t> m_constraintStart;
     std::vector<Coeff> m_constraintScratch;
-    std::vector<size_t> m_singleTermConstraints;
-    std::vector<size_t> m_multiTermConstraints;
     mutable std::vector<Coeff> m_rowScratch;
     std::vector<Row> m_energy;
     std::vector<Row> m_reducedEnergy;
@@ -187,12 +207,15 @@ private:
     mutable std::vector<Coeff> m_merged;
 
     std::unique_ptr<ConstrainedLeastSquares> m_system;
+    bool m_systemReleased = false;
     std::vector<size_t> m_energyIndices;
     IterationStats m_lastIterationStats;
     size_t m_iterationCount = 0;
     // Integers fixed per rounding pass besides the nearly integral ones.
     size_t m_roundingBatch = 0;
     size_t m_droppedConstraintCount = 0;
+    size_t m_eliminationNonZeros = 0;
+    bool m_eliminationOverBudget = false;
 };
 }
 #endif

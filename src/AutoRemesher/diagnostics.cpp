@@ -177,6 +177,7 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
     double peakRss = 0, cpuSeconds = 0;
     double mergedVertices = 0, droppedTriangles = 0, cleanupKeptParts = 0, zeroAreaTriangles = 0;
     double flippedTriangles = 0, nonOrientablePieces = 0;
+    double weldedEdges = 0, weldedVertices = 0, weldKeptParts = 0, duplicateTriangles = 0, sliverIslands = 0, splitVertices = 0;
     double foldRepair = 0, foldedTriangles = 0, foldClusters = 0, foldPatches = 0, foldedAfter = 0, foldClustersAfter = 0;
     double foldMovedVertices = 0, foldMaxOffset = 0, foldMaxMove = 0, foldSpikes = 0, foldSpikeDrop = 0, foldMs = 0;
     double thinShare = 0, thinSpots = 0, thinGrowth = 0;
@@ -198,6 +199,12 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
             zeroAreaTriangles = valueOf(record, "input_zero_area_triangles", 0);
             flippedTriangles = valueOf(record, "input_flipped_triangles", 0);
             nonOrientablePieces = valueOf(record, "input_non_orientable_pieces", 0);
+            weldedEdges = valueOf(record, "input_welded_edges", 0);
+            weldedVertices = valueOf(record, "input_welded_vertices", 0);
+            weldKeptParts = valueOf(record, "input_weld_kept_parts", 0);
+            duplicateTriangles = valueOf(record, "input_duplicate_triangles", 0);
+            sliverIslands = valueOf(record, "input_sliver_islands", 0);
+            splitVertices = valueOf(record, "input_split_vertices", 0);
             foldRepair = valueOf(record, "input_fold_repair", 0);
             foldedTriangles = valueOf(record, "input_folded_triangles", 0);
             foldClusters = valueOf(record, "input_fold_clusters", 0);
@@ -300,6 +307,12 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
         { "input_zero_area_triangles", zeroAreaTriangles },
         { "input_flipped_triangles", flippedTriangles },
         { "input_non_orientable_pieces", nonOrientablePieces },
+        { "input_welded_edges", weldedEdges },
+        { "input_welded_vertices", weldedVertices },
+        { "input_weld_kept_parts", weldKeptParts },
+        { "input_duplicate_triangles", duplicateTriangles },
+        { "input_sliver_islands", sliverIslands },
+        { "input_split_vertices", splitVertices },
         { "input_fold_repair", foldRepair },
         { "input_folded_triangles", foldedTriangles },
         { "input_fold_clusters", foldClusters },
@@ -326,6 +339,21 @@ size_t peakResidentSetBytes()
         return (size_t)counters.PeakWorkingSetSize;
     return 0;
 #else
+#if defined(__linux__)
+    // VmHWM belongs to this process's own address space. ru_maxrss does not: at exec the kernel
+    // keeps the old address space's high-water mark, and a parent that starts us with vfork (Python's
+    // subprocess, so ab.py and the add-on under Blender) hands over its own peak.
+    if (FILE* status = std::fopen("/proc/self/status", "r")) {
+        char line[256];
+        unsigned long long kib = 0;
+        bool found = false;
+        while (!found && std::fgets(line, sizeof(line), status))
+            found = 1 == std::sscanf(line, "VmHWM: %llu kB", &kib);
+        std::fclose(status);
+        if (found)
+            return (size_t)kib * 1024;
+    }
+#endif
     struct rusage usage;
     if (0 != getrusage(RUSAGE_SELF, &usage))
         return 0;

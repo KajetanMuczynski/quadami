@@ -22,6 +22,7 @@
 #include <AutoRemesher/RemeshPreview>
 #include <AutoRemesher/SurfaceProjector>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <exception>
@@ -65,6 +66,12 @@ namespace {
         for (const uint32_t index : request.triangles) {
             if (index >= vertexCount)
                 return "a triangle refers to a vertex index past the end of positions";
+        }
+        if (0 != request.featureEdges.size() % 2)
+            return "feature edges must hold two vertex indices each";
+        for (const uint32_t index : request.featureEdges) {
+            if (index >= vertexCount)
+                return "a feature edge refers to a vertex index past the end of positions";
         }
         const RemeshParameters& parameters = request.parameters;
         if (0 == parameters.targetQuadCount)
@@ -322,7 +329,7 @@ void measureClosedIslands(const RemeshMesh& mesh,
 void measureLostParts(const std::vector<double>& positions, const std::vector<uint32_t>& triangles,
     size_t targetQuads, const RemeshMesh& mesh,
     const std::vector<::AutoRemesher::AutoRemesher::RemeshedIsland>& islands,
-    QualityReport* report)
+    QualityReport* report, const std::vector<size_t>* leftOut)
 {
     for (const auto& island : islands) {
         if (0 == island.faceCount || island.faceCount >= 0.5 * island.targetQuads)
@@ -346,6 +353,12 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
     for (size_t i = 0; i < triangles.size(); i += 3) {
         area += 0.5 * Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]), point(triangles[i + 2]) - point(triangles[i])).length();
         used[triangles[i]] = used[triangles[i + 1]] = used[triangles[i + 2]] = 1;
+    }
+    if (nullptr != leftOut) {
+        for (const size_t vertex : *leftOut) {
+            if (vertex < used.size())
+                used[vertex] = 0;
+        }
     }
     std::vector<uint32_t> inputVertices;
     for (size_t vertex = 0; vertex < used.size(); ++vertex) {
@@ -392,10 +405,148 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
             previousDistance = distance;
         }
     });
-    for (const double distance : distances) {
-        report->farthestInputQuadWidths = std::max(report->farthestInputQuadWidths, distance / quadWidth);
-        if (distance > radius)
-            ++report->farInputVertexCount;
+    std::vector<size_t> far;
+    for (size_t i = 0; i < distances.size(); ++i) {
+        report->farthestInputQuadWidths = std::max(report->farthestInputQuadWidths, distances[i] / quadWidth);
+        if (distances[i] > radius)
+            far.push_back(i);
+    }
+    report->farInputVertexCount = far.size();
+    if (far.empty())
+        return;
+
+    // Why each far vertex is lost.  A piece of the input with no output
+    // within one quad width came out with nothing (a speck, a hair card, a
+    // whole island); a higher target does not necessarily bring it back.
+    // Otherwise the part was cut off or smoothed away: thin if its other
+    // side is close, and then the target is what limits it.
+    std::vector<uint32_t> parent(used.size());
+    std::iota(parent.begin(), parent.end(), 0u);
+    const auto root = [&](uint32_t vertex) {
+        while (parent[vertex] != vertex)
+            vertex = parent[vertex] = parent[parent[vertex]];
+        return vertex;
+    };
+    for (size_t i = 0; i < triangles.size(); i += 3) {
+        const uint32_t a = root(triangles[i]);
+        parent[root(triangles[i + 1])] = a;
+        parent[root(triangles[i + 2])] = a;
+    }
+    std::vector<char> pieceHasOutput(used.size(), 0);
+    for (size_t i = 0; i < inputVertices.size(); ++i) {
+        if (distances[i] <= quadWidth)
+            pieceHasOutput[root(inputVertices[i])] = 1;
+    }
+    std::vector<size_t> attached;
+    std::vector<uint32_t> lostPieces;
+    for (const size_t i : far) {
+        const uint32_t piece = root(inputVertices[i]);
+        if (pieceHasOutput[piece]) {
+            attached.push_back(i);
+        } else {
+            ++report->pieceLostVertexCount;
+            lostPieces.push_back(piece);
+        }
+    }
+    std::sort(lostPieces.begin(), lostPieces.end());
+    report->lostPieceCount = (size_t)(std::unique(lostPieces.begin(), lostPieces.end()) - lostPieces.begin());
+    if (attached.empty())
+        return;
+
+    // Thickness at a sample of the attached far vertices: the distance to the
+    // nearest input vertex whose normal faces it (the part's other side),
+    // searched in a grid of cells as wide as the thin limit.  A single-sided
+    // surface (a leaf, a petal, cloth) has no other side; there the nearest
+    // open edge, an edge of one input triangle, is what is close.
+    std::vector<std::pair<uint32_t, uint32_t>> edges;
+    edges.reserve(triangles.size());
+    for (size_t i = 0; i < triangles.size(); i += 3) {
+        for (size_t k = 0; k < 3; ++k) {
+            const uint32_t a = triangles[i + k], b = triangles[i + (k + 1) % 3];
+            edges.emplace_back(std::min(a, b), std::max(a, b));
+        }
+    }
+    std::sort(edges.begin(), edges.end());
+    std::vector<char> onOpenEdge(used.size(), 0);
+    for (size_t i = 0; i < edges.size();) {
+        size_t j = i + 1;
+        while (j < edges.size() && edges[j] == edges[i])
+            ++j;
+        if (j - i == 1)
+            onOpenEdge[edges[i].first] = onOpenEdge[edges[i].second] = 1;
+        i = j;
+    }
+    std::vector<Vector3> normals(used.size());
+    for (size_t i = 0; i < triangles.size(); i += 3) {
+        const Vector3 normal = Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]),
+            point(triangles[i + 2]) - point(triangles[i]));
+        for (size_t k = 0; k < 3; ++k)
+            normals[triangles[i + k]] += normal;
+    }
+    for (auto& normal : normals)
+        normal.normalize();
+    const double cellSize = ThinLostPartQuadWidths * quadWidth;
+    Vector3 low = point(inputVertices[0]);
+    for (const uint32_t vertex : inputVertices) {
+        for (int k = 0; k < 3; ++k)
+            low[k] = std::min(low[k], point(vertex)[k]);
+    }
+    using Cell = std::array<long long, 3>;
+    const auto cellOf = [&](const Vector3& position) {
+        return Cell { (long long)std::floor((position[0] - low[0]) / cellSize),
+            (long long)std::floor((position[1] - low[1]) / cellSize),
+            (long long)std::floor((position[2] - low[2]) / cellSize) };
+    };
+    std::vector<std::pair<Cell, uint32_t>> grid;
+    grid.reserve(inputVertices.size());
+    for (const uint32_t vertex : inputVertices)
+        grid.emplace_back(cellOf(point(vertex)), vertex);
+    std::sort(grid.begin(), grid.end());
+    const size_t sampleCount = std::min<size_t>(attached.size(), 1024);
+    std::vector<double> thickness(sampleCount, std::numeric_limits<double>::max());
+    std::vector<char> nearOpenEdge(sampleCount, 0);
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, sampleCount), [&](const tbb::blocked_range<size_t>& range) {
+        for (size_t s = range.begin(); s != range.end(); ++s) {
+            const uint32_t vertex = inputVertices[attached[s * attached.size() / sampleCount]];
+            const Vector3 position = point(vertex);
+            const Cell cell = cellOf(position);
+            for (long long dx = -1; dx <= 1; ++dx) {
+                for (long long dy = -1; dy <= 1; ++dy) {
+                    for (long long dz = -1; dz <= 1; ++dz) {
+                        const Cell near = { cell[0] + dx, cell[1] + dy, cell[2] + dz };
+                        auto it = std::lower_bound(grid.begin(), grid.end(), std::make_pair(near, (uint32_t)0));
+                        for (; it != grid.end() && it->first == near; ++it) {
+                            const double distance = (point(it->second) - position).length();
+                            if (Vector3::dotProduct(normals[it->second], normals[vertex]) < -0.5)
+                                thickness[s] = std::min(thickness[s], distance);
+                            if (onOpenEdge[it->second] && distance <= cellSize)
+                                nearOpenEdge[s] = 1;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    std::vector<double> thin;
+    size_t openEdgeSamples = 0;
+    for (size_t s = 0; s < sampleCount; ++s) {
+        if (thickness[s] <= cellSize)
+            thin.push_back(thickness[s] / quadWidth);
+        else if (nearOpenEdge[s])
+            ++openEdgeSamples;
+    }
+    const auto scaled = [&](size_t samples) {
+        return (size_t)std::llround((double)attached.size() * samples / sampleCount);
+    };
+    report->thinLostVertexCount = scaled(thin.size());
+    report->openEdgeLostVertexCount = std::min(scaled(openEdgeSamples), attached.size() - report->thinLostVertexCount);
+    report->otherLostVertexCount = attached.size() - report->thinLostVertexCount - report->openEdgeLostVertexCount;
+    if (!thin.empty()) {
+        std::sort(thin.begin(), thin.end());
+        // In quad widths; recorded only.  Neither predicts the target that
+        // brings the parts back (off by up to 30 times on the ladder).
+        report->diagnostics.emplace_back("lost_thin_thickness_p10", thin[thin.size() / 10]);
+        report->diagnostics.emplace_back("lost_thin_thickness_p50", thin[thin.size() / 2]);
     }
 }
 
@@ -515,6 +666,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     QualityReport& report = result.report;
     report.inputVertexCount = request.positions.size() / 3;
     report.inputTriangleCount = request.triangles.size() / 3;
+    report.inputFeatureEdgeCount = request.featureEdges.size() / 2;
     const auto finish = [&](RemeshStatus status, const std::string& message) {
         result.status = status;
         result.message = message;
@@ -545,8 +697,16 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     engine.setGradientAdaptivity(parameters.adaptivity);
     engine.setAnisotropy(parameters.anisotropy);
     engine.setSharpEdgeDegrees(parameters.sharpEdgeDegrees);
+    if (!request.featureEdges.empty()) {
+        std::vector<std::pair<size_t, size_t>> marked;
+        marked.reserve(request.featureEdges.size() / 2);
+        for (size_t i = 0; i + 1 < request.featureEdges.size(); i += 2)
+            marked.emplace_back(request.featureEdges[i], request.featureEdges[i + 1]);
+        engine.setMarkedEdges(std::move(marked));
+    }
     engine.setSmoothNormalDegrees(parameters.smoothNormalDegrees);
     engine.setUseQex(Extractor::Qex == parameters.extractor);
+    engine.setKeepPreviewData(nullptr != preview);
     engine.setRepairInputFolds(parameters.repairFolds);
     engine.setFlattenSpikes(parameters.flattenSpikes);
     engine.setTangentialQuadSmoothing(QuadSmoothing::Tangential == parameters.quadSmoothing);
@@ -571,9 +731,12 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
         return finish(RemeshStatus::Failed, std::string("remeshing failed: ") + e.what());
     }
 
+    report.ignoredFeatureEdgeCount = engine.ignoredMarkedEdgeCount();
+    const size_t marksDroppedIslands = engine.markedEdgesDroppedIslandCount();
+    const size_t marksTooDenseIslands = engine.markedEdgesTooDenseIslandCount();
     if (nullptr != preview)
         preview->phaseReport = engine.phaseReport();
-    result.stageDiagnostics = engine.diagnostics();
+    result.stageDiagnostics = engine.takeDiagnostics();
     if (!result.stageDiagnostics.empty())
         report.diagnostics = summarizeDiagnostics(result.stageDiagnostics);
     if (engine.cancelled())
@@ -607,7 +770,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     {
         const auto lostPartsStart = std::chrono::steady_clock::now();
         measureLostParts(request.positions, request.triangles, parameters.targetQuadCount, mesh,
-            engine.remeshedIslands(), &report);
+            engine.remeshedIslands(), &report, &engine.leftOutVertices());
         report.diagnostics.emplace_back("lost_parts_ms",
             1000.0 * std::chrono::duration<double>(std::chrono::steady_clock::now() - lostPartsStart).count());
     }
@@ -631,15 +794,67 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
         report.warnings.push_back(std::to_string(report.islandsWithoutOutput) + " of "
             + std::to_string(report.islandCount) + " islands produced no faces");
     }
+    if (marksTooDenseIslands > 0) {
+        report.warnings.push_back("Marked edges were not used on " + std::to_string(marksTooDenseIslands)
+            + (1 == marksTooDenseIslands ? " part" : " parts")
+            + ": they are too dense for the quad count (an import often marks nearly every edge Sharp)");
+    }
+    if (marksDroppedIslands > 0) {
+        report.warnings.push_back("Marked edges were not followed on " + std::to_string(marksDroppedIslands)
+            + (1 == marksDroppedIslands ? " part" : " parts")
+            + ": following them folded the quads there (marks that cross other creases or each other)");
+    }
+    if (report.ignoredFeatureEdgeCount > 0) {
+        report.warnings.push_back(std::to_string(report.ignoredFeatureEdgeCount)
+            + (1 == report.ignoredFeatureEdgeCount ? " marked edge is" : " marked edges are")
+            + " not an edge of the mesh and " + (1 == report.ignoredFeatureEdgeCount ? "was" : "were") + " ignored");
+    }
     if (report.closedIslandHoleCount > 0) {
         report.warnings.push_back("Output has " + std::to_string(report.closedIslandHoleCount)
             + (1 == report.closedIslandHoleCount ? " hole" : " holes") + " where the input was closed ("
             + std::to_string(report.closedIslandHoleEdgeCount) + " open edges)");
     }
     if (report.farInputVertexCount > 0) {
-        report.warnings.push_back("Parts of the model are missing in the result (up to "
-            + std::to_string((long long)std::floor(report.farthestInputQuadWidths))
-            + " quad widths away). Thin parts need about two quads across: raise Target Quads.");
+        // One sentence per cause that holds at least a quarter of the far
+        // vertices.  What each says a higher target does was measured in
+        // research/thin-warning-2026-10-27.md (10 models, targets x1 to x8, 6
+        // replicates, at a fixed distance of 3 h0 of the first target): the
+        // thin parts lost first came back on 7 models, mostly on 2 more, and
+        // on 2 of 6 replicates of the last; 25 of 50 and 9 of 9 lost pieces
+        // came back; 9 in 10 open-edge vertices came back.  Each raise also
+        // finds finer parts that are now thinner than a quad, so the warning
+        // itself can stay.
+        const std::string away = " (up to " + std::to_string((long long)std::floor(report.farthestInputQuadWidths))
+            + " quad widths away)";
+        const auto counts = [&](size_t vertices) { return 4 * vertices >= report.farInputVertexCount; };
+        std::string text;
+        if (counts(report.thinLostVertexCount)) {
+            text = "Parts thinner than one quad are missing" + away + ". At "
+                + std::to_string(parameters.targetQuadCount)
+                + " target quads there is no room for them: a limit of Target Quads, not a remeshing error. "
+                  "Raise Target Quads (1.5 to 8 times as many brought such parts back on most test models), "
+                  "though each raise can show finer parts still too thin; or thicken them.";
+        }
+        if (counts(report.pieceLostVertexCount)) {
+            text += std::string(text.empty() ? "" : " ") + std::to_string(report.lostPieceCount)
+                + (1 == report.lostPieceCount ? " separate piece" : " separate pieces")
+                + " came out with no quads at all" + (text.empty() ? away : std::string())
+                + ". Raising Target Quads brought some or all such pieces back on test models (at up to 8 "
+                  "times as many); delete specks you do not need.";
+        }
+        if (counts(report.openEdgeLostVertexCount)) {
+            text += std::string(text.empty() ? "" : " ") + "Parts along open edges of single-sided surfaces "
+                                                           "(leaves, petals, cloth) are missing"
+                + (text.empty() ? away : std::string())
+                + ". Raising Target Quads brought most of them back on a test model, not all; giving the "
+                  "surface thickness (Solidify) removes the open edges.";
+        }
+        if (counts(report.otherLostVertexCount) || text.empty()) {
+            text += std::string(text.empty() ? "" : " ") + "Parts that are not thinner than a quad are missing"
+                + away + ", so Target Quads may not be the cause. If raising it does not bring them back, "
+                         "please report it.";
+        }
+        report.warnings.push_back(text);
     }
     if (report.collapsedIslandCount > 0) {
         report.warnings.push_back(std::to_string(report.collapsedIslandCount)
@@ -679,7 +894,9 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
         if (warned) {
             std::string text = std::to_string((int)std::lround(100.0 * share)) + " % of the surface ("
                 + std::to_string((long long)spots) + (1 == spots ? " spot" : " spots")
-                + ") is thinner than one quad; expect folds or lost parts there. ";
+                + ") is thinner than one quad at " + std::to_string(parameters.targetQuadCount)
+                + " target quads, a limit of Target Quads rather than a remeshing error: expect folds or "
+                  "lost parts there. ";
             const double needed = growth * (double)parameters.targetQuadCount;
             if (needed > (double)MaximumTargetQuadCount) {
                 text += "No target quad count fits a quad across half of it: thicken those parts";
@@ -693,8 +910,8 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
                 text += "At least "
                     + std::to_string((long long)(std::ceil(needed / step) * step))
                     + " target quads (an estimate) would fit a quad across about half of it, but each raise "
-                      "also reveals thinner parts, so it can take several raises; thickening those parts is "
-                      "usually the better fix";
+                      "also reveals thinner parts, so it can take several raises; thickening those parts "
+                      "also works";
             }
             report.warnings.push_back(text);
         }
@@ -736,6 +953,8 @@ std::string toJson(const RemeshResult& result)
     out << "  \"input\": {"
         << "\"vertices\": " << jsonCount(report.inputVertexCount)
         << ", \"triangles\": " << jsonCount(report.inputTriangleCount)
+        << ", \"feature_edges\": " << jsonCount(report.inputFeatureEdgeCount)
+        << ", \"ignored_feature_edges\": " << jsonCount(report.ignoredFeatureEdgeCount)
         << "},\n";
     out << "  \"output\": {"
         << "\"vertices\": " << jsonCount(report.vertexCount)
@@ -770,6 +989,11 @@ std::string toJson(const RemeshResult& result)
         << "\"farthest_input_quad_widths\": " << jsonNumber(report.farthestInputQuadWidths)
         << ", \"far_input_vertices\": " << jsonCount(report.farInputVertexCount)
         << ", \"threshold_quad_widths\": " << jsonNumber(LostPartQuadWidths)
+        << ", \"piece_vertices\": " << jsonCount(report.pieceLostVertexCount)
+        << ", \"pieces\": " << jsonCount(report.lostPieceCount)
+        << ", \"thin_vertices\": " << jsonCount(report.thinLostVertexCount)
+        << ", \"open_edge_vertices\": " << jsonCount(report.openEdgeLostVertexCount)
+        << ", \"other_vertices\": " << jsonCount(report.otherLostVertexCount)
         << "},\n";
     out << "  \"time\": {\"total_seconds\": " << jsonNumber(report.seconds) << ", \"steps\": [";
     for (size_t i = 0; i < report.stepSeconds.size(); ++i) {

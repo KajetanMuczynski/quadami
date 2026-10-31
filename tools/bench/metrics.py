@@ -46,9 +46,11 @@ named *_rel_edge, which are relative to the output mean edge length):
               input area farther than one output edge from the output
               (area_uncovered) or that near but under an output face facing the
               other way (area_wrong_side: thin parts collapsed into one sheet,
-              pleats), islands_same_as_input. Input islands that are not
-              manifold themselves have no right topology: they are counted in
+              pleats), islands_same_as_input (none dropped, split, merged or
+              changed, output manifold). Input islands that are not manifold
+              themselves have no right topology: they are counted in
               islands_input_non_manifold and left out of the topology counts
+              (a dropped one still counts as dropped)
   normal_deviation_deg  angle between output face and (oriented) input normal at the closest point (D3)
   distance    one-sided mean / max and two-sided Hausdorff on area samples
   symmetry    (with --sym-axis) input reflection error, output geometric
@@ -89,6 +91,17 @@ def read_obj(path):
         elif t[0] == "f":
             faces.append([i - 1 if i > 0 else len(V) + i for i in (int(x.split("/")[0]) for x in t[1:])])
     return (np.array(V, dtype=float) if V else np.zeros((0, 3))), faces
+
+
+def read_obj_lines(path):
+    """Vertex pairs (E, 2, 0-based) of an OBJ's line elements: marked edges, as the CLI reads them."""
+    pairs = []
+    with open(path) as f:
+        for l in f:
+            if l.startswith("l "):
+                idx = [int(t.split("/")[0]) - 1 for t in l.split()[1:]]
+                pairs.extend(zip(idx[:-1], idx[1:]))
+    return np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
 
 
 def triangulate(faces):
@@ -643,6 +656,7 @@ def input_side(input_path, cache_dir=None):
          "components_input": np.int64(len(np.unique(comps(len(Vin), ein)[used_in]))),
          "boundary_loops_input": np.int64(loops(len(Vin), ein_u[ein_c == 1])),
          "sharp_edges": sharp, "sharp_angles": sharp_edge_angles(Vin, Fin, sharp),
+         "marked_edges": read_obj_lines(input_path),
          "tri_island": vlab[Fin[:, 0]], "island_euler": island_euler, "island_loops": island_loops,
          "island_non_manifold": island_nm, "island_area": np.bincount(vlab[Fin[:, 0]], weights=tri_area, minlength=nisl),
          "Fin_oriented": Fin_oriented, "input_reoriented": np.int64(reoriented),
@@ -764,6 +778,18 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
     out["creases"] = crease_coverage(Vin, inp["sharp_edges"], V, E, mean_edge)
     out["creases"].update(crease_report(Vin, inp["sharp_edges"], inp["sharp_angles"], V, faces, E, mean_edge,
                                         sharp_degrees))
+    if len(inp["marked_edges"]):
+        # Marked edges (TODO 5.4): followed by an output edge (A1 on the marked set), and how far
+        # the output surface lies from them (rounding), median and p90 in output mean edges.
+        marked = inp["marked_edges"]
+        A, B = Vin[marked[:, 0]], Vin[marked[:, 1]]
+        L = np.linalg.norm(B - A, axis=1)
+        ns = np.maximum(1, np.ceil(L / (mean_edge / 4)).astype(int))
+        idx = np.repeat(np.arange(len(marked)), ns)
+        along = (np.concatenate([np.arange(k) for k in ns]) + 0.5) / ns[idx]
+        d = point_to_mesh(A[idx] + along[:, None] * (B - A)[idx], V, triangulate(faces))[0] / mean_edge
+        out["marked"] = {**crease_coverage(Vin, marked, V, E, mean_edge),
+                         "bevel_median": float(np.median(d)), "bevel_p90": float(np.percentile(d, 90))}
 
     # Flips against the input surface and distances. The input normals are those of the input as the
     # core sees it, oriented like its orientInput (TODO 1.4): an export with a turned patch would
@@ -822,10 +848,12 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
                        "vertex_to_in_median": float(np.median(d_out[-len(used):]) / diag)}
     out["validity"] = validity(inp, V, faces, sizes, normals, E, bnd, used, lab, cf, reversed_out, mean_edge,
                                in_tri, d_in[:len(Pin_area)], tri_face[out_tri[:len(Pin_area)]], Ftri)
-    # same_as_input per island: no island changed its Euler characteristic or boundary loops, split
-    # or merged with another, and the output is manifold at edges and vertices.
+    # same_as_input per island: no island dropped (a part shrunk to a blob can keep its topology and
+    # its own output island), changed its Euler characteristic or boundary loops, split or merged with
+    # another, and the output is manifold at edges and vertices.
     vd = out["validity"]
-    vd["islands_same_as_input"] = bool(vd["islands_topology_changed"] == 0 and vd["islands_merged"] == 0
+    vd["islands_same_as_input"] = bool(vd["islands_dropped"] == 0 and vd["islands_topology_changed"] == 0
+                                       and vd["islands_merged"] == 0
                                        and vd["non_manifold_vertices"] == 0 and t["non_manifold_edges"] == 0)
 
     if sym_axis:

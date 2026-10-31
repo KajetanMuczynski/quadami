@@ -79,6 +79,18 @@ class ObjTest(unittest.TestCase):
         self.assertTrue((sizes == 3).all())
         np.testing.assert_array_equal(indices.reshape(-1, 3), triangles)
 
+    def test_marked_edges_are_lines(self):
+        positions, triangles = uv_sphere(4, 8)
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "mesh.obj")
+            worker.write_obj(path, positions, triangles, np.array([[1, 2], [2, 3]]))
+            with open(path) as f:
+                lines = [line.strip() for line in f if line.startswith("l ")]
+            # read_obj reads faces only, as the CLI's output has no lines.
+            _, sizes, _ = worker.read_obj(path)
+        self.assertEqual(lines, ["l 2 3", "l 3 4"])
+        self.assertEqual(len(sizes), len(triangles))
+
 
 class NamesTest(unittest.TestCase):
     @unittest.skipIf(sys.version_info < (3, 11), "needs tomllib")
@@ -137,6 +149,39 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(lines, [("1 of 3 islands", True, True), ("produced no faces", False, True)])
         self.assertEqual(report.warning_lines({"status": "ok"}), [])
 
+    def test_warnings_wrap_to_pixels(self):
+        # The panel passes its width in pixels and the font's measure: here
+        # 10 pixels per character, and "W" twice as wide.
+        def measure(text):
+            return 10 * len(text) + 10 * text.count("W")
+        self.assertEqual(report.wrap("1 of 3 islands produced no faces", 200, measure),
+                         ["1 of 3 islands", "produced no faces"])
+        self.assertEqual(report.wrap("WWWW WWWW", 160, measure), ["WWWW", "WWWW"])
+        # A word wider than the panel is split rather than cut off.
+        self.assertEqual(report.wrap("abcdefghij", 40, measure), ["abcd", "efgh", "ij"])
+        lines = report.warning_lines({"status": "ok", "warnings": ["Parts thinner than one quad are missing"]},
+                                     150, measure)
+        self.assertTrue(all(measure(text) <= 150 for text, _, _ in lines))
+        self.assertEqual(" ".join(text for text, _, _ in lines), "Parts thinner than one quad are missing")
+
+    def test_summary_columns_fit(self):
+        def measure(text):
+            return 10 * len(text)
+        rows = [("Quads", "276 of 300 target (92%)", False), ("Non-manifold vertices", "0", False)]
+        # Wide enough: the label column fits the widest label, nothing wraps.
+        factor, laid = report.summary_columns(rows, 600, 8, 8, measure)
+        self.assertEqual(laid, [(["Quads"], ["276 of 300 target (92%)"], False),
+                                (["Non-manifold vertices"], ["0"], False)])
+        self.assertGreaterEqual((600 - 8) * factor - 8, measure("Non-manifold vertices"))
+        # Narrow: labels get at most 60 %, and every line fits its column.
+        factor, laid = report.summary_columns(rows, 300, 8, 8, measure)
+        self.assertEqual(factor, 0.6)
+        for labels, values, _ in laid:
+            self.assertTrue(all(measure(line) <= (300 - 8) * 0.6 - 8 for line in labels))
+            self.assertTrue(all(measure(line) <= (300 - 8) * 0.4 - 8 for line in values))
+        self.assertEqual(" ".join(laid[0][1]), "276 of 300 target (92%)")
+        self.assertEqual(" ".join(laid[1][0]), "Non-manifold vertices")
+
     def test_holes_in_a_closed_input(self):
         # Kajetan's closed head at 10k quads (2026-10-21).
         holes = {
@@ -184,6 +229,12 @@ class ReportTest(unittest.TestCase):
             "status": "ok", "parameters": {"target_quads": 5000}, "output": {"quads": 4962},
             "diagnostics": {"input_dropped_triangles": 2, "input_flipped_triangles": 240}})
         self.assertIn(("Input cleanup", "2 degenerate triangles removed, 240 triangles turned", False), rows)
+        rows = report.summary_rows({
+            "status": "ok", "parameters": {"target_quads": 5000}, "output": {"quads": 4962},
+            "diagnostics": {"input_welded_edges": 270, "input_duplicate_triangles": 12,
+                            "input_split_vertices": 2, "input_sliver_islands": 3}})
+        self.assertIn(("Input cleanup", "270 seam edges welded, 12 duplicate faces removed, "
+                       "2 pinched vertices split, 3 zero-width sliver islands left out", False), rows)
 
 
     def test_fold_rows(self):
@@ -371,6 +422,19 @@ class CliTest(unittest.TestCase):
                                 {"target_quads": 500, "quad_smoothing": "tangential"})
         self.assertEqual(outcome.status, "ok", outcome.message + "\n" + outcome.log)
         self.assertEqual(outcome.report["parameters"]["quad_smoothing"], "tangential")
+
+    def test_marked_edges(self):
+        # The equator of uv_sphere() (64 rings, 128 segments): ring 32.
+        segments = 128
+        first = 1 + 31 * segments
+        ring = [(first + j, first + (j + 1) % segments) for j in range(segments)]
+        outcome = worker.remesh(EXECUTABLE, self.positions.astype(np.float32), self.triangles,
+                                {"target_quads": 500}, marked_edges=np.array(ring + [(0, first)]))
+        self.assertEqual(outcome.status, "ok", outcome.message + "\n" + outcome.log)
+        # (0, first) is not an edge of the sphere: ignored and said so.
+        self.assertEqual(outcome.report["input"]["feature_edges"], segments + 1)
+        self.assertEqual(outcome.report["input"]["ignored_feature_edges"], 1)
+        self.assertTrue(any("marked edge" in w for w in outcome.report["warnings"]), outcome.report["warnings"])
 
     def test_target_above_maximum(self):
         positions, triangles = uv_sphere(16, 32)

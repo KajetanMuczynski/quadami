@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 9;
+const int InterfaceVersionMinor = 10;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -112,9 +112,15 @@ struct RemeshRequest {
     // a0 b0 c0 a1 b1 c1 ..., indices into positions.  Triangles only.
     std::vector<uint32_t> triangles;
     RemeshParameters parameters;
+    // Since 1.10.  Edges the user marked (Blender's Sharp marks), as vertex
+    // pairs a0 b0 a1 b1 ..., indices into positions.  The output keeps a row
+    // of edges along them whatever their angle.  A pair that is not an edge
+    // of the triangles is ignored and counted (report warning).  Empty: only
+    // the dihedral test of sharpEdgeDegrees finds creases, as before.
+    std::vector<uint32_t> featureEdges;
     // Planned optional inputs, each empty by default so that leaving it out
-    // keeps today's behaviour: vertexDensity, featureEdges, faceGroups,
-    // guideCurves, symmetry (see INTERFACE.md in the project docs).
+    // keeps today's behaviour: vertexDensity, faceGroups, guideCurves,
+    // symmetry (see INTERFACE.md in the project docs).
 };
 
 // Lets another thread stop a running remesh().  The core checks it at every
@@ -165,11 +171,19 @@ struct RemeshMesh {
 // An input vertex farther than this many planned quad widths from the
 // output is in a lost part (QualityReport::farInputVertexCount).
 const double LostPartQuadWidths = 3.0;
+// Since 1.10.  A far input vertex is in a thin part if the other side of the
+// part (a vertex whose normal faces it) lies within this many quad widths
+// (QualityReport::thinLostVertexCount).
+const double ThinLostPartQuadWidths = 2.0;
 
 // Measured on the result mesh.  Field definitions are in INTERFACE.md §3.1.
 struct QualityReport {
     size_t inputVertexCount = 0;
     size_t inputTriangleCount = 0;
+    // Since 1.10.  Pairs in RemeshRequest::featureEdges, and how many of
+    // them were ignored because they are not an edge of the cleaned input.
+    size_t inputFeatureEdgeCount = 0;
+    size_t ignoredFeatureEdgeCount = 0;
     size_t vertexCount = 0;
     size_t faceCount = 0;
     size_t quadCount = 0;
@@ -214,6 +228,19 @@ struct QualityReport {
     // by that ratio.
     double farthestInputQuadWidths = 0.0;
     size_t farInputVertexCount = 0;
+    // Since 1.10.  The far input vertices by cause: on a piece of the input
+    // (connected by shared vertices) with no output within one h0 at all
+    // (lostPieceCount such pieces); in a thin part, whose other side (a
+    // vertex with its normal facing back) lies within ThinLostPartQuadWidths
+    // h0; otherwise within that distance of an open edge (an edge of one
+    // input triangle: a leaf, a petal, cloth); or none of these.  The thin,
+    // open edge and other counts are estimated from a sample of at most 1024
+    // far vertices.
+    size_t pieceLostVertexCount = 0;
+    size_t lostPieceCount = 0;
+    size_t thinLostVertexCount = 0;
+    size_t openEdgeLostVertexCount = 0;
+    size_t otherLostVertexCount = 0;
     size_t collapsedIslandCount = 0;
     size_t smallestCollapsedIslandFaces = 0;
     size_t smallestCollapsedIslandTargetQuads = 0;

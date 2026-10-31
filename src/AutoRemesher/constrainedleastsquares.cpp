@@ -48,6 +48,15 @@ namespace {
     // the units the input mesh happens to be modelled in.
     const double relativeRidge = 1e-10;
 
+    // A normal matrix whose product would take more than this many multiply-adds
+    // (the sum of the squared row lengths, which also bounds its non-zeros) is
+    // not formed and the solve fails, so that Eigen's int indices cannot
+    // overflow. The bound is loose for memory: rows of one dense system share
+    // most of their columns, and its normal matrix held 1/60 of the bound
+    // (ext_watch at 3000 quads), so it is no per-unknown fill limit; the
+    // elimination's fill budget in MixedIntegerLeastSquares is.
+    const size_t maximumNormalNonZeros = (size_t)std::numeric_limits<int>::max() / 2;
+
     typedef std::chrono::steady_clock Clock;
 
     double secondsSince(const Clock::time_point& start)
@@ -183,16 +192,19 @@ size_t ConstrainedLeastSquares::addEnergy(const std::vector<std::pair<size_t, do
 {
     if (coefficients.empty() || weight <= 0.0)
         return noIndex;
-    m_energyEquations.push_back({ coefficients, rightHandSide, weight });
+    m_energyCoefficients.insert(m_energyCoefficients.end(), coefficients.begin(), coefficients.end());
+    m_energyStart.push_back(m_energyCoefficients.size());
+    m_energyRightHandSides.push_back(rightHandSide);
+    m_energyWeights.push_back(weight);
     m_matrixDirty = true;
-    return m_energyEquations.size() - 1;
+    return energyCount() - 1;
 }
 
 void ConstrainedLeastSquares::setEnergyRightHandSide(size_t energyIndex, double rightHandSide)
 {
-    if (energyIndex >= m_energyEquations.size())
+    if (energyIndex >= energyCount())
         return;
-    m_energyEquations[energyIndex].rightHandSide = rightHandSide;
+    m_energyRightHandSides[energyIndex] = rightHandSide;
 }
 
 void ConstrainedLeastSquares::addConstraint(const std::vector<std::pair<size_t, double>>& coefficients,
@@ -302,24 +314,36 @@ bool ConstrainedLeastSquares::buildSubstitutions()
 
 bool ConstrainedLeastSquares::buildReducedSystem()
 {
-    const Eigen::Index rowCount = static_cast<Eigen::Index>(m_energyEquations.size());
+    const Eigen::Index rowCount = static_cast<Eigen::Index>(energyCount());
     const Eigen::Index columnCount = static_cast<Eigen::Index>(m_freeCount);
     Cache& cache = *m_cache;
 
+    // The rows are complete once the system is built: drop the slack their
+    // growth left before the matrices are allocated next to them.
+    m_energyCoefficients.shrink_to_fit();
+    m_energyStart.shrink_to_fit();
+    m_energyRightHandSides.shrink_to_fit();
+    m_energyWeights.shrink_to_fit();
+
     std::vector<Eigen::Triplet<double>> entries;
-    size_t entryCount = 0;
-    for (const LinearEquation& equation : m_energyEquations)
-        entryCount += equation.coefficients.size();
-    entries.reserve(entryCount);
+    size_t normalBound = 0;
+    for (size_t row = 0; row < energyCount(); ++row) {
+        const size_t length = m_energyStart[row + 1] - m_energyStart[row];
+        normalBound += length * length;
+    }
+    m_lastSolveStats.normalNonZerosBound = normalBound;
+    if (normalBound > maximumNormalNonZeros)
+        return false;
+    entries.reserve(m_energyCoefficients.size());
 
     cache.rowShift = Eigen::VectorXd::Zero(rowCount);
     cache.rowWeightRoot = Eigen::VectorXd::Zero(rowCount);
     for (Eigen::Index row = 0; row < rowCount; ++row) {
-        const LinearEquation& equation = m_energyEquations[static_cast<size_t>(row)];
-        const double weightRoot = std::sqrt(equation.weight);
+        const double weightRoot = std::sqrt(m_energyWeights[static_cast<size_t>(row)]);
         cache.rowWeightRoot[row] = weightRoot;
         double shift = 0.0;
-        for (const auto& coefficient : equation.coefficients) {
+        for (size_t k = m_energyStart[static_cast<size_t>(row)]; k < m_energyStart[static_cast<size_t>(row) + 1]; ++k) {
+            const auto& coefficient = m_energyCoefficients[k];
             if (coefficient.first >= m_variableCount)
                 return false;
             const Substitution& substitution = m_substitutions[coefficient.first];
@@ -375,10 +399,10 @@ bool ConstrainedLeastSquares::solveReduced(std::vector<double>* solution)
         return false;
     m_lastSolveStats.fixedVariables = cache.fixedColumns.size();
 
-    Eigen::VectorXd scaledRightHandSide(static_cast<Eigen::Index>(m_energyEquations.size()));
+    Eigen::VectorXd scaledRightHandSide(static_cast<Eigen::Index>(energyCount()));
     for (Eigen::Index row = 0; row < scaledRightHandSide.size(); ++row) {
         scaledRightHandSide[row] = cache.rowWeightRoot[row]
-            * (m_energyEquations[static_cast<size_t>(row)].rightHandSide - cache.rowShift[row]);
+            * (m_energyRightHandSides[static_cast<size_t>(row)] - cache.rowShift[row]);
     }
     bool solveSucceeded = false;
     const Clock::time_point solveStart = Clock::now();
@@ -465,7 +489,7 @@ bool ConstrainedLeastSquares::solve(std::vector<double>* solution)
     stats.factorizations = factorizations;
     stats.solves = solves + 1;
     stats.variables = m_variableCount;
-    stats.energies = m_energyEquations.size();
+    stats.energies = energyCount();
     stats.constraints = m_constraintEquations.size();
     stats.fixedVariables = m_fixedVariables.size();
     if (m_matrixDirty) {
@@ -521,18 +545,21 @@ bool ConstrainedLeastSquares::solveWithLagrangeMultipliers(std::vector<double>* 
     std::vector<Eigen::Triplet<double>> entries;
     Eigen::VectorXd rightHandSide = Eigen::VectorXd::Zero(variableCount + independentConstraintCount);
     double diagonalSum = 0.0;
-    for (const LinearEquation& equation : m_energyEquations) {
-        for (const auto& coefficient : equation.coefficients) {
-            if (coefficient.first >= m_variableCount)
+    for (size_t row = 0; row < energyCount(); ++row) {
+        const auto begin = m_energyCoefficients.begin() + m_energyStart[row];
+        const auto end = m_energyCoefficients.begin() + m_energyStart[row + 1];
+        const double weight = m_energyWeights[row];
+        for (auto coefficient = begin; coefficient != end; ++coefficient) {
+            if (coefficient->first >= m_variableCount)
                 return false;
-            rightHandSide[static_cast<Eigen::Index>(coefficient.first)] += equation.weight * coefficient.second * equation.rightHandSide;
-            for (const auto& otherCoefficient : equation.coefficients) {
-                if (otherCoefficient.first >= m_variableCount)
+            rightHandSide[static_cast<Eigen::Index>(coefficient->first)] += weight * coefficient->second * m_energyRightHandSides[row];
+            for (auto otherCoefficient = begin; otherCoefficient != end; ++otherCoefficient) {
+                if (otherCoefficient->first >= m_variableCount)
                     return false;
-                const double entry = equation.weight * coefficient.second * otherCoefficient.second;
-                if (coefficient.first == otherCoefficient.first)
+                const double entry = weight * coefficient->second * otherCoefficient->second;
+                if (coefficient->first == otherCoefficient->first)
                     diagonalSum += entry;
-                entries.emplace_back(static_cast<Eigen::Index>(coefficient.first), static_cast<Eigen::Index>(otherCoefficient.first),
+                entries.emplace_back(static_cast<Eigen::Index>(coefficient->first), static_cast<Eigen::Index>(otherCoefficient->first),
                     entry);
             }
         }
@@ -583,6 +610,7 @@ void appendSolveStats(DiagnosticRecord* record, const std::string& prefix,
     record->set(p + "fixed", (double)stats.fixedVariables);
     record->set(p + "n", (double)stats.freeVariables);
     record->set(p + "normal_nnz", (double)stats.normalNonZeros);
+    record->set(p + "normal_nnz_bound", (double)stats.normalNonZerosBound);
     record->set(p + "factor_nnz", (double)stats.factorNonZeros);
     record->set(p + "ridge", stats.ridge);
     record->set(p + "refactorized", stats.refactorized ? 1.0 : 0.0);

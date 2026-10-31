@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <queue>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
@@ -1287,8 +1288,12 @@ namespace {
             record.set("kernel_integers", (double)s.integerKernelVariableCount());
             record.set("hard_coordinates", (double)hardCoordinateCount);
             record.set("dropped_constraints", (double)s.droppedConstraintCount());
+            record.set("elimination_nonzeros", (double)s.eliminationNonZeros());
+            record.set("elimination_over_budget", s.eliminationOverBudget() ? 1.0 : 0.0);
             diagnostics->push_back(std::move(record));
         }
+        if (s.eliminationOverBudget())
+            return false;
         // Rounding converges well short of the cap, so spread the fraction over
         // the passes it is expected to take and clamp instead of pacing it
         // against the cap and barely moving.
@@ -1327,6 +1332,9 @@ namespace {
             if (s.converged())
                 break;
         }
+        // Nothing below solves again; the factorisation was the largest
+        // thing alive during the untangling that follows.
+        s.releaseSystem();
         report(0.96f, "Rounding cover to integers");
         size_t violatedConstraints = 0;
         const double constraintResidual = s.constraintResidual(1e-6, &violatedConstraints);
@@ -1457,7 +1465,8 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     const std::vector<double>* faceScaling,
     const std::vector<double>* faceScalingU,
     const std::vector<double>* faceScalingV,
-    const ProgressHandler* progressHandler)
+    const ProgressHandler* progressHandler,
+    const SurfaceMesh* surfaceMesh)
 {
     const auto report = [progressHandler](float fraction, const char* name) {
         if (nullptr != progressHandler && *progressHandler)
@@ -1467,7 +1476,12 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     if (vertices.empty() || triangles.empty() || !(quadEdgeLength > 0.0))
         return false;
     report(0.0f, "Initializing cover field");
-    SurfaceMesh mesh(vertices, triangles);
+    std::unique_ptr<SurfaceMesh> ownMesh;
+    if (nullptr == surfaceMesh) {
+        ownMesh.reset(new SurfaceMesh(vertices, triangles));
+        surfaceMesh = ownMesh.get();
+    }
+    const SurfaceMesh& mesh = *surfaceMesh;
     if (mesh.faceCount() != triangles.size())
         return false;
     const size_t corners = mesh.cornerCount();

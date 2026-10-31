@@ -33,6 +33,7 @@ AxisAlignedBoudingBoxTree::AxisAlignedBoudingBoxTree(const std::vector<AxisAlign
     m_root = new Node;
     m_root->boundingBox = outterBox;
     m_root->boxIndices = boxIndices;
+    m_root->boxCount = boxIndices.size();
     
     if (!boxIndices.empty()) {
         for (const auto &boxIndex: boxIndices) {
@@ -132,6 +133,10 @@ void AxisAlignedBoudingBoxTree::splitNode(Node *node)
         node->right->boxIndices.push_back(boxIndex);
         node->right->center += box.center();
     }
+
+    node->left->boxCount = node->left->boxIndices.size();
+    node->right->boxCount = node->right->boxIndices.size();
+    std::vector<size_t>().swap(node->boxIndices);
 
     node->left->center /= (float)node->left->boxIndices.size();
     splitNode(node->left);

@@ -22,8 +22,10 @@ progress, cancels it on Esc, and imports the result with its quality report.
 The add-on's name and ids come from names.py.
 """
 
+import collections
 import json
 
+import blf
 import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
@@ -135,7 +137,7 @@ class RemeshSettings(bpy.types.PropertyGroup):
         name="Resolution",
         items=(
             ("quality", "Quality", "Solves on a finer triangle mesh: cleaner quads and fewer "
-                                   "flipped quads, about 1.5 times as long as Fast"),
+                                   "flipped quads, about twice as long as Fast"),
             ("fast", "Fast", "Solves on a coarser triangle mesh: quicker, rougher quads"),
         ),
         default="quality",
@@ -152,6 +154,23 @@ class RemeshSettings(bpy.types.PropertyGroup):
         ),
         default="laplacian",
         description="How the quads are evened out after they are found")
+
+    # Not a CLI parameter: which marks go to the remesher as marked edges
+    # (`l` lines of the input OBJ, RemeshRequest::featureEdges).
+    follow_marks: EnumProperty(
+        name="Follow Marks",
+        items=(
+            ("SHARP", "Sharp", "Edges marked Sharp"),
+            ("CREASE", "Crease", "Edges with a subdivision crease"),
+            ("SEAM", "Seam", "UV seams"),
+        ),
+        options={"ENUM_FLAG"},
+        # On (Kajetan, 2026-10-27). An FBX or OBJ import often marks nearly
+        # every edge Sharp (93 % of a sculpt's edges checked): such floods are
+        # not sent (_flooded_marks) and the panel shows the counts.
+        default={"SHARP"},
+        description="Marked edges the result keeps a row of edges along, whatever their "
+                    "angle (Sharp Edge decides only for unmarked edges)")
 
     # Not a remesh parameter: a choice next to Repair Folds and Re-run.
     flatten_spikes: BoolProperty(
@@ -185,9 +204,69 @@ ADVANCED_PARAMETERS = ("resolution", "anisotropy", "edge_scaling", "smooth_norma
 KEEP_OPTIONS = ("keep_attributes", "keep_uvs")
 
 
-def _mesh_arrays(context, obj):
+def _edge_vertices(mesh):
+    edges = np.empty(len(mesh.edges) * 2, dtype=np.int32)
+    mesh.edges.foreach_get("vertices", edges)
+    return edges.reshape(-1, 2)
+
+
+def _marked_pairs(mesh, kinds):
+    """Vertex pairs (E, 2) of the mesh's edges that carry any of the marks
+    in kinds (follow_marks values)."""
+    marks = transfer.marked_edges(mesh)
+    wanted = np.zeros(len(mesh.edges), dtype=bool)
+    for kind in kinds:
+        values = marks.get(kind.lower())
+        if values is not None:
+            wanted |= values > 0
+    return _edge_vertices(mesh)[wanted]
+
+
+MARK_NAMES = (("sharp", "Sharp"), ("crease", "Crease"), ("seam", "Seam"))
+
+
+def _mark_counts(mesh):
+    """{kind: number of edges} of mesh's marks, marked kinds only."""
+    marks = transfer.marked_edges(mesh) if len(mesh.edges) else {}
+    return {kind: int(np.count_nonzero(values > 0)) for kind, values in marks.items()}
+
+
+def _flooded_marks(mesh, counts, kinds):
+    """The followed kinds (follow_marks values) that mark most edges of a
+    mesh of over 1000 edges: an import's marks rather than edges to keep.
+    A cube or cylinder has most of its edges marked too, but few edges."""
+    edges = len(mesh.edges)
+    return [kind for kind in kinds if edges > 1000 and 2 * counts.get(kind.lower(), 0) > edges]
+
+
+def _flood_warning(flooded):
+    if not flooded:
+        return None
+    labels = dict((kind.upper(), label) for kind, label in MARK_NAMES)
+    return ("Follow Marks left out %s: more than half of the edges carry it, as after an FBX or OBJ "
+            "import, rather than the edges to keep" % " and ".join(labels[kind] for kind in flooded))
+
+
+def _mark_line(obj, kinds):
+    """Panel line with how many edges of obj carry each mark, and whether
+    a followed mark floods the mesh."""
+    if obj is None or obj.type != "MESH":
+        return None
+    counts = _mark_counts(obj.data)
+    if not counts:
+        return None
+    text = "Marked: " + ", ".join("%s %d" % (label, counts[kind]) for kind, label in MARK_NAMES if kind in counts)
+    flood = bool(_flooded_marks(obj.data, counts, kinds))
+    if flood:
+        text += " (most edges: not followed)"
+    return text, flood
+
+
+def _mesh_arrays(context, obj, follow_marks=()):
     """Vertex positions and triangles of the evaluated mesh, in object space,
-    and whether most of its faces are smooth shaded."""
+    whether most of its faces are smooth shaded, the vertex pairs of the
+    edges carrying the marks in follow_marks, and the marks left out because
+    they flood the mesh (_flooded_marks)."""
     depsgraph = context.evaluated_depsgraph_get()
     evaluated = obj.evaluated_get(depsgraph)
     mesh = evaluated.to_mesh()
@@ -199,10 +278,22 @@ def _mesh_arrays(context, obj):
         mesh.loop_triangles.foreach_get("vertices", triangles)
         smooth_faces = np.empty(len(mesh.polygons), dtype=bool)
         mesh.polygons.foreach_get("use_smooth", smooth_faces)
+        marked = np.empty((0, 2), dtype=np.int32)
+        flooded = []
+        if follow_marks:
+            # Smooth by Angle (Shade Auto Smooth) marks every edge above its
+            # angle Sharp on the evaluated mesh. Where the modifiers keep the
+            # edges as they are, the user's own marks are the original's.
+            base = obj.data
+            same = len(base.vertices) == len(mesh.vertices) and np.array_equal(
+                _edge_vertices(base), _edge_vertices(mesh))
+            source = base if same else mesh
+            flooded = _flooded_marks(source, _mark_counts(source), follow_marks)
+            marked = _marked_pairs(source, [kind for kind in follow_marks if kind not in flooded])
     finally:
         evaluated.to_mesh_clear()
     smooth = bool(smooth_faces.size) and 2 * np.count_nonzero(smooth_faces) >= smooth_faces.size
-    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth
+    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth, marked, flooded
 
 
 def _source(obj):
@@ -369,16 +460,17 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         elif self.repair_folds:
             self.report({"ERROR"}, "The original object is gone; select it and remesh again")
             return {"CANCELLED"}
-        positions, triangles, self._smooth = _mesh_arrays(context, obj)
+        settings = _settings(context)
+        positions, triangles, self._smooth, marked, flooded = _mesh_arrays(context, obj, settings.follow_marks)
         if len(triangles) == 0:
             self.report({"ERROR"}, "The mesh has no faces")
             return {"CANCELLED"}
-        parameters = _settings(context).parameters()
+        parameters = settings.parameters()
         if self.repair_folds:
             parameters["repair_folds"] = True
             if self.flatten_spikes:
                 parameters["flatten_spikes"] = True
-        job = worker.RemeshJob(executable, positions, triangles, parameters)
+        job = worker.RemeshJob(executable, positions, triangles, parameters, marked)
         try:
             job.start()
         except (OSError, ValueError) as error:
@@ -389,7 +481,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         _cancel_from_panel = False
         _last_status, _last_message, _last_report = "running", "", None
         self._source_name = obj.name
-        self._warnings = [w for w in (_uneven_scale_warning(obj),) if w]
+        self._warnings = [w for w in (_uneven_scale_warning(obj), _flood_warning(flooded)) if w]
         self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
         self._status_text(context)
@@ -476,9 +568,43 @@ class OBJECT_OT_remesh_quads_cancel(bpy.types.Operator):
         return {"FINISHED"}
 
 
-def _draw_fold_offer(box, settings):
+# Room for text in the sidebar, in pixels: `panel` is a row of the panel,
+# `box` a row inside the report's box, `icon` what an icon in front of a label
+# takes, `pad` the margin Blender keeps in front of a label's text and `space`
+# the gap between the columns of a split row.  Characters (measure len) where
+# Blender gives no region.
+TextRoom = collections.namedtuple("TextRoom", "panel box icon pad space measure")
+
+
+def _text_room(context):
+    """Blender 4.2 and 5.2 lay a sidebar panel out from the widget unit: tabs
+    1 unit (1.4 with 5.x's compact tabs), the panel's background 0.4 unit on
+    both sides, panelspace 8 px and a box's boxspace 5 px on both sides, an
+    icon 16 + 2 px and a label's text margin 0.4 unit, all times the UI scale.
+    Half a unit more is slack for rounding and font hinting.  A label wider
+    than its room is cut off with an ellipsis."""
+    region = context.region
+    system = context.preferences.system
+    scale = system.ui_scale
+    if region is None or region.width <= 0 or scale <= 0:
+        return TextRoom(report_rows.WARNING_WIDTH + 4, report_rows.WARNING_WIDTH + 2, 2, 0, 1, len)
+    unit = round(18 * scale) + 2 * system.pixel_size
+    tabs = 1.4 if getattr(system, "show_panel_tabs_compact", False) else 1.0
+    panel = region.width - (tabs + 0.8 + 0.5) * unit - 2 * int(8 * scale)
+    size = context.preferences.ui_styles[0].widget.points * scale
+
+    # Font 0 is Blender's interface font.
+    def measure(text):
+        blf.size(0, size)
+        return blf.dimensions(0, text)[0]
+
+    return TextRoom(panel=max(panel, 10 * size), box=max(panel - 2 * int(5 * scale), 10 * size),
+                    icon=round(18 * scale), pad=round(0.4 * unit), space=int(8 * scale), measure=measure)
+
+
+def _draw_fold_offer(box, settings, room):
     column = box.column(align=True)
-    for line in report_rows.fold_offer_lines():
+    for line in report_rows.fold_offer_lines(room.box - room.pad, room.measure):
         column.label(text=line)
     box.prop(settings, "flatten_spikes")
     operator = box.operator(OBJECT_OT_remesh_quads.bl_idname, text="Repair Folds and Re-run", icon="MOD_SMOOTH")
@@ -499,6 +625,21 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         column.enabled = _job is None
         for name in MAIN_PARAMETERS:
             column.prop(settings, name)
+        # The label on its own line: beside the three toggles the sidebar
+        # cut it off with an ellipsis.
+        column = layout.column(align=True)
+        column.enabled = _job is None
+        column.label(text="Follow Marks")
+        column.row(align=True).prop(settings, "follow_marks")
+        line = _mark_line(context.active_object, settings.follow_marks)
+        if line:
+            room = _text_room(context)
+            column = layout.column(align=True)
+            column.enabled = _job is None
+            text, flood = line
+            icon = room.icon if flood else 0
+            for i, part in enumerate(report_rows.wrap(text, room.panel - icon - room.pad, room.measure)):
+                column.label(text=part, icon=("ERROR" if 0 == i else "BLANK1") if flood else "NONE")
         header, body = layout.panel(ID + "_advanced", default_closed=True)
         header.label(text="Advanced")
         if body is not None:
@@ -520,6 +661,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         else:
             layout.operator(OBJECT_OT_remesh_quads.bl_idname, icon="MOD_REMESH")
 
+        room = _text_room(context)
         obj = context.active_object
         if obj is not None and obj.type == "MESH":
             # What Remesh will run on: a result shows its source, which the
@@ -532,7 +674,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
             if warning:
                 column = layout.column(align=True)
                 column.alert = True
-                for i, line in enumerate(report_rows.wrap(warning)):
+                for i, line in enumerate(report_rows.wrap(warning, room.panel - room.icon - room.pad, room.measure)):
                     column.label(text=line, icon="ERROR" if i == 0 else "BLANK1")
 
         # A failed or cancelled last run stays on show until the next run;
@@ -551,20 +693,24 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
             if message and status != "ok":
                 box.label(text=message)
             if report:
-                for label, value, problem in report_rows.summary_rows(report):
-                    row = box.row()
-                    row.alert = problem
-                    row.label(text=label)
-                    row.label(text=value)
+                factor, rows = report_rows.summary_columns(report_rows.summary_rows(report), room.box, room.space,
+                                                           room.pad, room.measure)
+                for labels, values, problem in rows:
+                    split = box.split(factor=factor)
+                    split.alert = problem
+                    for column, lines in ((split.column(align=True), labels), (split.column(align=True), values)):
+                        for line in lines:
+                            column.label(text=line)
                 # Full width, so a sentence is not cut off at the value column.
                 column = box.column(align=True)
-                for text, first, problem in report_rows.warning_lines(report):
+                for text, first, problem in report_rows.warning_lines(report, room.box - room.icon - room.pad,
+                                                                      room.measure):
                     row = column.row()
                     row.alert = problem
                     icon = ("ERROR" if problem else "INFO") if first else "BLANK1"
                     row.label(text=text, icon=icon)
                 if report_rows.offers_fold_repair(report) and _source(obj) is not None:
-                    _draw_fold_offer(box, settings)
+                    _draw_fold_offer(box, settings, room)
 
         preferences = _preferences(context)
         _draw_build(layout, worker.find_executable(bpy.path.abspath(preferences.executable) if preferences else ""))

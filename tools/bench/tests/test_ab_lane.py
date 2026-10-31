@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -48,6 +49,29 @@ class OutputDiff(unittest.TestCase):
         self.assertEqual(ab.output_diff(b, h, (0, 1)), (1, [(("a", "quality", 2000), 1)], []))
         _, _, failed = ab.output_diff(b, runs(a="1"), (0, 1))
         self.assertEqual([u for _, u, *_ in failed], [1])
+
+
+class LaneRunArgs(unittest.TestCase):
+    def test_lane_runs_with_every_run_option(self):
+        # lane built its run arguments by hand and missed --metrics-timeout when it was added (2026-10-28).
+        seen = []
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus = os.path.join(tmp, "corpus.json")
+            with open(corpus, "w") as fp:
+                json.dump({"sets": {"s": {"targets": [2000]}}}, fp)
+            with mock.patch.object(ab, "CORPUS", corpus), \
+                    mock.patch.object(ab, "source_key", side_effect=lambda ref, *a: ref), \
+                    mock.patch.object(ab, "git", return_value="0"), \
+                    mock.patch.object(ab, "load_set", return_value=({}, [])), \
+                    mock.patch.object(ab, "cmd_run", side_effect=seen.append), \
+                    mock.patch.object(ab, "load_runs", return_value={}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                ab.cmd_lane(ab.parser().parse_args(["lane", "base", "head", "--work", tmp]))
+        run = vars(ab.parser().parse_args(["run", "x"]))
+        self.assertEqual(len(seen), 2)
+        for ra in seen:
+            self.assertEqual(set(vars(ra)), set(run))
+            self.assertEqual((ra.no_metrics, ra.replicates, ra.timeout, ra.work), (True, 1, 1200, tmp))
 
 
 class MetricsAddedLater(unittest.TestCase):
@@ -91,6 +115,48 @@ class MetricsAddedLater(unittest.TestCase):
         rec, calls = self.run_one(metrics=True)
         self.assertEqual((calls, rec["metrics"]), (1, {"measured": True}))
 
+    def test_timed_out_run_is_measured_again_only_with_a_longer_limit(self):
+        # Measuring it again under the same limit would stall every later run for that long.
+        with open(os.path.join(self.d, "record.json"), "w") as fp:
+            json.dump({"mesh": "m", "rc": 0, "metrics": None, "metrics_error": "timeout", "metrics_timeout": 1800}, fp)
+        for limit, expected in ((1800, 0), (600, 0), (3600, 1), (None, 1)):
+            with mock.patch.object(ab, "measure") as m:
+                ab.run_one("cli", self.mesh, "corpus", 2000, "quality", 0, self.out, [], self.work, True, 1,
+                           metrics_timeout=limit)
+            self.assertEqual(m.call_count, expected, limit)
+
+
+class PeakMemory(unittest.TestCase):
+    """peak_rss_mb comes from the CLI's report when it has one: wait4's figure is at least the
+    harness's own peak, since Python starts the CLI with vfork and exec keeps the parent's
+    high-water mark (a 60 MB run read 3.6 GB after a big case)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.work = tmp.name
+        self.out = os.path.join(self.work, "runs", "k")
+        self.mesh = {"id": "m", "file": "m.obj"}
+
+    def run_one(self, report):
+        def fake_cli(cmd, log, timeout, env=None):
+            if report is not None:
+                with open(cmd[cmd.index("--report-json") + 1], "w") as fp:
+                    json.dump(report, fp)
+            return 0, 3652.0
+        with mock.patch.object(ab, "call_measured", side_effect=fake_cli), \
+                mock.patch.object(ab, "perturbed", side_effect=lambda src, k, work: src), \
+                mock.patch.object(ab, "file_hash", return_value="0"):
+            return ab.run_one("cli", self.mesh, "corpus", 2000, "quality", 0, self.out, [], self.work, False, 1)
+
+    def test_the_cli_figure_wins(self):
+        rec = self.run_one({"output": {}, "diagnostics": {"peak_rss_bytes": 62 << 20}})
+        self.assertEqual((rec["peak_rss_mb"], rec["peak_rss_from"]), (62.0, "cli"))
+
+    def test_wait4_without_a_cli_figure(self):
+        rec = self.run_one(None)
+        self.assertEqual((rec["peak_rss_mb"], rec["peak_rss_from"]), (3652.0, "wait4"))
+
 
 class Measure(unittest.TestCase):
     def setUp(self):
@@ -124,6 +190,26 @@ class Measure(unittest.TestCase):
         rec, calls = self.measure([None, None])
         self.assertEqual((calls, rec["metrics"]), (2, None))
         self.assertIn("MemoryError", rec["metrics_error"])
+
+    def test_timeout_is_recorded_and_not_retried(self):
+        def hang(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        rec = {"metrics": {"old": True}}
+        with mock.patch.object(ab.subprocess, "run", side_effect=hang) as m:
+            ab.measure(rec, self.d, {"id": "m"}, 2000, "in.obj", self.d, timeout=5)
+        self.assertEqual((m.call_count, rec["metrics"], rec["metrics_timeout"]), (1, None, 5))
+        self.assertIn("timeout", rec["metrics_error"])
+
+    def test_a_real_metrics_py_is_killed_at_the_limit(self):
+        # subprocess.run kills the child on timeout; a sleeping stand-in for metrics.py must not outlive it.
+        with mock.patch.object(ab, "METRICS", os.path.join(self.d, "slow.py")):
+            with open(ab.METRICS, "w") as fp:
+                fp.write("import time\ntime.sleep(30)\n")
+            t0 = time.time()
+            rec = {}
+            ab.measure(rec, self.d, {"id": "m"}, 2000, "in.obj", self.d, timeout=1)
+        self.assertLess(time.time() - t0, 10)
+        self.assertEqual((rec["metrics"], rec["metrics_timeout"]), (None, 1))
 
 
 class Compare(unittest.TestCase):
@@ -164,3 +250,60 @@ class Compare(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OtherApp(unittest.TestCase):
+    """`run --app`: another remesher's binary through the Qt app's headless interface (upstream
+    AutoRemesher 1.2.0), with the peak RSS from /usr/bin/time and an optional requested count."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.work = tmp.name
+        self.out = os.path.join(self.work, "runs", "app-k")
+        self.mesh = {"id": "m", "file": "m.obj"}
+        self.calls = []
+
+    def run_one(self, write_output=True, requested=None):
+        def fake_app(cmd, log, timeout, env=None):
+            self.calls.append((cmd, env))
+            rss, out = cmd[4], cmd[cmd.index("-o", 5) + 1]  # /usr/bin/time -f %M -o rss.txt app -i .. -o out
+            with open(rss, "w") as fp:
+                fp.write("53900\n")
+            with open(cmd[cmd.index("--report") + 1], "w") as fp:
+                fp.write("AutoRemesher Report\n===================\n\nTarget quads: 2000\n\nResults:\n"
+                         "  Quads: 1628\n  Non-quads: 3\n  Vertices: 1630\n  Total time: 0.422 seconds\n")
+            if write_output:
+                with open(out, "w") as fp:
+                    fp.write("v 0 0 0\n")
+            return 0, 3652.0
+        with mock.patch.object(ab, "call_measured", side_effect=fake_app), \
+                mock.patch.object(ab, "perturbed", side_effect=lambda src, k, work: src), \
+                mock.patch.object(ab, "file_hash", return_value="0"):
+            return ab.run_one("app", self.mesh, "usage", 2000, "quality", 0, self.out, ["--adaptivity", "0.5"],
+                              self.work, False, 1, app=True, requested=requested, external_rss=True)
+
+    def test_command_report_and_rss(self):
+        rec = self.run_one()
+        cmd, env = self.calls[0]
+        self.assertEqual(cmd[:5], [ab.TIME, "-f", "%M", "-o", cmd[4]])
+        self.assertEqual(cmd[5:7], ["app", "-i"])
+        self.assertNotIn("--resolution", cmd)
+        self.assertEqual(cmd[cmd.index("--target-quads") + 1], "2000")
+        self.assertEqual(cmd[-2:], ["--adaptivity", "0.5"])
+        self.assertEqual(env["QT_QPA_PLATFORM"], "offscreen")
+        self.assertEqual(rec["output"], {"quads": 1628, "non_quads": 3, "vertices": 1630})
+        self.assertEqual(rec["time"], 0.422)
+        self.assertEqual((rec["peak_rss_mb"], rec["peak_rss_from"]), (53900 / 1024, "time"))
+        self.assertEqual((rec["rc"], rec["target"]), (0, 2000))
+
+    def test_requested_count_is_filed_under_the_target(self):
+        rec = self.run_one(requested=2450)
+        cmd, _ = self.calls[0]
+        self.assertEqual(cmd[cmd.index("--target-quads") + 1], "2450")
+        self.assertEqual((rec["target"], rec["requested_target"]), (2000, 2450))
+        self.assertTrue(rec["out_sha"])
+
+    def test_no_output_is_a_failure(self):
+        self.assertEqual(self.run_one(write_output=False)["rc"], "no output")
+

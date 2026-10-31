@@ -113,6 +113,31 @@ public:
         m_sharpEdgeDegrees = degrees;
     }
 
+    // As RemeshRequest::featureEdges: input vertex pairs the user marked,
+    // kept as creases whatever their angle.
+    void setMarkedEdges(std::vector<std::pair<size_t, size_t>> edges)
+    {
+        m_markedEdges = std::move(edges);
+    }
+
+    // Marked pairs that are not an edge of the cleaned input, so ignored.
+    size_t ignoredMarkedEdgeCount() const
+    {
+        return m_ignoredMarkedEdgeCount;
+    }
+    // Islands whose marked edges were dropped: the run that followed them
+    // folded more quads than the run without them.
+    size_t markedEdgesDroppedIslandCount() const
+    {
+        return m_markedEdgesDroppedIslandCount;
+    }
+    // Islands whose marks were not used: more than a quarter of the planned
+    // quad edges would have to lie on them.
+    size_t markedEdgesTooDenseIslandCount() const
+    {
+        return m_markedEdgesTooDenseIslandCount;
+    }
+
     void setAnisotropy(double anisotropy)
     {
         m_anisotropy = anisotropy;
@@ -134,6 +159,15 @@ public:
     void setTangentialQuadSmoothing(bool tangential)
     {
         m_tangentialQuadSmoothing = tangential;
+    }
+
+    // Keep the intermediate meshes, UVs and extraction connections of every
+    // island for the preview getters (decimatedVertices() and the like).
+    // Hosts that show no preview turn it off: on inputs with thousands of
+    // islands these copies took a third of the peak memory.
+    void setKeepPreviewData(bool keep)
+    {
+        m_keepPreviewData = keep;
     }
 
     // Untangle folded-over input triangles before remeshing (FoldRepair).
@@ -169,6 +203,7 @@ public:
 
     // Islands that went through the pipeline but contributed no faces, either
     // because a stage failed on them or because extraction found nothing.
+    // Sliver islands left out before remeshing are not counted.
     size_t islandsWithoutOutput() const
     {
         return m_islandsWithoutOutput;
@@ -196,6 +231,13 @@ public:
     const std::vector<RemeshedIsland>& remeshedIslands() const
     {
         return m_remeshedIslands;
+    }
+
+    // Input vertices of the sliver islands remeshIslands() left out, so the
+    // lost-part measure does not count them as lost.
+    const std::vector<size_t>& leftOutVertices() const
+    {
+        return m_leftOutVertices;
     }
 
     const std::vector<Vector3>& remeshedVertices()
@@ -305,6 +347,14 @@ public:
         return m_diagnostics;
     }
 
+    // Hands the records over and leaves diagnostics() empty.
+    std::vector<DiagnosticRecord> takeDiagnostics()
+    {
+        std::vector<DiagnosticRecord> records;
+        records.swap(m_diagnostics);
+        return records;
+    }
+
     // What cleanInput() changed in the input.
     struct InputCleanupStats {
         // Vertices merged into another across an edge no longer than the
@@ -323,6 +373,15 @@ public:
         // them (a Moebius strip).
         size_t flippedTriangles = 0;
         size_t nonOrientablePieces = 0;
+        // Open seams joined by weldSeams() (inputsanitizer.h): boundary edge
+        // pairs, vertices merged, and parts left unwelded.
+        size_t weldedEdges = 0;
+        size_t weldedVertices = 0;
+        size_t weldKeptParts = 0;
+        // Triangles removed because an earlier one has the same corners.
+        size_t duplicateTriangles = 0;
+        // Vertices added by splitPinchedVertices(): one per extra fan.
+        size_t splitVertices = 0;
     };
 
     // Edges up to this long are rounding noise of the float32 positions
@@ -394,6 +453,7 @@ private:
     std::vector<Vector3> m_remeshedVertices;
     std::vector<std::vector<size_t>> m_remeshedQuads;
     std::vector<RemeshedIsland> m_remeshedIslands;
+    std::vector<size_t> m_leftOutVertices;
     std::vector<Vector3> m_decimatedVertices;
     std::vector<std::vector<size_t>> m_decimatedTriangles;
     bool m_decimated = false;
@@ -425,8 +485,14 @@ private:
     double m_adaptivity = 0.5;
     double m_anisotropy = 1.0;
     double m_sharpEdgeDegrees = m_defaultSharpEdgeDegrees;
+    // Sorted, low index first, no duplicates once remesh() has checked them.
+    std::vector<std::pair<size_t, size_t>> m_markedEdges;
+    size_t m_ignoredMarkedEdgeCount = 0;
+    size_t m_markedEdgesDroppedIslandCount = 0;
+    size_t m_markedEdgesTooDenseIslandCount = 0;
     double m_smoothNormalDegrees = 0.0;
     bool m_useQex = true;
+    bool m_keepPreviewData = true;
     bool m_repairInputFolds = false;
     bool m_flattenSpikes = false;
     bool m_tangentialQuadSmoothing = false;
