@@ -53,6 +53,8 @@ public:
         size_t debugIndex = 0;
         size_t outputIndex = 0;
         bool featured = false;
+        // A conical tip of the input (Quadami): never moved, never collapsed.
+        bool pinned = false;
         // On a hard feature edge: never moved or removed except by a
         // collapse along the hard line.
         bool marked = false;
@@ -106,6 +108,9 @@ public:
     bool flipEdge(Halfedge *halfedge);
     void relaxVertex(Vertex *vertex);
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);
+    // Flips and collapses keep at least this many edges at a pinned vertex
+    // (Quadami), so that its fan does not turn into a pyramid with creases.
+    static const size_t pinnedMinimumValence = 8;
     Face *moveToNextFace(Face *face);
     Vertex *moveToNextVertex(Vertex *vertex);
     void updateVertexValences();

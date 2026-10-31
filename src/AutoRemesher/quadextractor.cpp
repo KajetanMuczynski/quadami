@@ -1898,6 +1898,39 @@ bool QuadExtractor::removeNonManifoldFaces()
     return changed;
 }
 
+std::vector<char> QuadExtractor::conicalTipVertices() const
+{
+    std::vector<char> tips(m_remeshedVertices.size(), 0);
+    if (nullptr == m_conicalTips || m_conicalTips->empty())
+        return tips;
+    double totalEdgeLength = 0.0;
+    size_t edgeCount = 0;
+    for (const auto& face : m_remeshedPolygons)
+        for (size_t i = 0; i < face.size(); ++i) {
+            totalEdgeLength += (m_remeshedVertices[face[i]] - m_remeshedVertices[face[(i + 1) % face.size()]]).length();
+            ++edgeCount;
+        }
+    if (0 == edgeCount)
+        return tips;
+    // The extraction puts the tip's vertex on it up to rounding, while its
+    // neighbours are about a quad edge away.
+    const double tolerance = 0.01 * totalEdgeLength / (double)edgeCount;
+    for (const Vector3& tip : *m_conicalTips) {
+        size_t nearest = m_remeshedVertices.size();
+        double nearestDistance = tolerance;
+        for (size_t v = 0; v < m_remeshedVertices.size(); ++v) {
+            const double distance = (m_remeshedVertices[v] - tip).length();
+            if (distance <= nearestDistance) {
+                nearest = v;
+                nearestDistance = distance;
+            }
+        }
+        if (nearest < tips.size())
+            tips[nearest] = 1;
+    }
+    return tips;
+}
+
 void QuadExtractor::smoothAndProject(size_t iterations,
     const std::unordered_set<size_t>* movableVertices)
 {
@@ -1932,6 +1965,13 @@ void QuadExtractor::smoothAndProject(size_t iterations,
             locked[it.first.first] = true;
             locked[it.first.second] = true;
         }
+    }
+    {
+        // A conical tip stays where the extraction put it (TODO 2.23).
+        const std::vector<char> tips = conicalTipVertices();
+        for (size_t v = 0; v < locked.size(); ++v)
+            if (tips[v])
+                locked[v] = true;
     }
 
     std::vector<::Vector3> targetVertices;
@@ -2543,6 +2583,12 @@ void QuadExtractor::collapseThreeValenceDiagonals()
                 const size_t diagonalSecond = face[i + 2];
                 if (rejectedDiagonals.end() != rejectedDiagonals.find(edgeOf(diagonalFirst, diagonalSecond)))
                     continue;
+                // A point an earlier collapse made or took a neighbor from is not
+                // half of a split point: collapsing it again zips up a thin strip
+                // one quad at a time
+                if (collapsedVertices.end() != collapsedVertices.find(diagonalFirst)
+                    || collapsedVertices.end() != collapsedVertices.find(diagonalSecond))
+                    continue;
                 if (3 != vertexNeighbors[diagonalFirst].size()
                     || 3 != vertexNeighbors[diagonalSecond].size())
                     continue;
@@ -2745,6 +2791,7 @@ void QuadExtractor::mergeDoubleSharedEdgeQuads()
 
     size_t mergeNum = 0;
     std::unordered_set<size_t> mergedVertices;
+    const std::vector<char> tips = conicalTipVertices();
     for (;;) {
         std::unordered_map<size_t, std::unordered_set<size_t>> vertexNeighbors;
         std::unordered_map<size_t, std::vector<size_t>> vertexFaces;
@@ -2801,6 +2848,10 @@ void QuadExtractor::mergeDoubleSharedEdgeQuads()
             const size_t firstApex = firstFace[(firstAt + 2) % 4];
             const size_t secondApex = secondFace[(secondAt + 2) % 4];
             if (firstApex == secondApex)
+                continue;
+            // The apex of a cone asks for a valence-2 vertex (TODO 2.23);
+            // merging it would cut the tip off.
+            if (tips[middle])
                 continue;
             bool touched = false;
             for (const auto& vertex : { middle, previous, next, firstApex, secondApex }) {
@@ -2932,6 +2983,7 @@ void QuadExtractor::mergeThreeAndFiveValenceTriangles()
 
     size_t mergeNum = 0;
     std::unordered_set<size_t> mergedVertices;
+    const std::vector<char> tips = conicalTipVertices();
     for (;;) {
         std::map<Edge, std::vector<size_t>> edgeFaces;
         std::unordered_map<size_t, std::unordered_set<size_t>> vertexNeighbors;

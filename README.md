@@ -70,7 +70,7 @@ the install scripts and the snap version of Blender on Linux: [user guide §2](d
 - **Holes** can still appear in closed sculpts at higher quad counts; the **Holes** row shows them.
 - **Hard-surface models**: sharp edges come out slightly rounded (on Blender's cube an edge loop
   follows about 90 % of the edges at 5,000 quads, on the cylinder about 80 % of the rims; a cone's
-  rim much less), and cone tips are cut off about one quad deep. Mark the edges to keep as Sharp:
+  rim much less), and needle-sharp spikes are cut off about one quad deep (a cone tip keeps its point). Mark the edges to keep as Sharp:
   **Follow Marks** (on by default) then keeps quad edges along 90-99 % of a cube's or cylinder's marked
   edges at 5,000 quads. Sharp Edge below 90° makes more triangles
   and other non-quads on detailed parts. Mirror symmetry, guide curves and density painting are not

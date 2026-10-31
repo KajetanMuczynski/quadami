@@ -89,6 +89,12 @@ public:
         m_sharpEdgeDegrees = degrees;
     }
 
+    // Positions of conical tips the triangle mesh kept (TODO 2.23).
+    void setConicalTips(const std::vector<Vector3>* conicalTips)
+    {
+        m_conicalTips = conicalTips;
+    }
+
     // The sharp edges of the triangles given (the input's, carried through
     // the remesh): the field locks to them, the singularity simplifier
     // keeps cones from crossing them and the cover puts isolines on them.
@@ -139,6 +145,7 @@ private:
     double m_targetQuadCount = 0.0;
     double m_adaptivity = 0.5;
     double m_sharpEdgeDegrees = 90.0;
+    const std::vector<Vector3>* m_conicalTips = nullptr;
     const FeatureEdgeSet* m_featureEdges = nullptr;
     double m_anisotropy = 1.0;
     double m_maxAspectRatio = 2.3;
