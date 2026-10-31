@@ -150,7 +150,8 @@ try:
     assert outcome.report["input"]["feature_edges"] == 128, outcome.report["input"]
     assert outcome.report["input"]["ignored_feature_edges"] == 0, outcome.report["input"]
 
-    obj, final_report = addon._build_object(bpy.context, source, outcome, smooth, ["test warning"])
+    obj, final_report = addon._build_object(bpy.context, source, outcome, smooth, ["test warning"],
+                                           addon._addon_settings(settings))
     addon._show_result(bpy.context, obj, (source,))
     bpy.context.view_layer.update()
     output = outcome.report["output"]
@@ -238,6 +239,11 @@ try:
 
     labels = panel_labels()
     assert "test warning" in labels and "Copied from the original" in labels, labels
+    copied = addon.copy_report_text(bpy.context)
+    assert copied.startswith("Quadami report\nResult: Done\n"), copied
+    assert "follow_marks=SHARP" in copied and "target_quads=2000" in copied and "test warning" in copied, copied
+    assert "Blender: " + bpy.app.version_string in copied and "Full report: " in copied, copied
+    assert addon.OBJECT_OT_copy_report.poll(bpy.context)
     bpy.context.view_layer.objects.active = source
     source.scale = (1.0, 1.0, 3.0)
     bpy.context.view_layer.update()
