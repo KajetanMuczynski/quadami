@@ -188,6 +188,11 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
                 std::fprintf(stderr, "Error: --resolution must be fast or quality, not %s\n", value.c_str());
                 return 1;
             }
+        } else if ("--closed-rings" == name) {
+            // Research prototype (closed edge loops): the core reads the
+            // ratio from the environment; this flag only names the run.
+            if ("off" != value)
+                setenv("AUTOREMESHER_AUTO_RINGS", value.c_str(), 1);
         } else if ("--fold-repair" == name) {
             if ("on" != value && "off" != value) {
                 std::fprintf(stderr, "Error: --fold-repair must be on or off, not %s\n", value.c_str());
