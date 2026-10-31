@@ -1231,9 +1231,10 @@ bool AutoRemesher::remeshIslands()
         m_progressHandler(m_tag, 0.0f, m_repairInputFolds ? "Repairing folded input" : "Checking for folded input");
     FoldRepair::Options foldOptions;
     foldOptions.flattenSpikes = m_flattenSpikes;
+    // A plan has no report to put the survey in (5.6 s of a 2M-triangle plan).
     const FoldRepair::Stats folds = m_repairInputFolds
         ? FoldRepair::repair(&m_vertices, m_triangles, foldOptions)
-        : FoldRepair::survey(m_vertices, m_triangles, foldOptions);
+        : (m_planOnly ? FoldRepair::Stats() : FoldRepair::survey(m_vertices, m_triangles, foldOptions));
     // The spikes' largest drop in quad edges: sqrt(area per target quad).
     double spikeDropQuads = 0.0;
     if (folds.flattenedSpikes > 0 && m_targetTriangleCount > 0) {
