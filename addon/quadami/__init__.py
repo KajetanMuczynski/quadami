@@ -137,7 +137,7 @@ class RemeshSettings(bpy.types.PropertyGroup):
         name="Resolution",
         items=(
             ("quality", "Quality", "Solves on a finer triangle mesh: cleaner quads and fewer "
-                                   "flipped quads, about 1.5 times as long as Fast"),
+                                   "flipped quads, about twice as long as Fast"),
             ("fast", "Fast", "Solves on a coarser triangle mesh: quicker, rougher quads"),
         ),
         default="quality",
