@@ -22,8 +22,8 @@ sampled every h/10, and the guide first averaged over arc length h (a path of in
 
 The compare table gives per case (mesh, resolution, target) the median over replicates of both
 sides and how many replicates moved each way; a case counts as better or worse only when every
-replicate agrees (CLAUDE.md noise rule). Inputs are read from each run's record (input_sha) or,
-for replicate 0, the corpus file.
+replicate agrees (CLAUDE.md noise rule). Each run's input is the corpus file ($AR_CORPUS as for
+ab.py) or ab.py's perturbed copy of it in <work>/inputs.
 """
 import argparse
 import collections
@@ -220,37 +220,49 @@ def cached(run_dir, input_path):
     return r
 
 
-def input_of(run_dir, work):
-    """The input a run read: the corpus file for replicate 0, the perturbed copy otherwise (ab.py
-    names it by the source's hash, which the record does not keep, so look it up by input_sha)."""
+def input_of(run_dir, work, sources):
+    """The input a run read: the corpus file for replicate 0, ab.py's perturbed copy
+    (<work>/inputs/<hash of the source>-u<k>.obj) otherwise."""
     with open(os.path.join(run_dir, "record.json")) as f:
         rec = json.load(f)
-    sha = rec.get("input_sha")
-    for candidate in glob.glob(os.path.join(work, "inputs", f"*-u{rec['replicate']}.obj")):
-        if rec["replicate"] and _sha(candidate) == sha:
-            return candidate
-    for candidate in glob.glob(os.path.join(work, "meshes", "**", rec["mesh"] + ".obj"), recursive=True):
-        if _sha(candidate) == sha:
-            return candidate
-    return None
+    src = sources.get(rec["mesh"])
+    if src is None or not os.path.exists(src):
+        return None
+    if not rec["replicate"]:
+        return src
+    path = os.path.join(work, "inputs", "%s-u%d.obj" % (_hash(src), rec["replicate"]))
+    return path if os.path.exists(path) else None
 
 
-_SHA = {}
+_HASH = {}
 
 
-def _sha(path):
-    if path not in _SHA:
+def _hash(path):
+    """ab.py's file_hash."""
+    if path not in _HASH:
         import hashlib
+        h = hashlib.sha256()
         with open(path, "rb") as f:
-            _SHA[path] = hashlib.sha256(f.read()).hexdigest()
-    return _SHA[path]
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+        _HASH[path] = h.hexdigest()[:16]
+    return _HASH[path]
+
+
+def corpus_sources(work):
+    """Mesh id -> input file, from $AR_CORPUS or corpus.json next to this script (as ab.py)."""
+    corpus = os.environ.get("AR_CORPUS") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus.json")
+    with open(corpus) as f:
+        meshes = json.load(f)["meshes"]
+    return {m["id"]: os.path.join(work, "meshes", m["file"]) for m in meshes}
 
 
 def collect(run, setname, work):
     out = collections.defaultdict(dict)
+    sources = corpus_sources(work)
     for obj in sorted(glob.glob(os.path.join(run, setname, "*", "*", "u*", "out.obj"))):
         d = os.path.dirname(obj)
-        src = input_of(d, work)
+        src = input_of(d, work, sources)
         if src is None:
             continue
         parts = obj.split(os.sep)
@@ -263,7 +275,7 @@ def main():
     ap.add_argument("a", nargs="?")
     ap.add_argument("b", nargs="?")
     ap.add_argument("--set", default="guides")
-    ap.add_argument("--work", help="ab.py work folder (meshes/, inputs/); default: the run folders' parent's parent")
+    ap.add_argument("--work", help="ab.py work folder (meshes/, inputs/); default: the run folder's parent's parent")
     ap.add_argument("--input")
     ap.add_argument("--obj")
     ap.add_argument("--md")
