@@ -29,9 +29,12 @@
 #include <AutoRemesher/Untangler>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -1140,11 +1143,413 @@ namespace {
         result->set("untangle_factorizations", (double)factorizations);
     }
 
+    using HolonomyRow = std::vector<std::pair<size_t, double>>;
+
+    // Coefficients of component `axis` of the translation holonomy along a
+    // closed dual corner path (the composed map from the last face's chart
+    // into the first one's is uv -> A uv + sum A_k t_k).
+    HolonomyRow holonomyRow(const std::vector<int>& rotation, const std::vector<size_t>& path,
+        size_t uvVariables, int axis, bool* identity)
+    {
+        static const int M[4][2][2] = { { { 1, 0 }, { 0, 1 } }, { { 0, 1 }, { -1, 0 } }, { { -1, 0 }, { 0, -1 } }, { { 0, -1 }, { 1, 0 } } };
+        int A[2][2] = { { 1, 0 }, { 0, 1 } };
+        HolonomyRow row;
+        for (const size_t pc : path) {
+            const size_t t = uvVariables + 2 * pc;
+            if (A[axis][0])
+                row.push_back({ t, (double)A[axis][0] });
+            if (A[axis][1])
+                row.push_back({ t + 1, (double)A[axis][1] });
+            const int r = (rotation[pc] % 4 + 4) % 4;
+            int B[2][2];
+            for (int i = 0; i < 2; ++i)
+                for (int j = 0; j < 2; ++j)
+                    B[i][j] = A[i][0] * M[r][0][j] + A[i][1] * M[r][1][j];
+            std::copy(&B[0][0], &B[0][0] + 4, &A[0][0]);
+        }
+        *identity = A[0][0] == 1 && A[1][1] == 1 && A[0][1] == 0 && A[1][0] == 0;
+        return row;
+    }
+
+    // Research prototype (closed edge loops, AUTOREMESHER_AUTO_RINGS=<ratio>):
+    // finds rings of the continuous cover, closed dual paths whose chart comes
+    // back unrotated and shifted mostly along the ring, by tracing isolines
+    // from seed faces until they pass close to their start and closing the
+    // gap with a short dual path. Returns one holonomy row per distinct ring
+    // whose cross shift is at most `ratio` times its length; constraining
+    // the row to zero closes the ring's edge loops.
+    std::vector<HolonomyRow> detectRings(const SurfaceMesh& mesh, const std::vector<int>& rotation,
+        const std::vector<double>& values, size_t uvVariables, const std::vector<FaceFrame>& frames,
+        double ratio, double beta, DiagnosticRecord* record)
+    {
+        static const double M[4][2][2] = { { { 1, 0 }, { 0, 1 } }, { { 0, 1 }, { -1, 0 } }, { { -1, 0 }, { 0, -1 } }, { { 0, -1 }, { 1, 0 } } };
+        const size_t faces = mesh.faceCount();
+        const auto uvAt = [&](size_t c) { return std::array<double, 2> { values[2 * c], values[2 * c + 1] }; };
+        const auto point = [&](size_t v) { return mesh.position(v); };
+        const auto centre = [&](size_t f) { return (point(mesh.cornerVertex(3 * f)) + point(mesh.cornerVertex(3 * f + 1)) + point(mesh.cornerVertex(3 * f + 2))) / 3.0; };
+        const size_t seedCount = std::min<size_t>(faces, 400);
+        const size_t stride = std::max<size_t>(1, faces / std::max<size_t>(1, seedCount));
+        const size_t maxSteps = (size_t)(8.0 * std::sqrt((double)faces)) + 50;
+        std::vector<HolonomyRow> rows;
+        std::vector<std::array<double, 2>> found;
+        std::vector<double> support, lengths;
+        size_t traces = 0, closures = 0, rotated = 0, rejected = 0, duplicates = 0, unreached = 0;
+        std::vector<int> bfsMark(faces, -1);
+        std::vector<size_t> bfsParent(faces, SurfaceMesh::npos);
+        int bfsStamp = 0;
+        for (size_t f0 = 0; f0 < faces; f0 += stride) {
+            const double quad = std::max(frames[f0].su, frames[f0].sv);
+            for (int k = 0; k < 2; ++k) {
+                ++traces;
+                double w0 = 0.0;
+                for (int l = 0; l < 3; ++l)
+                    w0 += uvAt(3 * f0 + l)[k] / 3.0;
+                double A[2][2] = { { 1, 0 }, { 0, 1 } }, b[2] = { 0, 0 };
+                const auto level = [&](size_t c) {
+                    const auto uv = uvAt(c);
+                    return A[k][0] * uv[0] + A[k][1] * uv[1] + b[k] - w0;
+                };
+                size_t c = SurfaceMesh::npos;
+                for (int l = 0; l < 3 && c == SurfaceMesh::npos; ++l) {
+                    const size_t cc = 3 * f0 + l;
+                    if ((level(cc) > 0) != (level(mesh.nextCorner(cc)) > 0))
+                        c = cc;
+                }
+                if (c == SurfaceMesh::npos)
+                    continue;
+                const Vector3 start = centre(f0);
+                Vector3 previous = start;
+                double travelled = 0.0, nearest = std::numeric_limits<double>::max();
+                std::vector<size_t> path;
+                bool done = false;
+                for (size_t step = 0; step < maxSteps && !done; ++step) {
+                    path.push_back(c);
+                    const double la = level(c), lb = level(mesh.nextCorner(c));
+                    const double s01 = la / (la - lb);
+                    const Vector3 at = point(mesh.cornerVertex(c)) * (1.0 - s01) + point(mesh.cornerVertex(mesh.nextCorner(c))) * s01;
+                    travelled += (at - previous).length();
+                    previous = at;
+                    const size_t oc = mesh.oppositeCorner(c);
+                    if (oc == SurfaceMesh::npos)
+                        break;
+                    {
+                        const int r = (rotation[c] % 4 + 4) % 4;
+                        const double tu = values[uvVariables + 2 * c], tv = values[uvVariables + 2 * c + 1];
+                        const double nb0 = A[0][0] * tu + A[0][1] * tv + b[0], nb1 = A[1][0] * tu + A[1][1] * tv + b[1];
+                        b[0] = nb0;
+                        b[1] = nb1;
+                        double B[2][2];
+                        for (int i = 0; i < 2; ++i)
+                            for (int j = 0; j < 2; ++j)
+                                B[i][j] = A[i][0] * M[r][0][j] + A[i][1] * M[r][1][j];
+                        std::copy(&B[0][0], &B[0][0] + 4, &A[0][0]);
+                    }
+                    const size_t h = oc / 3;
+                    const double distance = (at - start).length();
+                    // Closest pass near the start after at least 4 quads:
+                    // close the ring with a short dual path back to f0.
+                    const double window = ratio * travelled + 2.0 * quad;
+                    if (travelled <= 4.0 * quad || distance >= window)
+                        nearest = std::numeric_limits<double>::max();
+                    else if (distance <= nearest)
+                        nearest = distance;
+                    else {
+                        ++closures;
+                        ++bfsStamp;
+                        const double radius = nearest + 3.0 * quad;
+                        std::vector<size_t> queue { h };
+                        bfsMark[h] = bfsStamp;
+                        bfsParent[h] = SurfaceMesh::npos;
+                        bool reached = h == f0;
+                        for (size_t qi = 0; qi < queue.size() && !reached; ++qi) {
+                            const size_t g = queue[qi];
+                            for (int l = 0; l < 3 && !reached; ++l) {
+                                const size_t oc2 = mesh.oppositeCorner(3 * g + l);
+                                if (oc2 == SurfaceMesh::npos)
+                                    continue;
+                                const size_t n2 = oc2 / 3;
+                                if (bfsMark[n2] == bfsStamp || (centre(n2) - start).length() > radius)
+                                    continue;
+                                bfsMark[n2] = bfsStamp;
+                                bfsParent[n2] = 3 * g + l;
+                                queue.push_back(n2);
+                                if (n2 == f0)
+                                    reached = true;
+                            }
+                        }
+                        if (!reached) {
+                            ++unreached;
+                            if (std::getenv("AUTOREMESHER_RING_VERBOSE") && unreached < 4)
+                                std::fprintf(stderr, "unreached: travelled %g nearest %g distance %g quad %g steps %zu\n", travelled, nearest, distance, quad, path.size());
+                        }
+                        if (reached) {
+                            std::vector<size_t> back;
+                            for (size_t g = f0; g != h;) {
+                                const size_t pc = bfsParent[g];
+                                back.push_back(pc);
+                                g = pc / 3;
+                            }
+                            std::reverse(back.begin(), back.end());
+                            std::vector<size_t> cycle = path;
+                            cycle.insert(cycle.end(), back.begin(), back.end());
+                            bool identity = false;
+                            HolonomyRow rowU = holonomyRow(rotation, cycle, uvVariables, 0, &identity);
+                            HolonomyRow rowV = holonomyRow(rotation, cycle, uvVariables, 1, &identity);
+                            if (!identity) {
+                                ++rotated;
+                            } else {
+                                double hol[2] = { 0, 0 };
+                                for (const auto& e : rowU)
+                                    hol[0] += e.second * values[e.first];
+                                for (const auto& e : rowV)
+                                    hol[1] += e.second * values[e.first];
+                                const int cross = std::fabs(hol[0]) < std::fabs(hol[1]) ? 0 : 1;
+                                const double along = std::fabs(hol[1 - cross]), shift = std::fabs(hol[cross]);
+                                if (along < 6.0 || shift > ratio * along) {
+                                    ++rejected;
+                                } else {
+                                    bool duplicate = false;
+                                    for (size_t i = 0; i < found.size(); ++i)
+                                        if (std::fabs(found[i][0] - along) < 1e-6 * (1.0 + along) && std::fabs(found[i][1] - shift) < 1e-6 * (1.0 + along)) {
+                                            duplicate = true;
+                                            support[i] += 1.0;
+                                            lengths[i] = std::min(lengths[i], travelled);
+                                        }
+                                    if (duplicate) {
+                                        ++duplicates;
+                                    } else {
+                                        found.push_back({ along, shift });
+                                        support.push_back(1.0);
+                                        lengths.push_back(travelled);
+                                        rows.push_back(cross == 0 ? rowU : rowV);
+                                    }
+                                }
+                            }
+                        }
+                        done = true;
+                        break;
+                    }
+                    size_t next = SurfaceMesh::npos, count = 0;
+                    for (int l = 0; l < 3; ++l) {
+                        const size_t cc = 3 * h + l;
+                        if (cc != oc && (level(cc) > 0) != (level(mesh.nextCorner(cc)) > 0)) {
+                            next = cc;
+                            ++count;
+                        }
+                    }
+                    if (count != 1)
+                        break;
+                    c = next;
+                }
+            }
+        }
+        // Tube test: a ring around a tube is the iso-line class of a band
+        // free of singularities about as long as the ring (support counts
+        // the seeds whose isoline gave this ring, so support / seeds is
+        // about the band's share of the area). Rings that wind between
+        // singularities (meridians over caps, loops around a head) have
+        // narrow bands and are dropped: constraining them overconstrains
+        // the cone layout.
+        double totalArea = 0.0;
+        for (size_t f = 0; f < faces; ++f)
+            totalArea += 0.5 * Vector3::crossProduct(mesh.edgeVector(3 * f), -mesh.edgeVector(3 * f + 2)).length();
+        const double seeds = (double)((faces + stride - 1) / stride);
+        std::vector<HolonomyRow> tubes;
+        std::string list;
+        for (size_t i = 0; i < rows.size(); ++i) {
+            const double band = support[i] / seeds * totalArea;
+            const bool tube = band >= beta * lengths[i] * lengths[i];
+            list += std::to_string(found[i][0]).substr(0, 6) + "/" + std::to_string(found[i][1]).substr(0, 5) + "/b" + std::to_string(band / (lengths[i] * lengths[i])).substr(0, 5) + (tube ? "*" : "") + " ";
+            if (tube)
+                tubes.push_back(rows[i]);
+        }
+        rows.swap(tubes);
+        record->set("ring_traces", (double)traces);
+        record->set("ring_closures", (double)closures);
+        record->set("ring_rotated", (double)rotated);
+        record->set("ring_rejected", (double)rejected);
+        record->set("ring_duplicates", (double)duplicates);
+        record->set("rings", (double)rows.size());
+        record->set("ring_unreached", (double)unreached);
+        if (std::getenv("AUTOREMESHER_RING_VERBOSE"))
+            std::fprintf(stderr, "rings: %s\n", list.c_str());
+        return rows;
+    }
+
+    // Research probe (closed edge loops): AUTOREMESHER_RING_PLANES="nx ny nz d [fx fy fz fd];..."
+    // cuts T with each plane (optionally keeping faces whose centroid c has
+    // f.c > fd, or radius > fd when f = 0), walks the dual ring of cut faces
+    // and adds the integer constraint "cross component of the ring's
+    // translation holonomy = 0". The cross component is the chart axis the
+    // ring crosses least in its first face.
+    void addRingConstraints(const CoverContext& ctx, const std::vector<FaceFrame>& frames,
+        size_t uvVariables, MixedIntegerLeastSquares* s, DiagnosticRecord* record)
+    {
+        const char* env = std::getenv("AUTOREMESHER_RING_PLANES");
+        if (nullptr == env)
+            return;
+        const SurfaceMesh& mesh = ctx.mesh;
+        std::string all(env);
+        size_t added = 0, failed = 0;
+        size_t start = 0;
+        while (start < all.size()) {
+            size_t end = all.find(';', start);
+            if (end == std::string::npos)
+                end = all.size();
+            std::vector<double> a;
+            {
+                std::string part = all.substr(start, end - start);
+                char* q = &part[0];
+                char* e = nullptr;
+                while (true) {
+                    const double x = std::strtod(q, &e);
+                    if (e == q)
+                        break;
+                    a.push_back(x);
+                    q = e;
+                }
+            }
+            start = end + 1;
+            if (a.size() < 4)
+                continue;
+            const Vector3 n(a[0], a[1], a[2]);
+            const double d = a[3];
+            const bool filter = a.size() >= 8;
+            const Vector3 fn = filter ? Vector3(a[4], a[5], a[6]) : Vector3();
+            const double fd = filter ? a[7] : 0.0;
+            const auto side = [&](size_t v) { return Vector3::dotProduct(mesh.position(v), n) - d > 0; };
+            const auto crosses = [&](size_t c) { return side(mesh.cornerVertex(c)) != side(mesh.cornerVertex(mesh.nextCorner(c))); };
+            const auto keep = [&](size_t f) {
+                if (!filter)
+                    return true;
+                const Vector3 centre = (mesh.position(mesh.cornerVertex(3 * f)) + mesh.position(mesh.cornerVertex(3 * f + 1)) + mesh.position(mesh.cornerVertex(3 * f + 2))) / 3.0;
+                if (fn.isZero())
+                    return std::hypot(centre.x(), centre.y()) > fd;
+                return Vector3::dotProduct(centre, fn) > fd;
+            };
+            size_t f0 = SurfaceMesh::npos, c0 = SurfaceMesh::npos;
+            for (size_t f = 0; f < mesh.faceCount() && f0 == SurfaceMesh::npos; ++f)
+                if (keep(f))
+                    for (size_t l = 0; l < 3; ++l)
+                        if (crosses(3 * f + l)) {
+                            f0 = f;
+                            c0 = 3 * f + l;
+                            break;
+                        }
+            if (f0 == SurfaceMesh::npos) {
+                ++failed;
+                continue;
+            }
+            std::vector<size_t> path;
+            size_t c = c0;
+            bool ok = false;
+            for (size_t step = 0; step < mesh.faceCount(); ++step) {
+                path.push_back(c);
+                const size_t oc = mesh.oppositeCorner(c);
+                if (oc == SurfaceMesh::npos)
+                    break;
+                const size_t g = oc / 3;
+                if (g == f0) {
+                    ok = true;
+                    break;
+                }
+                if (!keep(g))
+                    break;
+                size_t next = SurfaceMesh::npos, count = 0;
+                for (size_t l = 0; l < 3; ++l)
+                    if (3 * g + l != oc && crosses(3 * g + l)) {
+                        next = 3 * g + l;
+                        ++count;
+                    }
+                if (count != 1)
+                    break;
+                c = next;
+            }
+            if (!ok) {
+                ++failed;
+                continue;
+            }
+            // A maps the current face's chart into f0's chart; b = sum A t.
+            int A[2][2] = { { 1, 0 }, { 0, 1 } };
+            std::vector<std::pair<size_t, double>> rows[2];
+            for (const size_t pc : path) {
+                const size_t t = uvVariables + 2 * pc;
+                for (int i = 0; i < 2; ++i) {
+                    if (A[i][0])
+                        rows[i].push_back({ t, (double)A[i][0] });
+                    if (A[i][1])
+                        rows[i].push_back({ t + 1, (double)A[i][1] });
+                }
+                const int r = (ctx.rotation[pc] % 4 + 4) % 4;
+                static const int M[4][2][2] = { { { 1, 0 }, { 0, 1 } }, { { 0, 1 }, { -1, 0 } }, { { -1, 0 }, { 0, -1 } }, { { 0, -1 }, { 1, 0 } } };
+                int B[2][2];
+                for (int i = 0; i < 2; ++i)
+                    for (int j = 0; j < 2; ++j)
+                        B[i][j] = A[i][0] * M[r][0][j] + A[i][1] * M[r][1][j];
+                std::copy(&B[0][0], &B[0][0] + 4, &A[0][0]);
+            }
+            if (!(A[0][0] == 1 && A[1][1] == 1 && A[0][1] == 0 && A[1][0] == 0)) {
+                ++failed;
+                continue;
+            }
+            // Ring direction in f0: the cut edge c0 is crossed, so the ring
+            // runs along n x normal; the chart axis it runs along least is
+            // the cross one.
+            const Vector3 along = Vector3::crossProduct(n, ctx.normals[f0]);
+            const double du = std::fabs(Vector3::dotProduct(along, frames[f0].u)) / frames[f0].su;
+            const double dv = std::fabs(Vector3::dotProduct(along, frames[f0].v)) / frames[f0].sv;
+            const int cross = du > dv ? 1 : 0;
+            if (rows[cross].empty()) {
+                ++failed;
+                continue;
+            }
+            s->addConstraint(rows[cross]);
+            ++added;
+        }
+        record->set("ring_constraints", (double)added);
+        record->set("ring_constraints_failed", (double)failed);
+    }
+
+    // Research probe (closed edge loops): AUTOREMESHER_COVER_DUMP=<dir> writes
+    // T, per-corner rotation, seam, uv and transitions of the continuous and
+    // the final cover, one file per call.
+    void dumpCover(const SurfaceMesh& mesh, const std::vector<int>& rotation, const std::vector<char>& seam,
+        const std::vector<double>& continuous, const std::vector<double>& final_, size_t uvVariables,
+        const std::vector<FaceFrame>& frames)
+    {
+        const char* dir = std::getenv("AUTOREMESHER_COVER_DUMP");
+        if (nullptr == dir || continuous.empty())
+            return;
+        static int counter = 0;
+        const std::string path = std::string(dir) + "/cover_" + std::to_string(counter++) + ".txt";
+        FILE* f = std::fopen(path.c_str(), "w");
+        if (nullptr == f)
+            return;
+        std::fprintf(f, "V %zu\n", mesh.vertexCount());
+        for (size_t v = 0; v < mesh.vertexCount(); ++v) {
+            const Vector3& p = mesh.position(v);
+            std::fprintf(f, "%.17g %.17g %.17g\n", p.x(), p.y(), p.z());
+        }
+        std::fprintf(f, "C %zu\n", mesh.cornerCount());
+        for (size_t c = 0; c < mesh.cornerCount(); ++c) {
+            const size_t oc = mesh.oppositeCorner(c);
+            std::fprintf(f, "%zu %lld %d %d %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g\n", mesh.cornerVertex(c),
+                oc == SurfaceMesh::npos ? -1LL : (long long)oc, rotation[c], (int)seam[c],
+                continuous[2 * c], continuous[2 * c + 1], continuous[uvVariables + 2 * c], continuous[uvVariables + 2 * c + 1],
+                final_[2 * c], final_[2 * c + 1], final_[uvVariables + 2 * c], final_[uvVariables + 2 * c + 1]);
+        }
+        std::fprintf(f, "F %zu\n", frames.size());
+        for (const FaceFrame& fr : frames)
+            std::fprintf(f, "%.9g %.9g %.9g %.9g %.9g\n", fr.u.x(), fr.u.y(), fr.u.z(), fr.su, fr.sv);
+        std::fclose(f);
+    }
+
     // Appends "cover_system" and one "rounding_iteration" per pass to
     // `diagnostics`, and fills `result` with the residuals and map validity.
     bool solveQuadCover(const CoverContext& ctx, std::vector<double>* values,
         const ProgressHandler* progressHandler,
-        std::vector<DiagnosticRecord>* diagnostics, DiagnosticRecord* result)
+        std::vector<DiagnosticRecord>* diagnostics, DiagnosticRecord* result,
+        const std::vector<HolonomyRow>* rings = nullptr, bool continuousOnly = false)
     {
         const SurfaceMesh& mesh = ctx.mesh;
         const std::vector<int>& rotation = ctx.rotation;
@@ -1277,6 +1682,13 @@ namespace {
                 s.addConstraint(2 * c, 1, 2 * n, -1);
             }
         }
+        DiagnosticRecord ringRecord("ring_constraints");
+        addRingConstraints(ctx, frames, uvVariables, &s, &ringRecord);
+        if (nullptr != rings)
+            for (const HolonomyRow& row : *rings)
+                s.addConstraint(row);
+        if (std::getenv("AUTOREMESHER_RING_PLANES"))
+            diagnostics->push_back(std::move(ringRecord));
         report(0.2f, "Eliminating cover constraints");
         s.finalizeConstraints();
         {
@@ -1300,6 +1712,7 @@ namespace {
         const size_t maximumIterations = 100;
         const size_t expectedIterations = 1 + MixedIntegerLeastSquares::expectedRoundingPasses();
         size_t iterations = 0;
+        std::vector<double> continuousValues;
         for (size_t iteration = 0; iteration < maximumIterations; ++iteration) {
             report(0.3f + 0.65f * std::min(1.0f, (float)iteration / expectedIterations),
                 "Rounding cover to integers");
@@ -1320,6 +1733,11 @@ namespace {
                 return false;
             if (0 == iteration) {
                 result->set("continuous_rescale", matchCellCount(mesh, expectedCells, &s));
+                if (std::getenv("AUTOREMESHER_COVER_DUMP")) {
+                    continuousValues.resize(variables);
+                    for (size_t i = 0; i < variables; ++i)
+                        continuousValues[i] = s.value(i);
+                }
                 result->set("continuous_energy", s.energy());
                 appendSizeFidelity(result, "continuous", mesh, s, faceScaling, scale);
                 // Nothing is fixed in the first pass, so its solution is the
@@ -1328,6 +1746,12 @@ namespace {
                 const std::vector<double> uvs = cornerUvs(s, uvVariables);
                 appendUvOrientation(result, "continuous", measureUvOrientation(uvs));
                 appendWinding(result, "continuous", measureWinding(mesh, rotation, frames, uvs));
+                if (continuousOnly) {
+                    values->resize(variables);
+                    for (size_t i = 0; i < variables; ++i)
+                        (*values)[i] = s.value(i);
+                    return true;
+                }
             }
             if (s.converged())
                 break;
@@ -1365,6 +1789,7 @@ namespace {
         values->resize(variables);
         for (size_t i = 0; i < variables; ++i)
             (*values)[i] = s.value(i);
+        dumpCover(mesh, rotation, seam, continuousValues, *values, uvVariables, frames);
         return s.converged();
     }
 
@@ -1571,8 +1996,20 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     }
     std::vector<double> allValues;
     DiagnosticRecord coverResult("cover_result");
+    std::vector<HolonomyRow> rings;
+    if (const char* autoRings = std::getenv("AUTOREMESHER_AUTO_RINGS")) {
+        std::vector<double> continuous;
+        std::vector<DiagnosticRecord> scratch;
+        DiagnosticRecord scratchResult("cover_probe");
+        if (solveQuadCover(ctx, &continuous, nullptr, &scratch, &scratchResult, nullptr, true)) {
+            DiagnosticRecord ringRecord("auto_rings");
+            rings = detectRings(mesh, rotation, continuous, uvVariables, computeFaceFrames(ctx),
+                std::atof(autoRings), std::getenv("AUTOREMESHER_RING_BETA") ? std::atof(std::getenv("AUTOREMESHER_RING_BETA")) : 0.5, &ringRecord);
+            result->diagnostics.push_back(std::move(ringRecord));
+        }
+    }
     if (!solveQuadCover(ctx, &allValues, coverProgress ? &coverProgress : nullptr,
-            &result->diagnostics, &coverResult)) {
+            &result->diagnostics, &coverResult, rings.empty() ? nullptr : &rings)) {
         coverResult.set("ok", 0.0);
         result->diagnostics.push_back(std::move(coverResult));
         return false;
