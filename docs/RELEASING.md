@@ -40,8 +40,9 @@ is made by CI from a tag and always starts as a **draft**: nothing is public unt
 ## Versions
 
 - The manifest version is the release version, `MAJOR.MINOR.PATCH`, and changes only in a release
-  PR. While the major number is 0, the minor goes up for a release with new features or changed
-  output, the patch for fixes only.
+  PR. While the major number is 0, the minor goes up for a release with new features that change
+  output or the workflow, the patch for fixes and small additions that don't change output (Kajetan,
+  2026-10-31: 0.2.1 adds the Copy Report button).
 - Test builds between releases keep the last version; the build line in the panel tells them apart
   (`pr77 abc1234+master`, `abc1234 2026-11-03`, or `v0.1.0 ...` for the release itself).
 - Not `0.1.0+<commit>` in the manifest: Blender would show it but every build would need its own
@@ -58,7 +59,7 @@ Copy into the release PR's description and tick each line there.
    - [ ] master CI green on the commit to tag (Actions > ci, branch master).
    - [ ] TARGETS release check ([TARGETS.md](TARGETS.md) §2.5, §5 "Releases") on all three
          platforms: **Actions > release-check > Run workflow**, `ref` = the commit to tag, `baseline`
-         = the previous release's tag (`v0.1.0` for 0.2.0, the default; 0.1.0 used `877891d`, see below). Each
+         = the previous release's tag (`v0.2.0` for 0.2.1, the default; `v0.1.0` for 0.2.0; 0.1.0 used `877891d`, see below). Each
          platform builds both, runs corpus and closed sets with 5 replicates (about an hour; macOS
          longer) and `tools/bench/release_gate.py` decides: for 0.x no structural gate (H1–H6, H8)
          fails on every replicate of more cases (mesh, resolution, target) than in the baseline and no §3.2 validity number is worse (TARGETS §6,
@@ -68,7 +69,9 @@ Copy into the release PR's description and tick each line there.
    - [ ] The changes this release promises are merged. For 0.1.0 (Kajetan, 2026-10-22): the
          thin-parts (vines) fix and its panel warnings. For 0.2.0 (Kajetan, 2026-10-28): source
          data, sanitizer, sharp-edge tolerance, hang and crash guards, opt-in smoothing, the
-         thin-part wording and lower memory; cone tips and crease preservation moved to 0.3.
+         thin-part wording and lower memory; cone tips and crease preservation moved to 0.3. For 0.2.1
+         (Kajetan, 2026-10-31): the fallback tracer cap (#153), no copying of flooded marks (#154) and
+         Copy Report (#160).
 2. **Real-machine checks** (CI runs Blender without a window): install the master zip from CI on
    Kajetan's Linux laptop and remesh a sculpt; Windows and a Mac when one is at hand (unsigned
    program: SmartScreen and Gatekeeper behaviour are untested, write down what happened).

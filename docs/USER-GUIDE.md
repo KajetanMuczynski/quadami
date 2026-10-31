@@ -57,7 +57,7 @@ under **Assets**, click the zip for your system. No GitHub account is needed.
 | System | Zip on the Releases page | Tested on a real computer? |
 |---|---|---|
 | **Linux** (64-bit Intel/AMD, any distribution with glibc 2.28 or newer: Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL 8+) | `quadami-<version>-linux-x64.zip`. Blender from blender.org or the snap (`/snap/bin/blender`). Or build it yourself ([addon/BEGINNERS.md](../addon/BEGINNERS.md)). | Yes (Ubuntu, Blender 4.5 snap) |
-| **Windows** 10 or 11 (64-bit) | `quadami-<version>-windows-x64.zip` (the program is not signed) | 0.1.0 on one Windows 10 desktop; 0.2.0 only in CI (Blender 5.2, no window) |
+| **Windows** 10 or 11 (64-bit) | `quadami-<version>-windows-x64.zip` (the program is not signed) | 0.1.0 on one Windows 10 desktop; 0.2.x only in CI (Blender 5.2, no window) |
 | **macOS**, Apple silicon (M1 or newer), macOS 11.2 or newer: **experimental, untested** | `quadami-<version>-macos-arm64.zip` (not notarized, so macOS may block it) | No, only in CI |
 | macOS on Intel, Linux on ARM, Windows on ARM | Not built. Intel Macs: build it yourself ([BUILDING.md](BUILDING.md)). | No |
 
@@ -124,7 +124,7 @@ above. Results you already made stay in your files; they are ordinary mesh objec
 
 - **Windows:** [windows-test/quadami-update.ps1](windows-test/quadami-update.ps1), described in the
   [Windows test sheet](windows-test/README.md) §4. Quit Blender, then in PowerShell:
-  `powershell -ExecutionPolicy Bypass -File .\quadami-update.ps1 .\quadami-0.2.0-windows-x64.zip "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"`.
+  `powershell -ExecutionPolicy Bypass -File .\quadami-update.ps1 .\quadami-0.2.1-windows-x64.zip "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"`.
   It only lists what it would do; add `-Apply` to do it. Tried only against a stand-in Blender, not
   on real Windows.
 - **Linux:** `quadami-update.sh`, the same for Linux, comes with the maintainer's test builds (it is not
@@ -144,7 +144,7 @@ Please report what happened either way.
 
 ### Which version do I have? (the build line)
 
-Blender's extension list shows the release version (such as 0.2.0) for every build, so it cannot tell builds apart. Use the
+Blender's extension list shows the release version (such as 0.2.1) for every build, so it cannot tell builds apart. Use the
 **build line** instead: a small grey line at the very bottom of the Quadami panel (and in the add-on's
 preferences), for example `Add-on build 4e9cdc7 2026-10-21`. The first part is the code version (a
 commit), the second its date. Copy that line into every bug report.
@@ -333,7 +333,7 @@ From the project's measurements on real sculpts and on synthetic brush tests (Oc
 | **Hard edges** (box, cylinder or cone rims) | Slightly rounded. On Blender's cube an edge loop follows about 90 % of the edges at 5,000 quads (about 70 % at 1,000), on the cylinder about 80 % of the rims (about 75 % at 1,000); a cone's base rim is mostly rounded off. Rows of thin quads often line the edge. | Mark the edges Sharp (**Follow Marks** > Sharp is on by default): at 5,000 quads an edge loop then follows 90–99 % of a cube's or cylinder's edges and about 75 % of a cone's base rim (at 1,000 quads the cone's rim still almost none). Without marks, more quads make the rounding smaller. Edges sharper than Sharp Edge (90° by default, exactly 90° included) are kept as creases; lowering it keeps blunter edges too, but on detailed parts it makes more triangles and can change holes or handles, so check the **Holes** and **Handles** rows. |
 | **Small tunnels** (a gap thinner than about 3 quads, e.g. between an arm and the body) | It may close. | Raise Target Quads until the tunnel is several quads wide. |
 | **Very low-poly input** (big flat facets) | The result follows the facets. An icosphere also gets extra poles inside its facets, with or without Subdivision Surface (a UV sphere comes out clean from about 3,000 quads). | Add Subdivision Surface first. Smooth Normal only on rounded shapes: on a box (Blender's default cube) any value above about 55° (on a cylinder, above 45°) tears the result open, with holes, extra handles and hundreds of folded quads, and the run takes about 20 times as long. |
-| **Very many tiny thin pieces** (a wrought-iron gate, wire ornaments) | The run can take many minutes: on an iron-gate test model at 3,300 and 4,000 quads, some runs had not finished after 15 minutes. | Press **Esc** to cancel (Blender stays usable). Merging or deleting the smallest pieces may help (not measured). |
+| **Very many tiny thin pieces** (a wrought-iron gate, wire ornaments, lace) | Some pieces may come out with no quads (red **Missing parts**). Before 0.2.1 such models could run for many minutes or run out of memory; since 0.2.1 a piece that would need far more quads than its share is left out instead, and our iron-gate test model finishes in 9-20 seconds at 3,300 and 4,000 quads (12 of 12 runs). | Raise Target Quads for the lost pieces, or delete the smallest ones. If a run still takes long, press **Esc** to cancel (Blender stays usable). |
 | **A surface pushed through itself** | May fold there. Not measured yet. | Fix in Sculpt Mode. |
 | **Very tiny or huge models** | Measured from 0.0001 to 10,000 times the default size, and up to 1,000,000 units from the origin: it works throughout, with the same quad count from 0.001 times up. | Nothing to do. |
 | **Text or a curve converted to mesh** (Object > Convert > Mesh) | Blender leaves the letters' front, back and sides as separate pieces that only touch. The remesher welds them itself (the **Input cleanup** row), so the letters come out closed; thin strokes then lose area at low counts (about 9–19 % of the text at 1,000 quads on our test, and the thin-part warning fires). | More quads for thin strokes (§6, thin parts). |
