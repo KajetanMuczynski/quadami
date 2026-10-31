@@ -139,7 +139,7 @@ class PeakMemory(unittest.TestCase):
         self.mesh = {"id": "m", "file": "m.obj"}
 
     def run_one(self, report):
-        def fake_cli(cmd, log, timeout):
+        def fake_cli(cmd, log, timeout, env=None):
             if report is not None:
                 with open(cmd[cmd.index("--report-json") + 1], "w") as fp:
                     json.dump(report, fp)
@@ -341,3 +341,60 @@ class RemeasureGuard(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OtherApp(unittest.TestCase):
+    """`run --app`: another remesher's binary through the Qt app's headless interface (upstream
+    AutoRemesher 1.2.0), with the peak RSS from /usr/bin/time and an optional requested count."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.work = tmp.name
+        self.out = os.path.join(self.work, "runs", "app-k")
+        self.mesh = {"id": "m", "file": "m.obj"}
+        self.calls = []
+
+    def run_one(self, write_output=True, requested=None):
+        def fake_app(cmd, log, timeout, env=None):
+            self.calls.append((cmd, env))
+            rss, out = cmd[4], cmd[cmd.index("-o", 5) + 1]  # /usr/bin/time -f %M -o rss.txt app -i .. -o out
+            with open(rss, "w") as fp:
+                fp.write("53900\n")
+            with open(cmd[cmd.index("--report") + 1], "w") as fp:
+                fp.write("AutoRemesher Report\n===================\n\nTarget quads: 2000\n\nResults:\n"
+                         "  Quads: 1628\n  Non-quads: 3\n  Vertices: 1630\n  Total time: 0.422 seconds\n")
+            if write_output:
+                with open(out, "w") as fp:
+                    fp.write("v 0 0 0\n")
+            return 0, 3652.0
+        with mock.patch.object(ab, "call_measured", side_effect=fake_app), \
+                mock.patch.object(ab, "perturbed", side_effect=lambda src, k, work: src), \
+                mock.patch.object(ab, "file_hash", return_value="0"):
+            return ab.run_one("app", self.mesh, "usage", 2000, "quality", 0, self.out, ["--adaptivity", "0.5"],
+                              self.work, False, 1, app=True, requested=requested, external_rss=True)
+
+    def test_command_report_and_rss(self):
+        rec = self.run_one()
+        cmd, env = self.calls[0]
+        self.assertEqual(cmd[:5], [ab.TIME, "-f", "%M", "-o", cmd[4]])
+        self.assertEqual(cmd[5:7], ["app", "-i"])
+        self.assertNotIn("--resolution", cmd)
+        self.assertEqual(cmd[cmd.index("--target-quads") + 1], "2000")
+        self.assertEqual(cmd[-2:], ["--adaptivity", "0.5"])
+        self.assertEqual(env["QT_QPA_PLATFORM"], "offscreen")
+        self.assertEqual(rec["output"], {"quads": 1628, "non_quads": 3, "vertices": 1630})
+        self.assertEqual(rec["time"], 0.422)
+        self.assertEqual((rec["peak_rss_mb"], rec["peak_rss_from"]), (53900 / 1024, "time"))
+        self.assertEqual((rec["rc"], rec["target"]), (0, 2000))
+
+    def test_requested_count_is_filed_under_the_target(self):
+        rec = self.run_one(requested=2450)
+        cmd, _ = self.calls[0]
+        self.assertEqual(cmd[cmd.index("--target-quads") + 1], "2450")
+        self.assertEqual((rec["target"], rec["requested_target"]), (2000, 2450))
+        self.assertTrue(rec["out_sha"])
+
+    def test_no_output_is_a_failure(self):
+        self.assertEqual(self.run_one(write_output=False)["rc"], "no output")
+
