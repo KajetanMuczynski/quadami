@@ -20,8 +20,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <unordered_map>
 #include <meshoptimizer.h>
+#include <unordered_map>
 
 namespace AutoRemesher {
 
