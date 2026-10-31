@@ -734,6 +734,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     report.ignoredFeatureEdgeCount = engine.ignoredMarkedEdgeCount();
     const size_t marksDroppedIslands = engine.markedEdgesDroppedIslandCount();
     const size_t marksTooDenseIslands = engine.markedEdgesTooDenseIslandCount();
+    const size_t sharpDroppedIslands = engine.sharpEdgesDroppedIslandCount();
     if (nullptr != preview)
         preview->phaseReport = engine.phaseReport();
     result.stageDiagnostics = engine.takeDiagnostics();
@@ -803,6 +804,11 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
         report.warnings.push_back("Marked edges were not followed on " + std::to_string(marksDroppedIslands)
             + (1 == marksDroppedIslands ? " part" : " parts")
             + ": following them folded the quads there (marks that cross other creases or each other)");
+    }
+    if (sharpDroppedIslands > 0) {
+        report.warnings.push_back("Sharp edges were not kept on " + std::to_string(sharpDroppedIslands)
+            + (1 == sharpDroppedIslands ? " part" : " parts")
+            + ": keeping them changed the part's shape (a hole closed or the part collapsed)");
     }
     if (report.ignoredFeatureEdgeCount > 0) {
         report.warnings.push_back(std::to_string(report.ignoredFeatureEdgeCount)

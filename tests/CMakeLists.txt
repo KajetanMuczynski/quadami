@@ -91,3 +91,8 @@ add_test(NAME feature_edges COMMAND feature_edges_test)
 add_executable(marked_edges_test marked_edges_test.cpp)
 target_link_libraries(marked_edges_test PRIVATE autoremesher_core)
 add_test(NAME marked_edges COMMAND marked_edges_test)
+
+add_executable(sharp_edge_fallback_test sharp_edge_fallback_test.cpp)
+target_link_libraries(sharp_edge_fallback_test PRIVATE autoremesher_core)
+add_test(NAME sharp_edge_fallback COMMAND sharp_edge_fallback_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/data/cad-csg-bracket-rot.obj")
