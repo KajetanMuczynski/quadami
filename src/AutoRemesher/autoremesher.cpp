@@ -313,6 +313,97 @@ namespace {
         }
         return lengths;
     }
+
+    // The index of the nearest site to each query, by a uniform grid of about
+    // two sites per cell (the sites lie on a surface).  `sites` must not be
+    // empty.
+    std::vector<size_t> nearestSites(const std::vector<Vector3>& sites, const std::vector<Vector3>& queries)
+    {
+        Vector3 low = sites[0];
+        Vector3 high = sites[0];
+        for (const Vector3& p : sites) {
+            for (size_t k = 0; k < 3; ++k) {
+                low[k] = std::min(low[k], p[k]);
+                high[k] = std::max(high[k], p[k]);
+            }
+        }
+        const double diagonal = (high - low).length();
+        double cell = diagonal * std::sqrt(2.0 / (double)sites.size());
+        if (!(cell > 0.0))
+            cell = 1.0;
+        const auto cellOf = [&](const Vector3& p, int64_t* c) {
+            for (size_t k = 0; k < 3; ++k)
+                c[k] = (int64_t)std::floor((p[k] - low[k]) / cell);
+        };
+        // 21 bits per axis, enough for the cell counts this grid makes.
+        const auto keyOf = [](int64_t x, int64_t y, int64_t z) {
+            return ((uint64_t)(x & 0x1fffff) << 42) | ((uint64_t)(y & 0x1fffff) << 21) | (uint64_t)(z & 0x1fffff);
+        };
+        std::vector<std::pair<uint64_t, size_t>> keyed(sites.size());
+        for (size_t i = 0; i < sites.size(); ++i) {
+            int64_t c[3];
+            cellOf(sites[i], c);
+            keyed[i] = { keyOf(c[0], c[1], c[2]), i };
+        }
+        std::sort(keyed.begin(), keyed.end());
+        std::unordered_map<uint64_t, std::pair<size_t, size_t>> cells;
+        cells.reserve(keyed.size());
+        for (size_t i = 0; i < keyed.size();) {
+            size_t j = i;
+            while (j < keyed.size() && keyed[j].first == keyed[i].first)
+                ++j;
+            cells[keyed[i].first] = { i, j };
+            i = j;
+        }
+        const int64_t maximumRing = (int64_t)std::ceil(diagonal / cell) + 2;
+        std::vector<size_t> nearest(queries.size(), 0);
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, queries.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t q = range.begin(); q != range.end(); ++q) {
+                    const Vector3& p = queries[q];
+                    int64_t c[3];
+                    cellOf(p, c);
+                    double best = std::numeric_limits<double>::max();
+                    size_t bestSite = 0;
+                    const auto visit = [&](int64_t x, int64_t y, int64_t z) {
+                        const auto found = cells.find(keyOf(x, y, z));
+                        if (found == cells.end())
+                            return;
+                        for (size_t k = found->second.first; k < found->second.second; ++k) {
+                            const double d = (sites[keyed[k].second] - p).lengthSquared();
+                            if (d < best || (d == best && keyed[k].second < bestSite)) {
+                                best = d;
+                                bestSite = keyed[k].second;
+                            }
+                        }
+                    };
+                    // Ring r holds the cells r steps away; the next ring is at
+                    // least r cells from the query.
+                    for (int64_t r = 0; r <= maximumRing; ++r) {
+                        for (int64_t dx = -r; dx <= r; ++dx) {
+                            for (int64_t dy = -r; dy <= r; ++dy) {
+                                const bool shell = std::abs(dx) == r || std::abs(dy) == r;
+                                for (int64_t dz = -r; dz <= r; dz += (shell ? 1 : std::max<int64_t>(1, 2 * r)))
+                                    visit(c[0] + dx, c[1] + dy, c[2] + dz);
+                            }
+                        }
+                        if (best <= (double)(r * r) * cell * cell)
+                            break;
+                    }
+                    if (best == std::numeric_limits<double>::max()) {
+                        for (size_t i = 0; i < sites.size(); ++i) {
+                            const double d = (sites[i] - p).lengthSquared();
+                            if (d < best) {
+                                best = d;
+                                bestSite = i;
+                            }
+                        }
+                    }
+                    nearest[q] = bestSite;
+                }
+            });
+        return nearest;
+    }
 }
 
 const double AutoRemesher::m_defaultSharpEdgeDegrees = 90;
@@ -1093,6 +1184,8 @@ bool AutoRemesher::remeshIslands()
     throwIfCancelled();
     auto t_start = std::chrono::high_resolution_clock::now();
     const double cpuStart = processCpuSeconds();
+    // The plan reports on these; the pinch split appends vertices after them.
+    const size_t givenVertexCount = m_vertices.size();
 
     // Open seams first: welding can leave zero-length edges and duplicate
     // triangles, which the next two steps remove.  Pinched vertices are split
@@ -1601,6 +1694,121 @@ bool AutoRemesher::remeshIslands()
         });
     auto t_isotropicEnd = std::chrono::high_resolution_clock::now();
     throwIfCancelled();
+
+    // The plan: the quad edge the cover would ask of each face of T, carried
+    // to the input vertices by the nearest vertex of T (T was made from the
+    // island, so it lies on it within its own edge length).
+    if (m_planOnly) {
+        if (nullptr != m_progressHandler)
+            m_progressHandler(m_tag, 0.9f, "Planning quad sizes");
+        m_planIslands.assign(islandContexes.size(), PlanIsland());
+        m_planVertexEdgeLengths.assign(givenVertexCount, 0.0f);
+        m_planVertexIslands.assign(givenVertexCount, NoPlanIsland);
+        for (size_t i = 0; i < islandContexes.size(); ++i) {
+            const auto& ctx = islandContexes[i];
+            auto& island = m_planIslands[i];
+            island.areaShare = totalIslandArea > 0.0 ? ctx.area / totalIslandArea : 0.0;
+            island.plannedQuads = ctx.targetQuadCount;
+            island.floorQuads = 0.5 * std::min(minimumIslandTriangleCount, (double)trianglesIslands[i].size());
+            island.leftOut = ctx.leftOut;
+        }
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t i = range.begin(); i != range.end(); ++i) {
+                    const auto& ctx = islandContexes[i];
+                    const auto& island = trianglesIslands[i];
+                    if (ctx.leftOut || ctx.vertices.empty() || ctx.triangles.empty()) {
+                        for (const auto& triangle : island) {
+                            for (const size_t v : triangle) {
+                                if (v < givenVertexCount)
+                                    m_planVertexIslands[v] = (uint32_t)i;
+                            }
+                        }
+                        continue;
+                    }
+                    Parameterizer parameterizer(&ctx.vertices, &ctx.triangles, nullptr);
+                    if (ctx.scaling > 0.0)
+                        parameterizer.setScaling(ctx.scaling);
+                    parameterizer.setTargetQuadCount(ctx.targetQuadCount);
+                    parameterizer.setGradientAdaptivity(ctx.adaptivity);
+                    const std::vector<double> faceEdges = parameterizer.plannedFaceEdgeLengths();
+                    // Area-weighted mean of the faces around each vertex of T.
+                    std::vector<double> sum(ctx.vertices.size(), 0.0);
+                    std::vector<double> weight(ctx.vertices.size(), 0.0);
+                    for (size_t f = 0; f < ctx.triangles.size(); ++f) {
+                        const auto& t = ctx.triangles[f];
+                        const double area = Vector3::area(ctx.vertices[t[0]], ctx.vertices[t[1]], ctx.vertices[t[2]]);
+                        for (const size_t v : t) {
+                            sum[v] += area * faceEdges[f];
+                            weight[v] += area;
+                        }
+                    }
+                    std::vector<Vector3> sites;
+                    std::vector<double> siteEdges;
+                    sites.reserve(ctx.vertices.size());
+                    siteEdges.reserve(ctx.vertices.size());
+                    for (size_t v = 0; v < ctx.vertices.size(); ++v) {
+                        if (weight[v] > 0.0) {
+                            sites.push_back(ctx.vertices[v]);
+                            siteEdges.push_back(sum[v] / weight[v]);
+                        }
+                    }
+                    std::vector<size_t> inputIndices;
+                    std::vector<Vector3> queries;
+                    for (const auto& triangle : island) {
+                        for (const size_t v : triangle) {
+                            if (v < givenVertexCount && NoPlanIsland == m_planVertexIslands[v]) {
+                                m_planVertexIslands[v] = (uint32_t)i;
+                                inputIndices.push_back(v);
+                                queries.push_back(m_vertices[v]);
+                            }
+                        }
+                    }
+                    if (sites.empty())
+                        continue;
+                    const std::vector<size_t> nearest = nearestSites(sites, queries);
+                    for (size_t k = 0; k < inputIndices.size(); ++k)
+                        m_planVertexEdgeLengths[inputIndices[k]] = (float)siteEdges[nearest[k]];
+                }
+            });
+        // Vertices no face uses any more (the cleanup merged them, or they
+        // never had one) take the values of the nearest planned vertex.
+        std::vector<Vector3> sites;
+        std::vector<size_t> siteIndices;
+        std::vector<Vector3> queries;
+        std::vector<size_t> queryIndices;
+        for (size_t v = 0; v < givenVertexCount; ++v) {
+            if (NoPlanIsland != m_planVertexIslands[v]) {
+                sites.push_back(m_vertices[v]);
+                siteIndices.push_back(v);
+            } else {
+                queries.push_back(m_vertices[v]);
+                queryIndices.push_back(v);
+            }
+        }
+        if (!sites.empty() && !queries.empty()) {
+            const std::vector<size_t> nearest = nearestSites(sites, queries);
+            for (size_t k = 0; k < queries.size(); ++k) {
+                m_planVertexEdgeLengths[queryIndices[k]] = m_planVertexEdgeLengths[siteIndices[nearest[k]]];
+                m_planVertexIslands[queryIndices[k]] = m_planVertexIslands[siteIndices[nearest[k]]];
+            }
+        }
+        m_islandCount = islandContexes.size();
+        DiagnosticRecord record("plan");
+        double plannedQuads = 0.0;
+        for (const auto& island : m_planIslands)
+            plannedQuads += island.plannedQuads;
+        record.set("islands", (double)islandContexes.size());
+        record.set("sliver_islands", (double)sliverIslands);
+        record.set("planned_quads", plannedQuads);
+        record.set("input_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(t_voxelStart - t_start).count());
+        record.set("resample_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(t_isotropicEnd - t_buildEnd).count());
+        record.set("total_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - t_start).count());
+        m_diagnostics.push_back(std::move(record));
+        if (nullptr != m_progressHandler)
+            m_progressHandler(m_tag, 1.0f, "");
+        return true;
+    }
     const size_t isotropicPeakRss = peakResidentSetBytes();
 
     // Parts thinner than one quad at the requested count, on each island's

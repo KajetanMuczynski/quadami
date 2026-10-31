@@ -212,6 +212,74 @@ std::vector<double> Parameterizer::computeFaceScalingField(const std::vector<Vec
     return faceScaling;
 }
 
+std::vector<double> Parameterizer::computeSizing(std::vector<double>* faceAreasOut,
+    std::vector<Vector3>* vertexNormalsOut) const
+{
+    std::vector<Vector3>& vertexNormals = *vertexNormalsOut;
+    std::vector<double>& faceAreas = *faceAreasOut;
+    vertexNormals.assign(m_vertices->size(), Vector3());
+    faceAreas.assign(m_triangles->size(), 0.0);
+    {
+        std::vector<Vector3> faceNormals(m_triangles->size());
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, m_triangles->size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t i = range.begin(); i != range.end(); ++i) {
+                    const auto& it = (*m_triangles)[i];
+                    faceNormals[i] = Vector3::normal(
+                        (*m_vertices)[it[0]], (*m_vertices)[it[1]], (*m_vertices)[it[2]]);
+                    faceAreas[i] = Vector3::area(
+                        (*m_vertices)[it[0]], (*m_vertices)[it[1]], (*m_vertices)[it[2]]);
+                }
+            });
+        for (size_t i = 0; i < m_triangles->size(); ++i) {
+            const auto& it = (*m_triangles)[i];
+            vertexNormals[it[0]] += faceNormals[i];
+            vertexNormals[it[1]] += faceNormals[i];
+            vertexNormals[it[2]] += faceNormals[i];
+        }
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, vertexNormals.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t i = range.begin(); i != range.end(); ++i)
+                    vertexNormals[i].normalize();
+            });
+    }
+
+    if (m_progressHandler)
+        m_progressHandler(0.01f, "Computing scaling field");
+    std::vector<std::vector<size_t>> faceAroundVertexMap(m_vertices->size());
+    for (size_t i = 0; i < m_triangles->size(); ++i) {
+        const auto& it = (*m_triangles)[i];
+        faceAroundVertexMap[it[0]].push_back(i);
+        faceAroundVertexMap[it[1]].push_back(i);
+        faceAroundVertexMap[it[2]].push_back(i);
+    }
+
+    return computeFaceScalingField(*m_vertices, *m_triangles, faceAreas, vertexNormals, faceAroundVertexMap);
+}
+
+double Parameterizer::baseEdgeLength(const std::vector<double>& faceAreas, double fallback) const
+{
+    if (m_targetQuadCount > 0.0) {
+        double area = 0.0;
+        for (const double faceArea : faceAreas)
+            area += faceArea;
+        if (area > 0.0)
+            return std::sqrt(area / m_targetQuadCount);
+    }
+    return fallback;
+}
+
+std::vector<double> Parameterizer::plannedFaceEdgeLengths() const
+{
+    std::vector<Vector3> vertexNormals;
+    std::vector<double> faceAreas;
+    std::vector<double> edgeLengths = computeSizing(&faceAreas, &vertexNormals);
+    const double baseEdge = m_scaling * baseEdgeLength(faceAreas, 0.0);
+    for (auto& it : edgeLengths)
+        it *= baseEdge;
+    return edgeLengths;
+}
+
 bool Parameterizer::parameterize()
 {
     m_diagnostics.clear();
@@ -239,44 +307,9 @@ bool Parameterizer::parameterize()
     };
 
     report(0.0f, "Computing vertex normals");
-    std::vector<Vector3> vertexNormals(m_vertices->size());
-    std::vector<double> faceAreas(m_triangles->size());
-    {
-        std::vector<Vector3> faceNormals(m_triangles->size());
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, m_triangles->size()),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t i = range.begin(); i != range.end(); ++i) {
-                    const auto& it = (*m_triangles)[i];
-                    faceNormals[i] = Vector3::normal(
-                        (*m_vertices)[it[0]], (*m_vertices)[it[1]], (*m_vertices)[it[2]]);
-                    faceAreas[i] = Vector3::area(
-                        (*m_vertices)[it[0]], (*m_vertices)[it[1]], (*m_vertices)[it[2]]);
-                }
-            });
-        for (size_t i = 0; i < m_triangles->size(); ++i) {
-            const auto& it = (*m_triangles)[i];
-            vertexNormals[it[0]] += faceNormals[i];
-            vertexNormals[it[1]] += faceNormals[i];
-            vertexNormals[it[2]] += faceNormals[i];
-        }
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, vertexNormals.size()),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t i = range.begin(); i != range.end(); ++i)
-                    vertexNormals[i].normalize();
-            });
-    }
-
-    report(0.01f, "Computing scaling field");
-    std::vector<std::vector<size_t>> faceAroundVertexMap(m_vertices->size());
-    for (size_t i = 0; i < m_triangles->size(); ++i) {
-        const auto& it = (*m_triangles)[i];
-        faceAroundVertexMap[it[0]].push_back(i);
-        faceAroundVertexMap[it[1]].push_back(i);
-        faceAroundVertexMap[it[2]].push_back(i);
-    }
-
-    std::vector<double> faceScalingField = computeFaceScalingField(*m_vertices,
-        *m_triangles, faceAreas, vertexNormals, faceAroundVertexMap);
+    std::vector<Vector3> vertexNormals;
+    std::vector<double> faceAreas;
+    std::vector<double> faceScalingField = computeSizing(&faceAreas, &vertexNormals);
 
     report(0.02f, "Building surface topology");
     // The parameterization pipeline uses the triangle/corner mesh;
@@ -340,17 +373,9 @@ bool Parameterizer::parameterize()
             m_progressHandler(0.28f + (0.99f - 0.28f) * fraction, name);
         };
     }
-    // Base quad edge, where the face scaling is 1: the island's share of the
-    // requested quads spread over its area (the scaling field keeps
+    // Base quad edge, where the face scaling is 1 (the scaling field keeps
     // sum(area / m^2) = area), or the mean triangle edge without a target.
-    double baseEdgeLength = topology.averageEdgeLength();
-    if (m_targetQuadCount > 0.0) {
-        double area = 0.0;
-        for (const double faceArea : faceAreas)
-            area += faceArea;
-        if (area > 0.0)
-            baseEdgeLength = std::sqrt(area / m_targetQuadCount);
-    }
+    const double baseEdgeLength = this->baseEdgeLength(faceAreas, topology.averageEdgeLength());
     QuadParameterizer::Result cover;
     const bool coverSolved = QuadParameterizer::parameterize(*m_vertices, *m_triangles,
         &field, m_scaling * baseEdgeLength, *featureEdges, &cover,
