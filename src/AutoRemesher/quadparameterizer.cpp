@@ -1194,6 +1194,7 @@ namespace {
         std::vector<std::array<double, 2>> found;
         std::vector<double> support, lengths;
         size_t traces = 0, closures = 0, rotated = 0, rejected = 0, duplicates = 0, unreached = 0;
+        const double acceptRatio = std::getenv("AUTOREMESHER_RING_ACCEPT") ? std::atof(std::getenv("AUTOREMESHER_RING_ACCEPT")) : ratio;
         const double maxCross = std::getenv("AUTOREMESHER_RING_MAXCROSS") ? std::atof(std::getenv("AUTOREMESHER_RING_MAXCROSS")) : std::numeric_limits<double>::max();
         std::vector<int> bfsMark(faces, -1);
         std::vector<size_t> bfsParent(faces, SurfaceMesh::npos);
@@ -1306,7 +1307,7 @@ namespace {
                                     hol[1] += e.second * values[e.first];
                                 const int cross = std::fabs(hol[0]) < std::fabs(hol[1]) ? 0 : 1;
                                 const double along = std::fabs(hol[1 - cross]), shift = std::fabs(hol[cross]);
-                                if (along < 6.0 || shift > ratio * along || shift > maxCross) {
+                                if (along < 6.0 || shift > acceptRatio * along || shift > maxCross) {
                                     ++rejected;
                                 } else {
                                     bool duplicate = false;
