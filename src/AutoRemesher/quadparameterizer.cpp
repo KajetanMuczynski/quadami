@@ -1144,6 +1144,10 @@ namespace {
     }
 
     using HolonomyRow = std::vector<std::pair<size_t, double>>;
+    struct Ring {
+        HolonomyRow row;
+        double weight; // quad area x ring length (rows): soft penalty scale
+    };
 
     // Coefficients of component `axis` of the translation holonomy along a
     // closed dual corner path (the composed map from the last face's chart
@@ -1178,7 +1182,7 @@ namespace {
     // gap with a short dual path. Returns one holonomy row per distinct ring
     // whose cross shift is at most `ratio` times its length; constraining
     // the row to zero closes the ring's edge loops.
-    std::vector<HolonomyRow> detectRings(const SurfaceMesh& mesh, const std::vector<int>& rotation,
+    std::vector<Ring> detectRings(const SurfaceMesh& mesh, const std::vector<int>& rotation,
         const std::vector<double>& values, size_t uvVariables, const std::vector<FaceFrame>& frames,
         double ratio, double beta, DiagnosticRecord* record)
     {
@@ -1190,7 +1194,7 @@ namespace {
         const size_t seedCount = std::min<size_t>(faces, 400);
         const size_t stride = std::max<size_t>(1, faces / std::max<size_t>(1, seedCount));
         const size_t maxSteps = (size_t)(8.0 * std::sqrt((double)faces)) + 50;
-        std::vector<HolonomyRow> rows;
+        std::vector<Ring> rows;
         std::vector<std::array<double, 2>> found;
         std::vector<double> support, lengths;
         size_t traces = 0, closures = 0, rotated = 0, rejected = 0, duplicates = 0, unreached = 0;
@@ -1323,7 +1327,7 @@ namespace {
                                         found.push_back({ along, shift });
                                         support.push_back(1.0);
                                         lengths.push_back(travelled);
-                                        rows.push_back(cross == 0 ? rowU : rowV);
+                                        rows.push_back({ cross == 0 ? rowU : rowV, frames[f0].su * frames[f0].sv * along });
                                     }
                                 }
                             }
@@ -1356,7 +1360,7 @@ namespace {
         for (size_t f = 0; f < faces; ++f)
             totalArea += 0.5 * Vector3::crossProduct(mesh.edgeVector(3 * f), -mesh.edgeVector(3 * f + 2)).length();
         const double seeds = (double)((faces + stride - 1) / stride);
-        std::vector<HolonomyRow> tubes;
+        std::vector<Ring> tubes;
         std::string list;
         for (size_t i = 0; i < rows.size(); ++i) {
             const double band = support[i] / seeds * totalArea;
@@ -1551,7 +1555,7 @@ namespace {
     bool solveQuadCover(const CoverContext& ctx, std::vector<double>* values,
         const ProgressHandler* progressHandler,
         std::vector<DiagnosticRecord>* diagnostics, DiagnosticRecord* result,
-        const std::vector<HolonomyRow>* rings = nullptr, bool continuousOnly = false)
+        const std::vector<Ring>* rings = nullptr, bool continuousOnly = false)
     {
         const SurfaceMesh& mesh = ctx.mesh;
         const std::vector<int>& rotation = ctx.rotation;
@@ -1686,9 +1690,14 @@ namespace {
         }
         DiagnosticRecord ringRecord("ring_constraints");
         addRingConstraints(ctx, frames, uvVariables, &s, &ringRecord);
-        if (nullptr != rings)
-            for (const HolonomyRow& row : *rings)
-                s.addConstraint(row);
+        if (nullptr != rings) {
+            const char* soft = std::getenv("AUTOREMESHER_RING_SOFT");
+            for (const Ring& ring : *rings)
+                if (nullptr != soft)
+                    s.addEnergy(ring.row, 0.0, std::atof(soft) * ring.weight);
+                else
+                    s.addConstraint(ring.row);
+        }
         if (std::getenv("AUTOREMESHER_RING_PLANES"))
             diagnostics->push_back(std::move(ringRecord));
         report(0.2f, "Eliminating cover constraints");
@@ -1998,7 +2007,7 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     }
     std::vector<double> allValues;
     DiagnosticRecord coverResult("cover_result");
-    std::vector<HolonomyRow> rings;
+    std::vector<Ring> rings;
     if (const char* autoRings = std::getenv("AUTOREMESHER_AUTO_RINGS")) {
         std::vector<double> continuous;
         std::vector<DiagnosticRecord> scratch;
