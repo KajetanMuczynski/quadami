@@ -443,6 +443,8 @@ public:
         std::atomic<size_t> islandsConsidered { 0 };
         std::atomic<size_t> trianglesBefore { 0 };
         std::atomic<size_t> trianglesAfter { 0 };
+        // Conical tips the isotropic remesh kept in place (TODO 2.23).
+        std::atomic<size_t> conicalTips { 0 };
     };
 
 private:
@@ -533,7 +535,8 @@ private:
         std::atomic<long long>* adaptiveFieldTimeUs,
         const ProgressHandler* progressHandler,
         std::vector<Vector3>* decimatedVerticesOut,
-        std::vector<std::vector<size_t>>* decimatedTrianglesOut);
+        std::vector<std::vector<size_t>>* decimatedTrianglesOut,
+        std::vector<Vector3>* conicalTipsOut);
     static double calculateMeshArea(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles);
 };

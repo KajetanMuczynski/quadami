@@ -65,6 +65,11 @@ void IsotropicRemesher::setVertexTargetEdgeLengths(const std::vector<double> *ta
     m_vertexTargetEdgeLengths = targetLengths;
 }
 
+void IsotropicRemesher::setPinnedVertices(const std::vector<size_t> *pinnedVertices)
+{
+    m_pinnedVertices = pinnedVertices;
+}
+
 void IsotropicRemesher::setTargetTriangleCount(size_t triangleCount)
 {
     m_targetTriangleCount = triangleCount;
@@ -334,6 +339,18 @@ void IsotropicRemesher::remesh(size_t iteration)
         }
     }
 
+    if (m_pinnedVertices != nullptr && !m_pinnedVertices->empty()) {
+        std::vector<char> pinned(m_vertices->size(), 0);
+        for (size_t v : *m_pinnedVertices)
+            if (v < pinned.size())
+                pinned[v] = 1;
+        IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr);
+        for (size_t vi = 0; vertex != nullptr && vi < pinned.size();
+             vertex = m_halfedgeMesh->moveToNextVertex(vertex), ++vi) {
+            vertex->pinned = pinned[vi] != 0;
+        }
+    }
+
     report(0.15f, "Splitting long edges");
     bool skipSplitOnce = true;
     // The edges are marked before the first split, so their halves inherit
@@ -441,7 +458,7 @@ void IsotropicRemesher::collapseShortEdges(double minEdgeLengthSquared, double m
             if (lengthSquared < edgeMinLenSq) {
                 IsotropicHalfedgeMesh::Vertex *from = halfedge->startVertex;
                 IsotropicHalfedgeMesh::Vertex *to = nextHalfedge->startVertex;
-                if (!from->featured && !to->featured) {
+                if (!from->featured && !to->featured && !from->pinned && !to->pinned) {
                     if (!from->marked && !to->marked) {
                         if (m_halfedgeMesh->collapseEdge(halfedge, edgeMaxLenSq)) {
                             break;
@@ -475,6 +492,16 @@ void IsotropicRemesher::flipEdges()
             const auto &nextHalfedge = halfedge->nextHalfedge;
             if (nullptr != halfedge->oppositeHalfedge) {
                 //if (!halfedge->startVertex->featured && !nextHalfedge->startVertex->featured) {
+                    // A pinned tip keeps a fan fine enough that its edges do
+                    // not read as creases (a valence-4 fan around Blender's
+                    // default cone apex turns 84 to 90 degrees per edge).
+                    if ((halfedge->startVertex->pinned &&
+                                m_halfedgeMesh->vertexValence(halfedge->startVertex) <= IsotropicHalfedgeMesh::pinnedMinimumValence) ||
+                            (nextHalfedge->startVertex->pinned &&
+                                m_halfedgeMesh->vertexValence(nextHalfedge->startVertex) <= IsotropicHalfedgeMesh::pinnedMinimumValence)) {
+                        halfedge = nextHalfedge;
+                        continue;
+                    }
                     if (m_halfedgeMesh->flipEdge(halfedge)) {
                         break;
                     }
@@ -496,7 +523,7 @@ void IsotropicRemesher::shiftVertices()
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
         //if (vertex->featured)
         //    continue;
-        if (vertex->marked)
+        if (vertex->pinned || vertex->marked)
             continue;
         m_halfedgeMesh->relaxVertex(vertex);
     }
@@ -512,7 +539,7 @@ void IsotropicRemesher::projectVertices()
     for (IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr);
             nullptr != vertex;
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
-        if (vertex->featured || vertex->marked)
+        if (vertex->featured || vertex->pinned || vertex->marked)
             continue;
 
         const auto &startHalfedge = vertex->firstHalfedge;
