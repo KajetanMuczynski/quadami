@@ -1774,12 +1774,18 @@ bool AutoRemesher::remeshIslands()
     // its sharp edges; its marks, if still followed, stay hard edges.  The
     // run without them is kept only if it is faithful, so a guard that
     // does not help changes nothing.  Islands without sharp edges on T, or
-    // with a faithful run, pay nothing.
+    // with a faithful run, pay nothing; nor do islands with a non-manifold
+    // input (below).
     std::vector<char> sharpEdgesDropped(islandContexes.size(), 0);
     tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
         [&](const tbb::blocked_range<size_t>& range) {
             for (size_t i = range.begin(); i != range.end(); ++i) {
-                if (islandContexes[i].leftOut || !sharpEdgesEnabled(islandContexes[i].sharpEdgeDegrees))
+                // On a non-manifold input the Euler characteristic says nothing
+                // about the output's holes or handles (isHealthyIslandResult
+                // skips it too), so the test would trade creases for nothing
+                // (sculpt_dirty: crease coverage 0.58 -> 0.06, no topology gain).
+                if (islandContexes[i].leftOut || !sharpEdgesEnabled(islandContexes[i].sharpEdgeDegrees)
+                    || 0 != islandContexes[i].inputTopology.nonManifoldEdges)
                     continue;
                 const auto& flags = islandRuns[i].isotropicFeatureEdges.flags;
                 if (std::none_of(flags.begin(), flags.end(),
