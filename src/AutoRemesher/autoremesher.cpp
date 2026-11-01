@@ -116,6 +116,14 @@ namespace {
     // (brush_box_relief, brush_pits), so needles are left as they were.
     const double needleTipDegrees = 225.0;
     const double conicalTipRadius = 0.5;
+    // How far the deficit gathered out to eight edges of T may stray from
+    // the one at half an edge before the tip counts as rounded or ringed
+    // rather than a cone: real cones stay within 1 degree, the false tips
+    // found on the bench sets moved 16 degrees or more (2026-11-01); a
+    // sculpted horn that is a cone for only three quads costs folds and
+    // libQEx fallbacks when pinned (realsculpt cube).
+    const double conicalTipHoldDegrees = 10.0;
+    const double conicalTipHoldShare = 0.05;
 
     // Rounds of tangential smoothing after the surface projection (TODO 2.8),
     // the extractor's own count.
@@ -434,10 +442,21 @@ namespace {
                 || deficit[v] < 0.5 * gathered || !isCap(region))
                 continue;
             const std::vector<size_t> cluster = region;
-            // A cone keeps its deficit further out; a bump or a noise spike
-            // is ringed by negative curvature that cancels it within a quad
-            // or two (spot_noisy, plane).
-            if (gather(v, 2.0 * radius, nullptr) < minimumDeficit || gather(v, 4.0 * radius, nullptr) < minimumDeficit)
+            // A cone's flanks are developable, so the deficit gathered stays
+            // that of the apex out to eight edges of T (about five quads).
+            // A noise spike or a bump is ringed by negative curvature that
+            // cancels it (spot_noisy, plane), and a rounded end keeps
+            // gathering more (an ellipsoid's end, the sword's guard tips,
+            // a sculpted horn); pinned, both cost folds around them.
+            const double holdTolerance = std::max(conicalTipHoldDegrees * M_PI / 180.0, conicalTipHoldShare * gathered);
+            bool holds = true;
+            for (const double scale : { 2.0, 4.0, 8.0, 16.0 }) {
+                if (std::abs(gather(v, scale * radius, nullptr) - gathered) > holdTolerance) {
+                    holds = false;
+                    break;
+                }
+            }
+            if (!holds)
                 continue;
             tips.push_back(v);
             for (const size_t u : cluster)
