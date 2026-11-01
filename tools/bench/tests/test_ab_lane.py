@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Quadami contributors
 """ab.py's lane verdict, the metrics it adds to runs made without them or whose measurement failed,
-and what `compare` says when the two sides' metrics are missing or come from different code.
+and what `compare` says when the two sides' metrics are missing, come from different code or inputs.
 
     python -m unittest discover -s tools/bench/tests -v
 """
@@ -243,9 +243,100 @@ class Compare(unittest.TestCase):
     def test_different_metrics_code_is_named(self):
         self.assertIn("measured by different metrics code", self.compare([self.rec(1.0)], [self.rec(1.0, "t2")]))
         self.assertNotIn("measured by different metrics code", self.compare([self.rec(1.0)], [self.rec(1.0)]))
-        # records from before the tool was recorded say nothing either way
-        self.assertNotIn("different metrics code", self.compare([{"metrics": {"distance": {"hausdorff": 1}}}],
-                                                                  [self.rec(1.0)]))
+        # Records from before the tool was recorded (2026-10-27) may come from any older metrics.py: a side
+        # measured that way is flagged against a recorded one, not silently mixed.
+        old = {"metrics": {"distance": {"hausdorff": 1}}}
+        self.assertIn("different metrics code", self.compare([old], [self.rec(1.0)]))
+        self.assertNotIn("different metrics code", self.compare([old], [old]))
+
+    def runs(self, root, name, recs):
+        """Several meshes per side: recs = [(mesh, replicate, record fields)]."""
+        for mesh, u, rec in recs:
+            d = os.path.join(root, name, "corpus", mesh, "quality-t2000", "u%d" % u)
+            os.makedirs(d)
+            with open(os.path.join(d, "record.json"), "w") as fp:
+                json.dump(dict({"mesh": mesh, "res": "quality", "target": 2000, "replicate": u, "rc": 0}, **rec), fp)
+        return os.path.join(root, name)
+
+    def compare_runs(self, a, b):
+        with tempfile.TemporaryDirectory() as root:
+            args = mock.Mock(a=self.runs(root, "A", a), b=self.runs(root, "B", b), set="corpus", work=root,
+                             per_run=False)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                ab.cmd_compare(args)
+        return out.getvalue()
+
+    @staticmethod
+    def topo(same, **kw):
+        return dict({"metrics": {"topology": {"same_as_input": same}, "validity": {"islands_same_as_input": same}},
+                     "metrics_tool": {"metrics_py": "t1"}}, **kw)
+
+    def test_one_unmeasured_run_leaves_only_itself_out_of_the_topology_verdict(self):
+        # One timed-out replicate used to replace the whole verdict with "not measured in every run".
+        a = [("fixed", u, self.topo(False)) for u in (0, 1)] + [("timeout", u, self.topo(True)) for u in (0, 1)]
+        b = [("fixed", u, self.topo(True)) for u in (0, 1)] + [("timeout", 0, self.topo(True)),
+                                                               ("timeout", 1, {"metrics": None})]
+        out = self.compare_runs(a, b)
+        self.assertIn("1 runs not measured in every replicate on both sides, left out: timeout quality 2000", out)
+        self.assertIn("- fixed: fixed quality 2000", out)
+        self.assertIn("per island: A 0.0, B 1.0 of 1 runs", out)
+
+    def test_runs_of_another_input_version_are_left_out(self):
+        # A side made before a mesh was regenerated looked like a fix.
+        out = self.compare_runs([("m", 0, self.topo(False, input_sha="old"))], [("m", 0, self.topo(True, input_sha="new"))])
+        self.assertIn("**Different inputs**", out)
+        self.assertNotIn("- fixed: m", out)
+
+    def test_output_without_faces_is_a_failed_run(self):
+        empty = {"metrics": {"ok": False}, "output": {"quads": 0}}
+        out = self.compare_runs([("m", 0, self.topo(True))], [("m", 0, empty)])
+        self.assertIn("**Failed runs** (non-zero exit or no output faces in some replicate; left out below): B m", out)
+
+    def test_negative_row_shows_the_difference(self):
+        # sj_p1 < 0 (folded quads) dropped out of the geo-mean: the mean rose 0.1 -> 0.25, the ratio said x0.5.
+        sj = lambda a, b: ({"metrics": {"quads": {"sj_p1": a}}}, {"metrics": {"quads": {"sj_p1": b}}})  # noqa: E731
+        (a1, b1), (a2, b2) = sj(0.4, 0.2), sj(-0.2, 0.3)
+        out = self.compare_runs([("m1", 0, a1), ("m2", 0, a2)], [("m1", 0, b1), ("m2", 0, b2)])
+        self.assertIn("| sj_p1 | 0.1 | 0.25 | Δ +0.15 | 1 / 1 |", out)
+
+
+class CliArgs(unittest.TestCase):
+    def test_flag_value_in_either_form(self):
+        self.assertEqual(ab.cli_value(["--sharp-edge", "60"], "--sharp-edge"), "60")
+        self.assertEqual(ab.cli_value(["--adaptivity=0", "--sharp-edge=60"], "--sharp-edge"), "60")
+        self.assertIsNone(ab.cli_value(["--sharp-edge-x=1", "--sharp-edge"], "--sharp-edge"))
+
+    def test_metrics_measure_creases_at_the_runs_angle(self):
+        # `--cli-arg=--sharp-edge=60` (the README's form) remeshed at 60 degrees but was measured at 90.
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ab.subprocess, "run",
+                                                                  side_effect=OSError("stop")) as m:
+            with self.assertRaises(OSError):
+                ab.measure({"cli_args": ["--sharp-edge=60"]}, d, {"id": "m"}, 2000, "in.obj", d)
+        cmd = m.call_args[0][0]
+        self.assertEqual(cmd[cmd.index("--sharp-degrees") + 1], "60")
+
+    def test_count_error_of_an_empty_output(self):
+        self.assertEqual(ab.value({"target": 1000, "output": {"quads": 0}}, "count_err"), 1.0)
+
+
+class RemeasureGuard(unittest.TestCase):
+    def test_output_is_not_measured_against_a_regenerated_input(self):
+        with tempfile.TemporaryDirectory() as work:
+            os.makedirs(os.path.join(work, "meshes"))
+            with open(os.path.join(work, "meshes", "m.obj"), "w") as fp:
+                fp.write("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+            out = os.path.join(work, "runs", "k")
+            d = os.path.join(out, "corpus", "m", "quality-t2000", "u0")
+            os.makedirs(d)
+            open(os.path.join(d, "out.obj"), "w").close()
+            for sha, expected in (("0123456789abcdef", 0), (ab.file_hash(os.path.join(work, "meshes", "m.obj")), 1)):
+                with open(os.path.join(d, "record.json"), "w") as fp:
+                    json.dump({"mesh": "m", "rc": 0, "metrics": {"old": True}, "input_sha": sha}, fp)
+                with mock.patch.object(ab, "measure") as m, contextlib.redirect_stderr(io.StringIO()):
+                    ab.run_one("cli", {"id": "m", "file": "m.obj"}, "corpus", 2000, "quality", 0, out, [], work,
+                               True, 1, remeasure=True)
+                self.assertEqual(m.call_count, expected, sha)
 
 
 if __name__ == "__main__":

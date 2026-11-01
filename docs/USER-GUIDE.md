@@ -398,7 +398,15 @@ What it does and does not do:
 | **Blender closed or froze** | The remesher runs as a separate program and cannot crash Blender by itself; report it. |
 
 **Reporting a problem.** Use the [bug report form](https://github.com/KajetanMuczynski/quadami/issues/new?template=bug-report.yml) on GitHub (you need a free
-account); it asks for all of this. Send: the **build line**, the settings (Target Quads, Fast/Quality, anything
-changed), a screenshot of the result box, and, if possible, start Blender from a terminal (Windows:
-**Window > Toggle System Console**) and copy the text after `Quadami worker output:`. If you can share
-the model, say so; models are kept private and only their numbers go into the project.
+account) or e-mail [quadami.contact@gmail.com](mailto:quadami.contact@gmail.com). The quickest way: select the result (or, after a failed run,
+leave the panel as it is), press **Copy Report** at the bottom of the result box and paste the text into the
+form's first field or the e-mail. It holds the build line, Blender version, operating system, the settings of
+that run, the input's triangle count, every row and warning of the result box, the time of each step, the
+remesher's last output lines (only for the last run since Blender started) and the full report as JSON. It
+holds no mesh data, and folder names under your home folder lose your user name (`~/...`, `/home/<user>/...`).
+Read it before you send it. Add a screenshot of the result and what you did. If you can share the model, say
+so; models are kept private and only their numbers go into the project.
+
+Without Copy Report (an older build), send the **build line**, the settings (Target Quads, Fast/Quality,
+anything changed), a screenshot of the result box, and, if possible, start Blender from a terminal (Windows:
+**Window > Toggle System Console**) and copy the text after `Quadami worker output:`.

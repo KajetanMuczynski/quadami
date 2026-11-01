@@ -14,7 +14,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-"""Turn the remesher's JSON report into rows for the panel. No bpy in here."""
+"""Turn the remesher's JSON report into rows for the panel and into the
+Copy Report text. No bpy in here."""
+
+import json
+import platform
+import re
 
 # Characters per line of a warning where the panel's width is not known:
 # panel labels don't wrap, and the sidebar is about this wide at its default
@@ -242,3 +247,114 @@ def fold_offer_lines(width=WARNING_WIDTH, measure=len):
     return wrap("Repair Folds and Re-run smooths out only those spots, in the copy "
                 "the remesher works on, and remeshes again. Your original object "
                 "is not changed.", width, measure)
+
+
+# Copy Report: one text block with what a bug report needs.  Never mesh data;
+# paths lose the user's name (redact).  The worker log is capped twice: the
+# worker keeps its last 40 lines (worker.RemeshJob), the copy its last
+# COPY_LOG_CHARS characters of those.
+COPY_LOG_CHARS = 4000
+_USER_DIRECTORY = re.compile(r"(?i)(/home/|/Users/|[A-Z]:[\\/]+(?:Users|Documents and Settings)[\\/]+)[^/\\\s\"']+")
+
+
+def redact(text, home=None):
+    """`text` with the home folder written as ~ and any other user's folder
+    name (/home/<name>, /Users/<name>, C:\\Users\\<name>) as <user>."""
+    home = (home or "").rstrip("/\\")
+    if len(home) > 1:
+        for variant in {home, home.replace("\\", "/"), home.replace("/", "\\")}:
+            text = re.sub(re.escape(variant) + r"(?![^/\\\s\"'])", "~", text, flags=re.IGNORECASE)
+    return _USER_DIRECTORY.sub(lambda m: m.group(1) + "<user>", text)
+
+
+def system_text():
+    """The operating system, its version and the processor type, without the
+    computer's name: "Linux 6.8.0 x86_64 (Ubuntu 24.04.1 LTS)"."""
+    name = platform.system() or "unknown system"
+    if name == "Darwin":
+        text = "macOS %s" % (platform.mac_ver()[0] or platform.release())
+    elif name == "Windows":
+        text = "Windows %s (%s)" % (platform.release(), platform.version())
+    else:
+        text = "%s %s" % (name, platform.release())
+    text += " " + (platform.machine() or "")
+    if name == "Linux":
+        try:
+            text += " (%s)" % platform.freedesktop_os_release().get("PRETTY_NAME", "?")
+        except (AttributeError, OSError):
+            pass
+    return text.strip()
+
+
+def _value_text(value):
+    if isinstance(value, float):
+        return "%g" % value
+    if isinstance(value, (list, tuple, set)):
+        return "+".join(sorted(str(v) for v in value)) or "none"
+    return str(value)
+
+
+def copy_text(status, message, report, info):
+    """The Copy Report text for the run the panel shows.
+
+    `report` is the remesher's report dict (None when the worker died before
+    writing one); `info` a dict: addon_build, worker_build, blender, system,
+    settings (name -> value of the panel's settings for that run), and, for
+    the last run of this session only, input_triangles and log (the worker's
+    last lines).  home: the folder redact() writes as ~."""
+    report = report or {}
+    lines = ["Quadami report"]
+    lines.append("Result: %s%s" % (STATUS_TEXT.get(status, status), ": " + message if message else ""))
+    lines.append("Add-on build: %s" % info.get("addon_build", "unknown"))
+    worker_build = info.get("worker_build")
+    lines.append("Remesher build: %s" % ("same" if worker_build == info.get("addon_build")
+                                         else worker_build or "unknown"))
+    lines.append("Blender: %s" % info.get("blender", "unknown"))
+    lines.append("System: %s" % info.get("system", "unknown"))
+    settings = info.get("settings") or {}
+    if settings:
+        lines.append("Settings: " + ", ".join("%s=%s" % (name, _value_text(settings[name])) for name in sorted(settings)))
+    source = report.get("input", {})
+    triangles = source.get("triangles", info.get("input_triangles"))
+    if triangles is not None:
+        parts = ["%d triangles" % triangles]
+        if "vertices" in source:
+            parts.append("%d vertices" % source["vertices"])
+        if "input" in report.get("islands", {}):
+            parts.append("%d islands" % report["islands"]["input"])
+        if source.get("feature_edges"):
+            parts.append("%d marked edges (%d ignored)" % (source["feature_edges"], source.get("ignored_feature_edges", 0)))
+        lines.append("Input: " + ", ".join(parts))
+    if report:
+        lines.append("Result box:")
+        for label, value, problem in summary_rows(report):
+            lines.append("  %s%s: %s" % ("! " if problem else "", label, value))
+        warnings = [" ".join(text for text, _, _ in group) for group in _grouped(warning_lines(report, 10 ** 6))]
+        for warning in warnings:
+            lines.append("  - " + warning)
+        steps = report.get("time", {}).get("steps", [])
+        if steps:
+            lines.append("Steps: " + ", ".join("%s %.2f s" % (s.get("name", "?"), float(s.get("seconds", 0.0)))
+                                               for s in steps))
+    log = info.get("log")
+    if log is not None:
+        log = log.strip()
+        if len(log) > COPY_LOG_CHARS:
+            log = "..." + log[-COPY_LOG_CHARS:]
+        lines.append("Remesher output (last lines):")
+        lines.extend("  " + line for line in (log.splitlines() or ["(none)"]))
+    else:
+        lines.append("Remesher output: not kept (only for the last run since Blender started)")
+    if report:
+        lines.append("Full report: " + json.dumps(report, sort_keys=True, separators=(",", ":")))
+    return redact("\n".join(lines) + "\n", info.get("home"))
+
+
+def _grouped(lines):
+    """warning_lines() rows grouped into one list per warning or hint."""
+    groups = []
+    for line in lines:
+        if line[1] or not groups:
+            groups.append([])
+        groups[-1].append(line)
+    return groups

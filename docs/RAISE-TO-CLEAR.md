@@ -10,7 +10,13 @@ agrees on the design. It builds on:
 - research/thin-cap-2026-10-28.md: the local cap is a no-go, raising Target Quads is the lever;
 - research/target-quads-2026-10-27.md and G17 (PR #137): one run predicts the next for the
   distance, not for the parts.
-- the research thread "Research Target Quads guidance algorithm", which measures the open gates of §8.
+- research/target-guidance-2026-10-28.md (thread "Research Target Quads guidance algorithm"): the
+  gates of §8, measured on 22 meshes that lose parts at T₀ and 15 that do not, 6 replicates, plus
+  held-out start targets and a disprover. Its "keep small parts" retry in the core (TODO G18, row
+  added by PR #149) takes most lost parts in small islands off this hint's hands (§0.5).
+
+Updated 2026-10-28 with the gate results: the fixed-rung Tier A of the first version failed G1,
+Tier C failed G3, and the search's step and cost changed (§2, §8).
 
 Labels: **[M]** measured (in the cited research note, 6 replicates unless said), **[C]** checked in
 code at `aeb72dd` or on #138's head `061a9a3`, **[I]** inferred here. Nothing new is measured in this
@@ -33,17 +39,30 @@ note.
    vertices, at 3,700 124, at 4,500 0 [M]; a closed ellipsoid was clean at 300 in 6 of 6 replicates
    and lost parts at 600 in 2 of 6 [M, ladder-summary]. A single predicted number would be a
    promise Quadami cannot keep.
-3. **So the hint offers a rung, and the next run checks it.** Three tiers, each usable alone:
-   - **Tier A, no extra run (first to build):** "Try 6,000 (2×)", a fixed rung from the ladder the
-     research measured, labelled as untested on this model. One click sets Target Quads. After
-     the user's next run, the panel says how many of the first run's lost parts are back.
-   - **Tier B, opt-in search:** a "Find Target Quads" button that runs the ladder ×1.5, ×2, ×3,
-     ×4, ×6, ×8 itself and stops at the first rung where the parts are back. The user gets *that
-     run's result*, not a number. Every N it shows was run on this input.
-   - **Tier C, not planned:** a prediction from the report alone. Only if gate G3 (§8) finds a
-     report field that ranks the needed factor.
+3. **So the hint offers a step, and only a run checks it.** Two tiers:
+   - **Tier B, the search (the main tool):** a "Find Target Quads" button that runs 1.5×, then
+     ×1.33 per step (2×, 2.67×, 3.56×, 4.74×, 6.32×, capped at 8×), each judged at 3 h₀(T₀), and
+     stops at the first run with nothing far anywhere. The user gets *that run's result*, not a
+     number. It found every reachable case in 2.5 runs on average, 1.23× above the smallest clear
+     count (held-out start targets: 3.2 runs, 1.63×) [M, research §5B]. Every N it shows was run on
+     this input.
+   - **Tier A, no extra run:** the same steps one at a time by hand: "Try 4,500 (1.5×)", labelled
+     as untested, with the honest range "parts like these came back between 1.1× and 6× on test
+     models, sometimes never". After the user's next run the panel says what came back and offers
+     the next step. A fixed single rung is not enough: 2× brings back the parts on 27 % of the test
+     meshes, the median needs 5× (real models 3×) [M, G1].
+   - **Tier C, dropped:** no report field ranks the needed raise (G3: best ρ −0.62 for the lost
+     parts' lateral width, and one-shot it hits 37 of 121 cases) [M].
 4. **It fails by saying what it found**: "Not back at up to 24,000 (8×): 130 of 308 lost points
-   remain. These parts are too thin for any count you would want: thicken or delete them."
+   remain. These parts are too thin for any count you would want: thicken or delete them." This is
+   common: 43 of 121 lost cases never cleared up to 8× (mosquito, plant, iron gate wires, the
+   thinnest stress capsules) [M].
+5. **Scope shrinks once G18 lands.** Most lost parts in real models are their own small islands
+   (hair, leaves, petals, wires). Raising only those islands in the core keeps 64 of 78 such cases
+   for 1.01–1.41× the quads, where a global raise needs 1.8–4.4× or never works [M, research §4].
+   The Raise hint is then for parts inside the main island (about a third of the cases), which
+   mostly clear early (vines, rubber plant, dragon at 1.1×, sword 1.25–1.5× [M]), and for what G18's
+   budget leaves.
 
 ## 1. When the hint shows
 
@@ -67,64 +86,59 @@ run.
 
 ## 2. How N is chosen
 
-### 2.1 Tier A: the fixed rung
+### 2.1 The step
 
-The research ladder at a fixed distance (thin-warning §3, 6 replicates each) [M]:
+Rungs 1.25–8×, fixed distance 3 h₀(T₀), all replicates [M, research §5C, G1]:
+- the median of 22 meshes is back only at 5×; 27 % by 2×, 68 % by 8×;
+- real models only (sword, sword_vines, 7 external): median 3×, 4 of 9 by 2×, 7 of 9 by 8×;
+- main-island parts (vines, rubber plant, dragon) clear at 1.1×, the sword at 1.25–1.5×.
 
-| mesh | lost at T₀ = 3,000 | back in every replicate from |
-|---|---|---|
-| sword, sword_vines, rubber plant, dragon | 1–208 points | 1.5–2× |
-| bee | 308 | 4× (130 left at 2×) |
-| plant, iron gate | 42 / 168–645 | by 8× (iron gate not monotone: more at 2× on 2 replicates) |
-| mosquito | 13–74 | not by 8× (1–4 left) |
-| vaseflowers | 82–100 | not by 8× (10 left in every replicate) |
-| flight helmet (T₀ = 6,000) | 266–837 | 2 of 6 replicates at 4× |
-
-So **2×** clears 4 of 10 models, **4×** 5 of 10 (+ 2 of 6 helmet replicates), **8×** 7 of 10 [M, as
-read from that table; the per-rung counts for plant and iron gate between 2× and 8× are gate G1].
-Tier A offers 2× first, then on the next run 4×, then 8×: each step doubles, the user sees every
-result, and a doubling is also where G17's distance law is reliable (97 % within a factor 2 [M]).
+So no single rung is worth offering alone. The search's steps are **1.5×, then ×1.33**, the best of
+the sequences the research compared (§0.3). For main-island parts after G18 the research suggests a
+first step of 1.1× [I, not measured for that subset]; that is a gate for the G18 follow-up (§8, G7).
 Displayed counts are rounded up to two significant digits (6,140 → 6,200), as the old estimate
 did [C, `remesh.cpp`].
-
-Why not 1.5×: it clears the easy four and costs one more run on the others. If G1 shows the median
-model clears at 1.5×, the first rung becomes 1.5× [I].
 
 ### 2.2 Tier B: the search
 
 ```
-rungs = [1.5, 2, 3, 4, 6, 8] × T₀, rounded up to 2 significant digits
-for N in rungs:
+N = round_up(1.5 × T₀)
+while N ≤ 8 × T₀:
     if estimated time(N) > budget or memory(N) > free memory: stop, say why
-    run at N, with reference width h₀(T₀) (§3)
-    record (N, back, left, folds, holes, time) in the history (§4)
-    if left == 0 and the run's own holes ≤ T₀'s: stop, keep this result
-otherwise: keep T₀'s result, show the §5 text with the best rung found
+    run at N with reference T₀ (§3), under the worker's time limit
+    record (N, far at the reference, folds, holes, time) in the history (§4)
+    if far == 0: stop, keep this result
+    N = round_up(1.33 × N)
+otherwise: keep T₀'s result and show the §5 text with the best run found
 ```
 
-- **No bisection below the clearing rung.** The response is not monotone (§0.2), so a bisection
-  between a failing and a clearing rung finds *a* clear N, not the smallest, and every probe costs a
-  full run. A finer rung list (×1.5 steps) is the cheaper way to stop near the edge [I].
-- **No stopping on a near miss.** A rung with 1 point left is not clear. The text can say "1 of
-  208 left" and offer to keep it.
+- **"Clear" is strict: nothing far anywhere at 3 h₀(T₀), new losses included** (option 2 of §3).
+  With the softer rule (only T₀'s far points back), 6.6 % of back rungs are followed by a lost one;
+  with the strict rule 33 of 78 cases relapse at a higher rung, 58 of 82 from held-out start
+  targets, some in every replicate (sword_vines clear at 1.1–1.5×, lost at 1.75×; vaseflowers clear
+  at 6×, lost at 8×) [M, G2]. So the search keeps the clear run and never suggests a higher one.
+- **No bisection below the clear step.** Not monotone, so a bisection finds *a* clear N, not the
+  smallest, at a full run per probe.
+- **Every run gets the worker's time limit.** ext_iron_gate hangs in extraction cleanup at 3,300
+  (u0) and 4,000 (u1) (TODO 2.30, row in PR #149) [M, research §2]; a search tries more counts, so it meets such
+  hangs more often. A run that hits the limit counts as not clear and the search goes on.
+- **Three counts at once** (1.25×, 1.5×, 1.88×) needs 1.6 rounds at 1.10× the minimum [M]. It triples
+  peak memory and runs all cores hot, so not on a 4-core laptop by default; an option for machines
+  with the room [I].
 - **The kept result is the run itself**, made through the normal result path (G10: Remesh again
-  uses the source), so nothing is promised that was not built.
+  uses the source).
 
 ### 2.3 Cost
 
-Time per run ≈ 8.4 s/Mtri + 0.27·(kq)^1.47 + 0.9 s (kq = thousands of quads) [M,
-research/speed-memory-2026-10-22.md; p90 ×1.6]. The quad term of the ladder, relative to one run at
-T₀: 1.5^1.47 + 2^1.47 + 3^1.47 + 4^1.47 + 6^1.47 + 8^1.47 ≈ 1.8 + 2.8 + 5.0 + 7.7 + 13.9 + 21.2 ≈ 52× [I,
-from the model]. A full ladder on a 3,000-quad sword (≈ 3 s per run) is about 2–3 minutes; on a
-50k-quad sculpt it is an hour. So:
-- Tier B shows the estimated worst case before it starts ("up to 4 runs, about 3 min") and a
-  time budget field (default 5 min);
-- it stops at the first clear rung, so the median cost is the first 2–3 rungs (≈ 5–10× one run) [I];
-- it runs one run at a time on the worker, at the add-on's thread limit (speed note: a `--threads`
-  limit keeps Kajetan's laptop cool), and Esc cancels the whole search.
-
-Memory grows by 20 KB per quad [M, speed note]: 8× of 50k quads is 400k quads, about 8 GB. The
-existing memory estimate stops the search before such a rung.
+Measured per rung, relative to the T₀ run [M, G4, under 2–4 parallel jobs]: time ×1.1 at 1.1×,
+×2.1 at 2×, ×3.8 at 4×, ×10.8 at 8× (p90 ×27.7); peak memory ×2.0 at 2×, ×6.3 at 8×. Super-linear
+above 4×, so the cost text must not scale the first run linearly.
+- A search that clears in 2.5 runs (1.5×, 2×, half the time a third at 2.67×) costs about 5× one run
+  [I, from those factors]. A search to 8× that never clears costs about 30× one run [I]: on a
+  3,000-quad model a couple of minutes, on a 50k-quad sculpt the better part of an hour.
+- So Tier B shows the worst case before it starts ("up to 7 runs, about 4 min"), has a time budget
+  (default 5 min), runs one run at a time at the add-on's thread limit, and Esc cancels the search.
+- The existing memory estimate stops the search before a rung that would not fit.
 
 ## 3. Core change: measure against the first run's distance
 
@@ -172,28 +186,29 @@ numbers with a thousands separator, no "h₀" or "quad widths" in the hint (the 
 **Tier A, first run lost thin parts** (under #138's warning, which already says "a limit of Target
 Quads, not a remeshing error"):
 
-> Try 6,000 Target Quads (2×). On most test models that brought such parts back. Not yet checked
-> on this model.
-> [ Set 6,000 ]  [ Find Target Quads… ]  [ × ]
+> Try 4,500 Target Quads (1.5×). On test models such parts came back between 1.1× and 6× as many,
+> sometimes never; only a run on this model shows it.
+> [ Set 4,500 ]  [ Find Target Quads… ]  [ × ]
 
 **After the next run, parts back:**
 
-> All 208 points lost at 3,000 are back at 6,000.
+> All 208 points lost at 3,000 are back at 4,500.
 
 **After the next run, partly back:**
 
-> 178 of 308 points lost at 3,000 are back at 6,000; 130 are still missing. Try 12,000 (2×).
+> 178 of 308 points lost at 3,000 are back at 4,500; 130 are still missing. Try 6,000.
 
 **Tier B finished, clear:**
 
-> Back at 6,000 Target Quads (checked: 2 runs, 9 s). This result is the 6,000 run.
+> Back at 6,000 Target Quads (checked: 2 runs, 9 s). This result is the 6,000 run. A higher count
+> can lose parts again, so keep this one.
 
 **Fails honestly** (8× reached, cap, or time budget):
 
 > Not back at up to 24,000 (8×): 10 of 82 points still missing. These parts are too thin for any
 > count you would want: thicken them (Alt+S) or delete them.
 
-> Stopped at 12,000: the next count (24,000, about 9 min) is over your time budget.
+> Stopped at 14,000: the next count (19,000, about 9 min) is over your time budget.
 
 Each text says what was run and what was not. "Checked" appears only for an N that was run on this
 input with these settings.
@@ -205,6 +220,8 @@ buttons with two numbers under one result would confuse. One row:
 - parts lost (thin or pieces class): the Raise rung of §2 replaces Finer;
 - no parts lost: G17's Finer / Coarser.
 Both write Target Quads and both read the history, so G17 should be built on the history of §4 too.
+After G18, the core's "Kept N lost parts: +Q quads" line comes first; the Raise row shows only for
+what it left.
 
 ## 7. What Kajetan may have missed
 
@@ -214,63 +231,73 @@ Both write Target Quads and both read the history, so G17 should be built on the
 2. **A number before a run cannot be honest** (§0.2): not monotone, and a 1-ulp change of input can
    flip a part. The only number Quadami can stand behind is one it ran. Tier A says "try", Tier B
    says "checked".
-3. **A global raise pays everywhere.** On the bee, 4× the quads for 308 points; the main body gets
-   4× too. When the lost parts are separate islands (pieces class: mosquito specks, gate wire), a
-   per-island multiplier (5.8's effective area, target-quads §5.3) brings them back for a fraction of
-   the cost [I]. Inside one island (sword vines) nothing cheaper is known: the local cap moved the
-   losses [M, thin-cap]. So for the pieces class the better long-term hint is "give these parts
-   more quads" once 5.8 lands.
+3. **A global raise pays everywhere.** On the bee a global raise needs 2.5× the target (1.8× the
+   quads) for 308 points [M]. When the lost parts are separate small islands, raising only those
+   islands costs 1.01–1.10× [M, research §4]. That is now TODO G18 (row in PR #149), for the core;
+   this hint is the fallback for parts inside the main island, where nothing cheaper is known (the
+   local cap moved the losses [M, thin-cap]).
 4. **"Back" at 3 h₀(T₀) is lenient.** A vine within three old quad widths can still be a flat
    ribbon with folds. The hint must not say "fixed" or "clean"; it reports points back, and the
    history keeps folds and holes so the panel can say "back, but 12 more folds" [I]. Whether 3 h₀ is
    the right distance for a user's eye is a hand check (gate G6).
 5. **Some users do not want the parts** (specks, hair cards for a game cage). Hence the dismiss and
    the delete line for specks.
-6. **Tier B costs heat and time on Kajetan's own laptop**: up to ~52× one run (§2.3). Opt-in, a
-   budget, one run at a time and the thread limit are not optional.
+6. **Tier B costs heat and time on Kajetan's own laptop**: about 5× one run when it clears, about
+   30× when it never does (§2.3). Opt-in, a budget, one run at a time, the thread limit and the
+   worker's time limit are not optional.
 7. **Better than any of this, for the user:** a Target Quads that is not the knob. G17's later
    Edge length / Detail modes would let a user ask for "parts down to 2 mm" directly. That needs a
    count-independent thin-part measure on the input (target-quads §2.4, a real gap), so it is later
    than Tier A, but it is where this should end up.
+8. **Probe TODO 2.29 first.** Curvature sizing normalised per island may be why separate thin
+   islands are lost at 1× at all [I, research §5, not measured]; if fixing it keeps them, both G18
+   and this hint get cheaper.
 
-## 8. Gates (open, for the research thread)
+## 8. Gates
 
-The design depends on these; each has a pass rule set before the runs. Fixed distance d = 3 h₀(T₀),
-6 replicates, thin + hand + stress sets, `ab.py`.
+Results from research/target-guidance-2026-10-28.md §5C (rungs 1.25–8×, fixed distance 3 h₀(T₀),
+6 replicates, 22 lossy meshes) [M]:
 
-| Gate | Question | Pass rule | Changes if it fails |
+| Gate | Bar | Result | Verdict |
 |---|---|---|---|
-| G1 | Smallest rung k ∈ {1.25, 1.5, 2, 3, 4, 6, 8} where T₀'s lost points are back, per mesh | the median model clears by 2×; ≥ 70 % by 8× | first rung and rung list of §2.1 |
-| G2 | Not monotone: given clear at k, how often is a larger rung not clear; do replicates of one N agree | < 10 % of clear rungs followed by a not-clear one | if higher, Tier A must say "may not hold at higher counts" and Tier B must keep the clear run, never a later rung |
-| G3 | Does any report field (thin share, thickness p10/p50, far count, farthest distance) rank the needed k (Spearman ≥ 0.6)? | ρ ≥ 0.6 on two sets | if yes, Tier A picks the first rung from it (Tier C); if no, Tier C is dropped |
-| G4 | Time and memory per rung vs the speed model | model within its p90 on the ladder | the cost text and the budget check |
-| G5 | Cost of the reference pass (§3) | ≤ 10 % of `lost_parts_ms` | if more, compute it only when a reference is passed (planned anyway) |
-| G6 | Hand check in Blender: on 3 models, are the parts at "back" visibly there? | Kajetan agrees on all 3 | a stricter distance (2 h₀(T₀)) |
+| G1 smallest rung | median model by 2×, ≥ 70 % by 8× | median 5×; 27 % by 2×, 68 % by 8×. Real models: median 3×, 4/9 by 2×, 7/9 by 8× | **fails**: the fixed 2× rung is dropped, Tier A uses the search's steps (§2.1) |
+| G2 not monotone | < 10 % | 6.6 % on the soft rule; strict rule 33 of 78 cases relapse | soft passes only because it ignores new losses; the search uses the strict rule and keeps the clear run |
+| G3 a field ranks k | ρ ≥ 0.6 on two sets | far count +0.41/+0.52, farthest +0.36/+0.14, thickness ≈ 0; lateral width −0.60/−0.62, one-shot 37/121 | **fails**: Tier C dropped |
+| G4 time and memory | speed model within p90 | time ×2.1 at 2×, ×3.8 at 4×, ×10.8 at 8×; memory ×2.0 / ×6.3 | super-linear above 4×; §2.3 uses these factors |
+| G5 reference pass | ≤ 10 % of `lost_parts_ms` | the whole pass is 0.7 % of a run; output byte-identical; the core's count matches independent distances on 1,635 of 1,635 runs | likely passes; time with the reference radius not measured on its own |
+| G6 hand check | Kajetan agrees on 3 models | not done (needs Blender) | open |
+| G7 first step after G18 | — | 1.1× for main-island parts suggested, not measured on that subset [I] | open, for the G18 follow-up |
 
 ## 9. Build order (each its own PR, after 0.2)
 
-1. Core: `--lost-parts-reference`, `lost_parts.reference` in the report, tests in
-   `tests/quality_report_test.cpp` (conflict-prone files: `remesh.cpp`, `tests/CMakeLists.txt` if a
-   new test file). Lane light.
-2. Add-on: history (§4), Tier A text and Set button, dismiss, unit tests in `report.py` style (no
-   bpy), OCR panel shot with a lost-part model at 1× and 2×.
-3. Add-on: Tier B operator (modal, sequential worker runs, budget, Esc), the cost estimate.
-4. With G17: one row of buttons (§6).
-5. After 5.8: per-island "give these parts more quads" for the pieces class (§7.3).
+1. Core: the reference target (§3) and `lost_parts.reference` in the report, tests in
+   `tests/quality_report_test.cpp` (conflict-prone: `remesh.cpp`). Lane light. The research probe
+   `1617027` has this as an env var; the interface name is settled in that PR (a target count, not
+   a length in scene units, §3).
+2. G18 (keep small parts, row in PR #149), since it changes what this hint has to cover; then G7.
+3. Add-on: history (§4), Tier B operator (modal, sequential worker runs under the time limit,
+   budget, Esc), the cost estimate.
+4. Add-on: Tier A text and Set button, dismiss, unit tests in `report.py` style (no bpy), OCR panel
+   shot with a lost-part model.
+5. With G17: one row of buttons (§6).
 
 ## What would falsify this
 
-- A report field that predicts the clearing rung within one rung on ≥ 80 % of models (G3): then a
-  predicted N is honest enough and Tier B is overkill for most users.
+- A report field that predicts the clearing step within one step on ≥ 80 % of cases: then a
+  predicted N is honest enough. G3 found none (best one-shot 37 of 121) [M].
 - The relative far count settling to 0 at some raise on most real models: then the reference
   distance of §3 is not needed. The research found the opposite on 5 of 10 [M].
+- A step sequence much cheaper than 1.5× then ×1.33 on the same data, or the held-out cost (3.2
+  runs, 1.63×) getting worse on a new set.
 - Users in a hand test reading "points back" as "fixed" despite the folds (G6): then the wording
   needs the fold count in the same line.
 
 ## What I did not re-check
 
-- Every number above is quoted from the cited research notes; nothing was re-run here.
-- The ×1.5 / ×2 / ×4 / ×8 clear counts of §2.1 are read from a table that gives "back from" per
-  model, not a per-rung count for every model (G1 closes this).
-- The ladder cost of §2.3 is the speed model's prediction, not a measured ladder.
+- Every number above is quoted from the cited research notes; nothing was re-run here. The gate
+  results had a disprover pass that found two script bugs (fixed in the report); the fixed version
+  was not disproved a second time.
+- The cost of §2.3 for a whole search is derived from per-rung factors measured under 2–4
+  parallel jobs, not timed as a search on an idle machine.
+- The 1.1× first step for main-island parts (G7) and the three-at-once option on a 4-core laptop.
 - That #138 merges with its class fields unchanged; §1 depends on them.
