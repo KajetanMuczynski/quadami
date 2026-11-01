@@ -21,6 +21,7 @@
  */
 #include <unordered_map>
 #include <algorithm>
+#include <cmath>
 #include "isotropichalfedgemesh.h"
 
 namespace {
@@ -305,12 +306,12 @@ void IsotropicHalfedgeMesh::breakEdge(IsotropicHalfedgeMesh::Halfedge *halfedge)
     
     Vertex *breakPointVertex = newVertex();
 
-    // A hard edge is split on its line, so the new vertex stays on it.
-    if (halfedge->hard()) {
-        breakPointVertex->position = (halfedge->startVertex->position +
-            halfedge->nextHalfedge->startVertex->position) * 0.5;
-        breakPointVertex->marked = true;
-    } else if (!halfedge->startVertex->_smoothNormal.isZero() &&
+    // Use PN Triangle edge midpoint if both endpoints have smooth normals.  A
+    // feature edge is split at its plain midpoint instead: the averaged
+    // normals of a crease would lift the PN midpoint off it, and
+    // projectVertices puts the new chain vertex onto the input's chain.
+    if (!halfedge->feature &&
+            !halfedge->startVertex->_smoothNormal.isZero() &&
             !halfedge->nextHalfedge->startVertex->_smoothNormal.isZero()) {
         const Vector3 &p1 = halfedge->startVertex->position;
         const Vector3 &p2 = halfedge->nextHalfedge->startVertex->position;
@@ -354,11 +355,13 @@ void IsotropicHalfedgeMesh::breakEdge(IsotropicHalfedgeMesh::Halfedge *halfedge)
         linkHalfedgePair(leftNewFaceHalfedges[1], rightOldFaceHalfedges[1]);
         rightNewFaceHalfedges[1]->feature = halfedge->feature;
         rightNewFaceHalfedges[1]->featureFlags = halfedge->featureFlags;
+        rightNewFaceHalfedges[1]->featureChain = halfedge->featureChain;
     }
     // Both halves of a feature edge stay feature edges; `halfedge` and its
     // opposite keep theirs, the new halfedges along the edge copy it.
     leftNewFaceHalfedges[1]->feature = halfedge->feature;
     leftNewFaceHalfedges[1]->featureFlags = halfedge->featureFlags;
+    leftNewFaceHalfedges[1]->featureChain = halfedge->featureChain;
 }
 
 void IsotropicHalfedgeMesh::collectVerticesAroundVertex(Vertex *vertex,
@@ -508,10 +511,72 @@ bool IsotropicHalfedgeMesh::testMoveWouldDegenerate(Vertex *vertex, const Vector
     return degenerated;
 }
 
+bool IsotropicHalfedgeMesh::testMoveWouldFold(Vertex *vertex, const Vector3 &target)
+{
+    bool folded = false;
+    iterateVertexHalfedges(vertex, [&](Halfedge *halfedge) {
+        const Vector3 &previous = halfedge->previousHalfedge->startVertex->position;
+        const Vector3 &next = halfedge->nextHalfedge->startVertex->position;
+        const Vector3 oldNormal = Vector3::normal(previous, vertex->position, next);
+        if (oldNormal.isZero())
+            return true;
+        if (Vector3::dotProduct(oldNormal, Vector3::normal(previous, target, next)) <= 0) {
+            folded = true;
+            return false;
+        }
+        return true;
+    });
+    return folded;
+}
+
+size_t IsotropicHalfedgeMesh::featureDegree(Vertex *vertex, Vertex **first, Vertex **second)
+{
+    size_t degree = 0;
+    iterateVertexHalfedges(vertex, [&](Halfedge *halfedge) {
+        if (halfedge->feature) {
+            Vertex *other = halfedge->nextHalfedge->startVertex;
+            if (0 == degree && nullptr != first)
+                *first = other;
+            else if (1 == degree && nullptr != second)
+                *second = other;
+            ++degree;
+        }
+        return true;
+    });
+    return degree;
+}
+
+bool IsotropicHalfedgeMesh::isChainVertex(Vertex *vertex)
+{
+    return !vertex->featured && !vertex->featureCorner && 2 == featureDegree(vertex);
+}
+
 void IsotropicHalfedgeMesh::relaxVertex(Vertex *vertex)
 {
     if (vertex->_isBoundary || vertex->_valence <= 0)
         return;
+
+    // A chain vertex slides along its chain towards the middle of its two
+    // chain neighbors, which evens out the chain's edges without leaving
+    // the crease; a corner stays (TODO 2.5).
+    Vertex *chainNeighbors[2] = { nullptr, nullptr };
+    const size_t degree = featureDegree(vertex, &chainNeighbors[0], &chainNeighbors[1]);
+    if (degree > 0) {
+        if (2 != degree || vertex->featureCorner)
+            return;
+        Vector3 tangent = chainNeighbors[1]->position - chainNeighbors[0]->position;
+        if (tangent.isZero())
+            return;
+        tangent.normalize();
+        const Vector3 middle = (chainNeighbors[0]->position + chainNeighbors[1]->position) * 0.5;
+        const Vector3 target = vertex->position + tangent * Vector3::dotProduct(middle - vertex->position, tangent);
+        if (target.containsNan() || target.containsInf())
+            return;
+        if (testMoveWouldDegenerate(vertex, target) || testMoveWouldFold(vertex, target))
+            return;
+        vertex->position = target;
+        return;
+    }
 
     Vector3 position;
     size_t count = 0;
@@ -576,7 +641,9 @@ bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge)
 {
     if (nullptr == halfedge->oppositeHalfedge)
         return false;
-    if (halfedge->hard())
+
+    // The other diagonal would cut across the crease (TODO 2.5).
+    if (halfedge->feature)
         return false;
         
     Vertex *topVertex = halfedge->previousHalfedge->startVertex;
@@ -646,15 +713,51 @@ bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge)
             Vector3::dotProduct(newBottomNormal, oldBottomNormal) <= 0)
         return false;
 
-    Halfedge *opposite = halfedge->oppositeHalfedge;
+    relinkFlippedEdge(halfedge);
+    return true;
+}
 
-    // The flip turns this edge into the other diagonal, which is no feature
-    // edge.  (Hard edges are never flipped: see the top.)
-    if (halfedge->feature) {
-        halfedge->feature = opposite->feature = false;
-        halfedge->featureFlags = opposite->featureFlags = 0;
-        ++m_clearedFeatureEdges;
-    }
+bool IsotropicHalfedgeMesh::flipEdgeUnderFlatFace(Halfedge *halfedge)
+{
+    // The face of `halfedge` is flat, so only the face across, kept as the
+    // reference, says which way the two new faces must face; the valence
+    // rule does not apply, since the flat face has to go either way.
+    Halfedge *opposite = halfedge->oppositeHalfedge;
+    if (nullptr == opposite || halfedge->feature)
+        return false;
+    Vertex *topVertex = halfedge->previousHalfedge->startVertex;
+    Vertex *bottomVertex = opposite->previousHalfedge->startVertex;
+    Vertex *leftVertex = halfedge->startVertex;
+    Vertex *rightVertex = opposite->startVertex;
+    if (topVertex == bottomVertex || isVertexPairConnected(topVertex, bottomVertex))
+        return false;
+    // Each new face keeps one edge of the face across; a feature edge there
+    // would give it two.
+    if (opposite->nextHalfedge->feature || opposite->previousHalfedge->feature)
+        return false;
+    const Vector3 &topPosition = topVertex->position;
+    const Vector3 &bottomPosition = bottomVertex->position;
+    const Vector3 &leftPosition = leftVertex->position;
+    const Vector3 &rightPosition = rightVertex->position;
+    if (isTriangleDegenerate(bottomPosition, rightPosition, leftPosition) ||
+            isTriangleDegenerate(topPosition, leftPosition, bottomPosition) ||
+            isTriangleDegenerate(bottomPosition, rightPosition, topPosition))
+        return false;
+    const Vector3 reference = Vector3::normal(bottomPosition, rightPosition, leftPosition);
+    if (Vector3::dotProduct(Vector3::normal(topPosition, leftPosition, bottomPosition), reference) <= 0 ||
+            Vector3::dotProduct(Vector3::normal(bottomPosition, rightPosition, topPosition), reference) <= 0)
+        return false;
+    relinkFlippedEdge(halfedge);
+    return true;
+}
+
+void IsotropicHalfedgeMesh::relinkFlippedEdge(Halfedge *halfedge)
+{
+    Vertex *topVertex = halfedge->previousHalfedge->startVertex;
+    Vertex *bottomVertex = halfedge->oppositeHalfedge->previousHalfedge->startVertex;
+    Vertex *leftVertex = halfedge->startVertex;
+    Vertex *rightVertex = halfedge->oppositeHalfedge->startVertex;
+    Halfedge *opposite = halfedge->oppositeHalfedge;
     
     Face *topFace = halfedge->leftFace;
     Face *bottomFace = opposite->leftFace;
@@ -687,35 +790,69 @@ bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge)
     
     linkFaceHalfedges(newLeftHalfedges);
     linkFaceHalfedges(newRightHalfedges);
-
-    return true;
 }
 
-bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared, const Vector3 *target)
-{   
+bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared)
+{
     // Collapsing a boundary edge would need the face on the other side, which
     // a boundary edge does not have.
     if (nullptr == halfedge->oppositeHalfedge)
         return false;
 
     Halfedge *opposite = halfedge->oppositeHalfedge;
+    Vertex *startVertex = halfedge->startVertex;
+    Vertex *endVertex = opposite->startVertex;
 
-    Vertex *topVertex = halfedge->previousHalfedge->startVertex;
-    Vertex *bottomVertex = opposite->previousHalfedge->startVertex;
-    
-    if (topVertex == bottomVertex)
-        return false;
-    
-    if (topVertex->featured)
-        return false;
-    
-    if (bottomVertex->featured)
-        return false;
-    
+    // Feature edges collapse only along their chain, and a vertex on a chain
+    // stays on it (TODO 2.5, pmp-library's rules): a free vertex collapses
+    // onto a feature vertex, two chain vertices to the middle of their
+    // chain edge, a chain vertex onto a corner; corners never move.
+    const bool startOnFeature = featureDegree(startVertex) > 0;
+    const bool endOnFeature = featureDegree(endVertex) > 0;
+    if (startOnFeature && endOnFeature) {
+        // Two feature vertices a thousandth of an edge apart are one point
+        // (on the sculpt set, two chains of the input through vertices
+        // 3e-8 apart); left alone, the curvature of that edge flattened the
+        // island's whole sizing field.  The merged vertex joins the chains,
+        // so it is a corner.
+        if ((startVertex->position - endVertex->position).lengthSquared() < 1e-6 * maxEdgeLengthSquared) {
+            const bool startFixed = startVertex->featured || startVertex->featureCorner;
+            const bool endFixed = endVertex->featured || endVertex->featureCorner;
+            if (startFixed && endFixed)
+                return false;
+            Halfedge *removing = startFixed ? opposite : halfedge;
+            Vertex *kept = startFixed ? startVertex : endVertex;
+            if (!collapseEdgeTo(removing, kept->position, maxEdgeLengthSquared, true))
+                return false;
+            kept->featureCorner = true;
+            return true;
+        }
+        // A chord between two chains, or between two vertices of one chain
+        // that this edge does not follow.
+        if (!halfedge->feature)
+            return false;
+        // The collapse would merge a feature edge of a face next to it.
+        if (halfedge->previousHalfedge->feature || halfedge->nextHalfedge->feature ||
+                opposite->previousHalfedge->feature || opposite->nextHalfedge->feature)
+            return false;
+        const bool startFixed = startVertex->featured || startVertex->featureCorner;
+        const bool endFixed = endVertex->featured || endVertex->featureCorner;
+        if (startFixed && endFixed)
+            return false;
+        if (startFixed)
+            return collapseEdgeTo(opposite, startVertex->position, maxEdgeLengthSquared);
+        if (endFixed)
+            return collapseEdgeTo(halfedge, endVertex->position, maxEdgeLengthSquared);
+        return collapseEdgeTo(halfedge, (startVertex->position + endVertex->position) * 0.5,
+            maxEdgeLengthSquared);
+    }
+    if (startOnFeature)
+        return collapseEdgeTo(opposite, startVertex->position, maxEdgeLengthSquared);
+    if (endOnFeature)
+        return collapseEdgeTo(halfedge, endVertex->position, maxEdgeLengthSquared);
+
     Vector3 collapseTo;
-    if (nullptr != target) {
-        collapseTo = *target;
-    } else if (!halfedge->startVertex->_smoothNormal.isZero() &&
+    if (!halfedge->startVertex->_smoothNormal.isZero() &&
             !halfedge->nextHalfedge->startVertex->_smoothNormal.isZero()) {
         const Vector3 &p1 = halfedge->startVertex->position;
         const Vector3 &p2 = halfedge->nextHalfedge->startVertex->position;
@@ -730,6 +867,49 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
         collapseTo = (halfedge->startVertex->position +
             halfedge->nextHalfedge->startVertex->position) * 0.5;
     }
+    return collapseEdgeTo(halfedge, collapseTo, maxEdgeLengthSquared);
+}
+
+bool IsotropicHalfedgeMesh::testCollapseWouldJoinFeatureEdges(Halfedge *halfedge)
+{
+    // The collapse merges, on each side, the edge from the apex to the start
+    // vertex with the one to the end vertex, so the faces on the far sides of
+    // those two edges become neighbors across one edge, a feature edge when
+    // either was.  A face that gains a feature edge that way and then has
+    // two would join two chains in one triangle.
+    for (Halfedge *side : { halfedge, halfedge->oppositeHalfedge }) {
+        Halfedge *toStart = side->previousHalfedge;
+        Halfedge *toEnd = side->nextHalfedge;
+        if (toStart->feature == toEnd->feature)
+            continue;
+        Halfedge *gaining = toStart->feature ? toEnd->oppositeHalfedge : toStart->oppositeHalfedge;
+        if (nullptr == gaining)
+            continue;
+        if (gaining->nextHalfedge->feature || gaining->previousHalfedge->feature)
+            return true;
+    }
+    return false;
+}
+
+bool IsotropicHalfedgeMesh::collapseEdgeTo(Halfedge *halfedge, const Vector3 &collapseTo,
+    double maxEdgeLengthSquared, bool joinFeatures)
+{
+    Halfedge *opposite = halfedge->oppositeHalfedge;
+    
+    Vertex *topVertex = halfedge->previousHalfedge->startVertex;
+    Vertex *bottomVertex = opposite->previousHalfedge->startVertex;
+    
+    if (topVertex == bottomVertex)
+        return false;
+    
+    if (topVertex->featured)
+        return false;
+    
+    if (bottomVertex->featured)
+        return false;
+
+    if (!joinFeatures && testCollapseWouldJoinFeatureEdges(halfedge))
+        return false;
     
     if (testLengthSquaredAroundVertex(halfedge->startVertex, collapseTo, maxEdgeLengthSquared))
         return false;
@@ -786,28 +966,22 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
         bottomVertex->firstHalfedge = opposite->nextHalfedge->oppositeHalfedge;
     }
     
-    // Each triangle's two other sides become one edge.  It is hard if
-    // either was: the caller keeps a hard vertex where it is, so a hard
-    // side keeps its place (collapseShortEdges).
-    const bool topHard = halfedge->previousHalfedge->hard() || halfedge->nextHalfedge->hard();
-    const bool bottomHard = opposite->previousHalfedge->hard() || opposite->nextHalfedge->hard();
-    linkHalfedgePair(halfedge->previousHalfedge->oppositeHalfedge,
-        halfedge->nextHalfedge->oppositeHalfedge);
-    linkHalfedgePair(opposite->previousHalfedge->oppositeHalfedge,
-        opposite->nextHalfedge->oppositeHalfedge);
-    const auto makeHard = [](Halfedge *side) {
-        if (nullptr != side) {
-            side->feature = true;
-            side->featureFlags |= kHardFeature;
+    // Each merged pair is one feature edge when either of its edges was.
+    for (Halfedge *side : { halfedge, opposite }) {
+        Halfedge *first = side->previousHalfedge->oppositeHalfedge;
+        Halfedge *second = side->nextHalfedge->oppositeHalfedge;
+        const bool feature = side->previousHalfedge->feature || side->nextHalfedge->feature;
+        const unsigned char featureFlags = side->previousHalfedge->featureFlags | side->nextHalfedge->featureFlags;
+        const size_t featureChain = side->previousHalfedge->feature ? side->previousHalfedge->featureChain
+                                                                     : side->nextHalfedge->featureChain;
+        linkHalfedgePair(first, second);
+        for (Halfedge *merged : { first, second }) {
+            if (nullptr != merged) {
+                merged->feature = feature;
+                merged->featureFlags = featureFlags;
+                merged->featureChain = featureChain;
+            }
         }
-    };
-    if (topHard) {
-        makeHard(halfedge->previousHalfedge->oppositeHalfedge);
-        makeHard(halfedge->nextHalfedge->oppositeHalfedge);
-    }
-    if (bottomHard) {
-        makeHard(opposite->previousHalfedge->oppositeHalfedge);
-        makeHard(opposite->nextHalfedge->oppositeHalfedge);
     }
     
     rightVertex->position = collapseTo;
@@ -817,18 +991,6 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
     bottomFace->removed = true;
 
     return true;
-}
-
-bool IsotropicHalfedgeMesh::isStraightHardChainVertex(Vertex *vertex)
-{
-    std::vector<Vector3> directions;
-    iterateVertexHalfedges(vertex, [&](Halfedge *halfedge) {
-        if (halfedge->hard())
-            directions.push_back((halfedge->nextHalfedge->startVertex->position - vertex->position).normalized());
-        return true;
-    });
-    // cos 150 degrees
-    return 2 == directions.size() && Vector3::dotProduct(directions[0], directions[1]) <= -0.8660254;
 }
 
 void IsotropicHalfedgeMesh::updateVertexValences()
@@ -940,19 +1102,155 @@ void IsotropicHalfedgeMesh::markFeatureEdges(const std::vector<std::pair<size_t,
     }
 }
 
-void IsotropicHalfedgeMesh::featureVertices()
+std::vector<IsotropicHalfedgeMesh::Vertex *> IsotropicHalfedgeMesh::splitFacesOnTwoFeatureEdges()
 {
+    std::vector<Vertex *> added;
+    Face *lastFace = m_lastFace;
+    for (Face *face = m_firstFace; nullptr != face; face = face->nextFace) {
+        if (!face->removed) {
+            size_t featureEdges = 0;
+            Halfedge *plain = nullptr;
+            Halfedge *halfedge = face->halfedge;
+            do {
+                if (halfedge->feature)
+                    ++featureEdges;
+                else
+                    plain = halfedge;
+                halfedge = halfedge->nextHalfedge;
+            } while (halfedge != face->halfedge);
+            if (2 == featureEdges) {
+                // When the face is flat, its apex lies on the third edge
+                // and a split would put the new vertex on top of it (on the
+                // sculpt set, a straight chain with a flat face on one side:
+                // an edge of 1e-8 that flattened the island's sizing field).
+                // The flat face is flipped away, or left alone.
+                const Vector3 &apex = plain->previousHalfedge->startVertex->position;
+                const Vector3 &left = plain->startVertex->position;
+                const Vector3 &right = plain->nextHalfedge->startVertex->position;
+                const double baseSquared = (right - left).lengthSquared();
+                const bool flat = 2.0 * Vector3::area(apex, left, right) < 0.25 * baseSquared;
+                if (!flat) {
+                    breakEdge(plain);
+                    added.push_back(m_lastVertex);
+                } else {
+                    flipEdgeUnderFlatFace(plain);
+                }
+            }
+        }
+        // The faces a split adds have one feature edge at most.
+        if (face == lastFace)
+            break;
+    }
+    return added;
+}
+
+void IsotropicHalfedgeMesh::featureCorners()
+{
+    // A corner where the chain turns by more than this, the design's 45
+    // degrees (research/crease-preservation-2026-10-26.md, 5.1): sliding
+    // past it would cut the corner off.
+    const double maxChainTurnCosine = std::cos(45.0 * M_PI / 180.0);
+    for (Vertex *vertex = m_firstVertex; nullptr != vertex; vertex = vertex->nextVertex) {
+        if (vertex->removed)
+            continue;
+        Vertex *first = nullptr;
+        Vertex *second = nullptr;
+        const size_t degree = featureDegree(vertex, &first, &second);
+        if (0 == degree)
+            continue;
+        if (2 != degree) {
+            vertex->featureCorner = true;
+            continue;
+        }
+        Vector3 in = vertex->position - first->position;
+        Vector3 out = second->position - vertex->position;
+        if (in.isZero() || out.isZero()) {
+            vertex->featureCorner = true;
+            continue;
+        }
+        if (Vector3::dotProduct(in.normalized(), out.normalized()) < maxChainTurnCosine)
+            vertex->featureCorner = true;
+    }
+
+    // Number the chains: walk from each unnumbered feature halfedge through
+    // chain vertices in both directions.
+    size_t chain = 0;
+    const auto nextOnChain = [&](Halfedge *arrived) -> Halfedge * {
+        Vertex *vertex = arrived->nextHalfedge->startVertex;
+        if (vertex->featureCorner)
+            return nullptr;
+        Halfedge *next = nullptr;
+        iterateVertexHalfedges(vertex, [&](Halfedge *halfedge) {
+            if (halfedge->feature && halfedge->oppositeHalfedge != arrived) {
+                next = halfedge;
+                return false;
+            }
+            return true;
+        });
+        return next;
+    };
     for (Face *face = m_firstFace; nullptr != face; face = face->nextFace) {
         if (face->removed)
             continue;
         Halfedge *halfedge = face->halfedge;
         do {
-            if (halfedge->hard()) {
-                halfedge->startVertex->marked = halfedge->nextHalfedge->startVertex->marked = true;
-            } else if (halfedge->feature) {
-                halfedge->startVertex->featured = halfedge->nextHalfedge->startVertex->featured = true;
+            if (halfedge->feature && 0 == halfedge->featureChain) {
+                ++chain;
+                Halfedge *backwards = nullptr == halfedge->oppositeHalfedge ? nullptr : nextOnChain(halfedge->oppositeHalfedge);
+                for (Halfedge *start : { halfedge, backwards }) {
+                    for (Halfedge *walk = start; nullptr != walk && 0 == walk->featureChain; walk = nextOnChain(walk)) {
+                        walk->featureChain = chain;
+                        if (nullptr != walk->oppositeHalfedge)
+                            walk->oppositeHalfedge->featureChain = chain;
+                    }
+                }
             }
             halfedge = halfedge->nextHalfedge;
         } while (halfedge != face->halfedge);
     }
+}
+
+std::vector<IsotropicHalfedgeMesh::FeatureSegment> IsotropicHalfedgeMesh::featureSegments()
+{
+    std::vector<FeatureSegment> segments;
+    for (Face *face = m_firstFace; nullptr != face; face = face->nextFace) {
+        if (face->removed)
+            continue;
+        Halfedge *halfedge = face->halfedge;
+        do {
+            if (halfedge->feature && (nullptr == halfedge->oppositeHalfedge
+                    || halfedge->startVertex->debugIndex < halfedge->nextHalfedge->startVertex->debugIndex)) {
+                FeatureSegment segment;
+                segment.first = halfedge->startVertex->position;
+                segment.second = halfedge->nextHalfedge->startVertex->position;
+                segment.chain = halfedge->featureChain;
+                segments.push_back(segment);
+            }
+            halfedge = halfedge->nextHalfedge;
+        } while (halfedge != face->halfedge);
+    }
+    return segments;
+}
+
+size_t IsotropicHalfedgeMesh::vertexFeatureChain(Vertex *vertex)
+{
+    size_t chain = 0;
+    iterateVertexHalfedges(vertex, [&](Halfedge *halfedge) {
+        if (halfedge->feature) {
+            chain = halfedge->featureChain;
+            return false;
+        }
+        return true;
+    });
+    return chain;
+}
+
+bool IsotropicHalfedgeMesh::moveVertexIfValid(Vertex *vertex, const Vector3 &target)
+{
+    if (target.containsNan() || target.containsInf())
+        return false;
+    if (testMoveWouldDegenerate(vertex, target) || testMoveWouldFold(vertex, target))
+        return false;
+    vertex->position = target;
+    return true;
 }

@@ -28,8 +28,7 @@
 #include "vector3.h"
 #include "axisalignedboundingboxtree.h"
 #include "axisalignedboundingbox.h"
-
-class IsotropicHalfedgeMesh;
+#include "isotropichalfedgemesh.h"
 
 class IsotropicRemesher
 {
@@ -39,9 +38,10 @@ public:
     ~IsotropicRemesher();
     double initialAverageEdgeLength();
     // Feature edges of the input, as pairs of input vertex indices with a
-    // flags byte each (kept as they are).  Their vertices are not collapsed
-    // or projected; the edges are tracked through the remesh, see
-    // featureEdges().
+    // flags byte each (kept as they are).  The remesh keeps them as edge
+    // chains (TODO 2.5): never flipped, collapsed only along the chain, chain
+    // vertices slide along it and are projected onto the input's chain,
+    // corners stay where they are.
     void setFeatureEdges(const std::vector<std::pair<size_t, size_t>> &edges,
         const std::vector<unsigned char> &flags);
     void setTargetEdgeLength(double edgeLength);
@@ -66,6 +66,9 @@ private:
     AxisAlignedBoudingBoxTree *m_axisAlignedBoundingBoxTree = nullptr;
     std::vector<std::pair<size_t, size_t>> m_featureEdges;
     std::vector<unsigned char> m_featureEdgeFlags;
+    std::vector<IsotropicHalfedgeMesh::FeatureSegment> m_featureSegments;
+    std::vector<AxisAlignedBoudingBox> m_featureSegmentBoxes;
+    AxisAlignedBoudingBoxTree *m_featureSegmentTree = nullptr;
     double m_targetEdgeLength = 0;
     double m_initialAverageEdgeLength = 0;
     size_t m_targetTriangleCount = 0;
@@ -93,6 +96,9 @@ private:
     void flipEdges();
     void shiftVertices();
     void projectVertices();
+    void projectVertex(IsotropicHalfedgeMesh::Vertex *vertex);
+    void buildFeatureSegmentTree();
+    bool projectOntoFeatureChain(IsotropicHalfedgeMesh::Vertex *vertex);
     void buildAxisAlignedBoundingBoxTree();
 };
 
