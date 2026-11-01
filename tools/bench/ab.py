@@ -574,7 +574,7 @@ def value(r, k):
     if k == "flipped_vs_raw": return (m.get("flipped") or {}).get("faces_vs_raw_input")
     if k == "flipped_off_folds": return (m.get("flipped") or {}).get("faces_off_input_folds")
     if k == "flipped_over_folds": return (m.get("flipped") or {}).get("faces_over_input_folds")
-    if k in ("folded_faces", "holes_added", "holes_closed", "handles_lost", "handles_added", "islands_dropped",
+    if k in ("folded_faces", "twisted_quads", "holes_added", "holes_closed", "handles_lost", "handles_added", "islands_dropped",
              "islands_merged", "area_uncovered", "area_wrong_side"):
         return (m.get("validity") or {}).get(k)
     if k == "nm_vertices": return (m.get("validity") or {}).get("non_manifold_vertices")
@@ -610,16 +610,16 @@ def value(r, k):
 COUNTS = ["flips_cont", "flips_round", "flips", "degenerate", "non_quads", "sj_le_0", "flipped_vs_input",
           "t_non_manifold", "t_opened", "qex_fallbacks",
           # Validity from metrics.py (2026-10-22): per input island, matched to the output's islands.
-          "folded_faces", "nm_vertices", "holes_added", "holes_closed", "handles_lost", "handles_added",
-          "islands_dropped", "islands_merged", "islands_changed", "flipped_vs_raw",
+          "folded_faces", "twisted_quads", "nm_vertices", "holes_added", "holes_closed", "handles_lost",
+          "handles_added", "islands_dropped", "islands_merged", "islands_changed", "flipped_vs_raw",
           # V3's split (2026-10-23): flips over folded input vs the rest
           "flipped_off_folds", "flipped_over_folds"]
 MEANS = ["area_uncovered", "area_wrong_side", "irregular_1k", "in_out_p99", "hausdorff", "in_out_mean", "normal_dev", "vertex_dist", "sj_p1",
          "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel", "count_err", "energy_ratio", "time", "peak_rss_mb"]
 # Rows computed by metrics.py (the rest come from the CLI's own report and stage records).
 FROM_METRICS = {"sj_le_0", "flipped_vs_input", "flipped_vs_raw", "flipped_off_folds", "flipped_over_folds",
-                "folded_faces", "holes_added", "holes_closed", "handles_lost", "handles_added", "islands_dropped",
-                "islands_merged", "area_uncovered", "area_wrong_side", "nm_vertices", "islands_changed",
+                "folded_faces", "twisted_quads", "holes_added", "holes_closed", "handles_lost", "handles_added",
+                "islands_dropped", "islands_merged", "area_uncovered", "area_wrong_side", "nm_vertices", "islands_changed",
                 "irregular_1k", "hausdorff", "in_out_mean", "in_out_p99", "vertex_dist", "normal_dev", "sj_p1",
                 "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel"}
 # Rows where a higher value is the better one (for "runs B better / worse").

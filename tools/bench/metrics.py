@@ -383,21 +383,37 @@ def island_topology(nv, first_vertex, E, bnd, used, vlab, nlab):
     return chi.astype(np.int64), nb
 
 
-def folded_faces(V, faces, sizes):
-    """Faces with a corner turning against the face's area vector (scaled Jacobian <= 0), degenerate
-    faces left out: the core's `folded_faces` (measureMesh in remesh.cpp), for every face size, so
-    a pleated pentagon counts too (V2 tests quads only)."""
+def folded_mask(V, faces):
+    """Per face: (folded, twisted), degenerate faces False in both, as the core's measureMesh
+    (remesh.cpp). Folded: a corner turns against the face's area vector (scaled Jacobian <= 0), any
+    face size. Twisted: a quad folded under both diagonals (each split into two triangles has them
+    facing apart), which a saddle-shaped quad can be with every corner positive."""
     fid, v, nx, pv = corners(faces)
     N = np.zeros((len(faces), 3))
     np.add.at(N, fid, np.cross(V[v], V[nx]))  # twice the area vector
     e1, e2 = V[nx] - V[v], V[pv] - V[v]
     longest = np.zeros(len(faces))
     np.maximum.at(longest, fid, np.sum(e1 * e1, 1))
-    repeated = np.array([len(set(f)) != len(f) for f in faces])
+    repeated = np.array([len(set(f)) != len(f) for f in faces], dtype=bool)
     degenerate = repeated | (0.5 * np.linalg.norm(N, axis=1) <= 1e-12 * longest)
     bad = np.zeros(len(faces), bool)
     np.logical_or.at(bad, fid, np.einsum("ij,ij->i", np.cross(e1, e2), N[fid]) <= 0)
-    return int(np.sum(bad & ~degenerate))
+    twisted = np.zeros(len(faces), bool)
+    qi = np.array([i for i, f in enumerate(faces) if len(f) == 4], dtype=np.int64)
+    if len(qi):
+        Q = np.array([faces[i] for i in qi], dtype=np.int64)
+        a, b, c, d = (V[Q[:, i]] for i in range(4))
+        dot = lambda x, y: np.einsum("ij,ij->i", x, y)
+        twisted[qi] = ((dot(np.cross(b - a, c - a), np.cross(c - a, d - a)) < 0)
+                       & (dot(np.cross(c - b, d - b), np.cross(d - b, a - b)) < 0))
+    return bad & ~degenerate, twisted & ~degenerate
+
+
+def folded_faces(V, faces, sizes):
+    """Faces with a corner turning against the face's area vector (scaled Jacobian <= 0), degenerate
+    faces left out: the core's `folded_faces` (measureMesh in remesh.cpp), for every face size, so
+    a pleated pentagon counts too (V2 tests quads only)."""
+    return int(folded_mask(V, faces)[0].sum())
 
 
 def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, reversed_out, h, in_tri, d, out_face, Ftri):
@@ -462,8 +478,10 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
     # Twice the genus: 2 * components - chi - boundary loops (odd only for a non-orientable surface).
     g2_in = 2 - in_chi - in_loops
     g2_out = 2 * k - chi_sum - loops_sum
+    folded, twisted = folded_mask(V, faces)
     res = {"non_manifold_vertices": nonmanifold_vertices(faces, len(V)),
-           "folded_faces": folded_faces(V, faces, sizes),
+           "folded_faces": int(folded.sum()), "twisted_quads": int(twisted.sum()),
+           "folded_or_twisted_faces": int((folded | twisted).sum()),
            "islands_input": int(nin), "islands_input_non_manifold": int((~manifold_in).sum()),
            "islands_output": int(nout), "islands_dropped": int(dropped.sum()),
            "islands_split": int(np.sum((k > 1) & manifold_in)), "islands_merged": merged,

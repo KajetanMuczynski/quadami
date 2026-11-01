@@ -179,15 +179,36 @@ void measureMesh(const RemeshMesh& mesh, QualityReport* report)
         } else {
             // Folded: some corner turns against the area vector, i.e. its
             // scaled Jacobian is <= 0, so the face is non-convex or twisted.
+            bool folded = false;
             for (size_t i = 0; i < size; ++i) {
                 const Vector3 corner = position(corners[i]);
                 const Vector3 next = position(corners[(i + 1) % size]);
                 const Vector3 previous = position(corners[(i + size - 1) % size]);
                 if (Vector3::dotProduct(Vector3::crossProduct(next - corner, previous - corner), normal) <= 0.0) {
-                    ++report->foldedFaceCount;
+                    folded = true;
                     break;
                 }
             }
+            // Twisted: a quad folded under both diagonals, i.e. either way of
+            // cutting it into two triangles gives triangles that face apart.
+            // A quad bent like the sides of a tetrahedron is twisted with
+            // every corner still turning with the area vector, so the corner
+            // test above misses most twisted quads.
+            bool twisted = false;
+            if (4 == size) {
+                const Vector3 a = position(corners[0]);
+                const Vector3 b = position(corners[1]);
+                const Vector3 c = position(corners[2]);
+                const Vector3 d = position(corners[3]);
+                twisted = Vector3::dotProduct(Vector3::crossProduct(b - a, c - a), Vector3::crossProduct(c - a, d - a)) < 0.0
+                    && Vector3::dotProduct(Vector3::crossProduct(c - b, d - b), Vector3::crossProduct(d - b, a - b)) < 0.0;
+            }
+            if (folded)
+                ++report->foldedFaceCount;
+            if (twisted)
+                ++report->twistedQuadCount;
+            if (folded || twisted)
+                ++report->foldedOrTwistedFaceCount;
         }
 
         for (size_t i = 0; i < size; ++i) {
@@ -966,6 +987,8 @@ std::string toJson(const RemeshResult& result)
         << ", \"boundary_edges\": " << jsonCount(report.boundaryEdgeCount)
         << ", \"orientation_flips\": " << jsonCount(report.orientationFlipCount)
         << ", \"folded_faces\": " << jsonCount(report.foldedFaceCount)
+        << ", \"twisted_quads\": " << jsonCount(report.twistedQuadCount)
+        << ", \"folded_or_twisted_faces\": " << jsonCount(report.foldedOrTwistedFaceCount)
         << ",\n             \"degenerate_faces\": " << jsonCount(report.degenerateFaceCount)
         << ", \"components\": " << jsonCount(report.componentCount)
         << ", \"boundary_loops\": " << jsonCount(report.boundaryLoopCount)

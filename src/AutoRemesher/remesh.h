@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 10;
+const int InterfaceVersionMinor = 11;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -193,6 +193,11 @@ struct QualityReport {
     size_t orientationFlipCount = 0;
     size_t foldedFaceCount = 0;
     size_t degenerateFaceCount = 0;
+    // Since 1.11.  Quads folded under both diagonals (each split into two
+    // triangles has them facing apart), which foldedFaceCount's corner test
+    // mostly misses, and the faces that are folded, twisted or both.
+    size_t twistedQuadCount = 0;
+    size_t foldedOrTwistedFaceCount = 0;
     size_t componentCount = 0;
     // Since 1.4.  Connected pieces of the boundary-edge graph (one per hole
     // or open border; two loops touching at a vertex count once), and
