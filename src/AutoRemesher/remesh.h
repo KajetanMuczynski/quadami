@@ -195,9 +195,14 @@ struct QualityReport {
     size_t degenerateFaceCount = 0;
     // Since 1.11.  Quads folded under both diagonals (each split into two
     // triangles has them facing apart), which foldedFaceCount's corner test
-    // mostly misses, and the faces that are folded, twisted or both.
+    // mostly misses, and the faces that are folded, twisted or both.  A quad
+    // with a diagonal along an input crease of 90 degrees or more is bent
+    // along that crease, not twisted: it is counted in
+    // creaseDiagonalQuadCount instead (remesh() only; measureMesh() alone
+    // has no input).
     size_t twistedQuadCount = 0;
     size_t foldedOrTwistedFaceCount = 0;
+    size_t creaseDiagonalQuadCount = 0;
     size_t componentCount = 0;
     // Since 1.4.  Connected pieces of the boundary-edge graph (one per hole
     // or open border; two loops touching at a vertex count once), and

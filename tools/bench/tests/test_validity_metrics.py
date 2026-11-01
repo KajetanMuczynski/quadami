@@ -251,6 +251,23 @@ class Validity(unittest.TestCase):
         folded, twisted = metrics.folded_mask(np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0]], float), [[0, 1, 1, 2]])
         self.assertEqual((bool(folded[0]), bool(twisted[0])), (False, False))  # repeated corner: degenerate
 
+    def test_twisted_quad_along_a_crease_like_the_core(self):
+        # tests/quality_report_test.cpp creaseDiagonalFailures: a quad sheared across a crease with its
+        # diagonal on it is bent along the crease, apart from twisted ones, if the crease is >= 90 degrees.
+        c80, s80 = np.cos(np.radians(80)), np.sin(np.radians(80))
+        V = np.array([[0, 0, 0], [0.9, 0.3, 0], [1, 0, 0], [0.1, 0.3 * c80, -0.3 * s80]], float)
+        faces = [[0, 1, 2, 3]]
+        twisted = metrics.folded_mask(V, faces)[1]
+        self.assertTrue(twisted[0])
+
+        def along(degrees, dx):
+            a = np.radians(180 - degrees)
+            Vin = np.array([[-1 + dx, 0, 0], [2 + dx, 0, 0], [0.5 + dx, 2, 0],
+                            [0.5 + dx, 2 * np.cos(a), -2 * np.sin(a)]], float)
+            creases = metrics.sharp_edges(Vin, np.array([[0, 1, 2], [1, 0, 3]]), 90.0 - 0.1)
+            return bool(metrics.crease_diagonal_mask(Vin, creases, V, faces, twisted)[0])
+        self.assertEqual((along(100, 0), along(100, 10), along(60, 0)), (True, False, False))
+
 
 class TurnedOver(unittest.TestCase):
     def test_only_clusters_with_a_turned_edge_count_as_folds(self):

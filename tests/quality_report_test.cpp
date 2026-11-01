@@ -279,6 +279,56 @@ int lostPartCauseFailures()
     return thinOk && otherOk && openOk ? 0 : 1;
 }
 
+// A quad sheared across an input crease, its diagonal on the crease: twisted
+// by the two-diagonal test, but bent along the crease, so it is counted
+// apart when the crease is 90 degrees or more (here 100) and stays twisted
+// when the input's crease is elsewhere or blunter (60 degrees).
+int creaseDiagonalFailures()
+{
+    const double c80 = std::cos(80.0 * M_PI / 180.0);
+    const double s80 = std::sin(80.0 * M_PI / 180.0);
+    AutoRemesher::RemeshMesh quad;
+    quad.positions = { 0, 0, 0, 0.9, 0.3, 0, 1, 0, 0, 0.1, 0.3 * c80, -0.3 * s80 };
+    quad.faceSizes = { 4 };
+    quad.faceIndices = { 0, 1, 2, 3 };
+    // Two triangles meeting along the x axis from -1 to 2: the top one in
+    // z = 0, the other turned down by `degrees` between the face normals.
+    const auto crease = [](double degrees, double dx) {
+        const double angle = (180.0 - degrees) * M_PI / 180.0;
+        return std::vector<double> { -1 + dx, 0, 0, 2 + dx, 0, 0, 0.5 + dx, 2, 0,
+            0.5 + dx, 2 * std::cos(angle), -2 * std::sin(angle) };
+    };
+    const std::vector<uint32_t> triangles = { 0, 1, 2, 1, 0, 3 };
+    const auto run = [&](const std::vector<double>& positions) {
+        AutoRemesher::QualityReport report;
+        AutoRemesher::measureMesh(quad, &report);
+        AutoRemesher::discountCreaseDiagonalQuads(positions, triangles, quad, &report);
+        return report;
+    };
+    int failures = 0;
+    const struct {
+        const char* name;
+        std::vector<double> positions;
+        size_t twisted;
+        size_t creaseDiagonal;
+    } cases[] = {
+        { "on a 100 degree crease", crease(100.0, 0.0), 0, 1 },
+        { "crease moved away", crease(100.0, 10.0), 1, 0 },
+        { "on a 60 degree crease", crease(60.0, 0.0), 1, 0 },
+    };
+    for (const auto& c : cases) {
+        const AutoRemesher::QualityReport report = run(c.positions);
+        const bool ok = c.twisted == report.twistedQuadCount && c.creaseDiagonal == report.creaseDiagonalQuadCount
+            && c.twisted == report.foldedOrTwistedFaceCount && 0 == report.foldedFaceCount;
+        failures += ok ? 0 : 1;
+        printf("sheared quad %-24s twisted %zu (want %zu), crease diagonal %zu (want %zu), folded or twisted %zu%s\n",
+            c.name, report.twistedQuadCount, c.twisted, report.creaseDiagonalQuadCount, c.creaseDiagonal,
+            report.foldedOrTwistedFaceCount, ok ? "" : "  FAIL");
+    }
+    printf("\n");
+    return failures;
+}
+
 // Handles per island from the islands' twice-handle counts: a torus that came
 // out as a sphere, a sphere that gained two handles, an island with a
 // non-manifold input (not measured) and an unchanged genus-2 island.
@@ -345,6 +395,7 @@ int main()
     failures += handleFailures();
     failures += lostPartFailures();
     failures += lostPartCauseFailures();
+    failures += creaseDiagonalFailures();
     printf("%-24s %13s %17s %11s %13s\n", "case", "folded", "degenerate", "flips", "twisted");
     for (const auto& c : cases) {
         const AutoRemesher::QualityReport report = measure(c.positions, c.faces);
