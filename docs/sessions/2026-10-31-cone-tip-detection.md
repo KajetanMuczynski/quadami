@@ -1,0 +1,20 @@
+# 2026-10-31 · cloud thread · Cone tips on top of the rim fix
+- Repos/commits: core 3dfe0aa (tip detection), base master 2b858a3; measured on a local merge with PR #166 (5b47b66).
+- Did:
+  - Merged master into #135 twice.
+  - Traced the sword_vines 6k part loss of the earlier merge to a cascade in `collapseThreeValenceDiagonals`. Tried a fix (TODO 2.31) and left it out.
+  - Measured #135 on top of the rim fix.
+  - Tightened tip detection so that only cones pass: the deficit must hold out to 8 T edges.
+- Found:
+  - The first detection pinned rounded or ringed tips (noise spikes, the plane's nose, an ellipsoid end, the sword's guard tips, a sculpted horn), and they cost folds.
+  - Cones keep their gathered deficit within 1° out to 16 T edges; the false tips moved 16° or more.
+  - The rim handle that made libQEx fall back on cones is gone with 2.5.
+- Measured (`ab.py`, 6 replicates on every public set with default targets plus the private sculpts; cones and sword 21):
+  - Tips are found only on real cones.
+  - Every other run is byte-identical to the base.
+  - The apex is kept in 219 of 219 cone runs (base 0).
+  - Cone Hausdorff ×0.26.
+  - Plane fast 2k and sword 12k folds are equal to the base.
+  - One cost: cone_subsurf2 gets +1 fold at 1k and 3k.
+  - Two disprover passes with their own code checked these numbers. They corrected my ×0.61 (the cones alone are ×0.26) and the run count (219, not 222), and found the extractor fix's helmet costs.
+- Next: merge master once #166 is in, CI, ready check; TODO 2.31 (chain cap) separately.
