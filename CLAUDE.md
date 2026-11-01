@@ -74,7 +74,7 @@ CI (`.github/workflows/`):
   master gets its own concurrency group, so close merges no longer cancel each other's runs.
   Other paths never skip macOS or Windows: add-on
   Python broke on Windows only before (#18), and Qt-GUI/bench-only PRs, the only other safe skip, never occurred.
-  - `format`: `ci/lint.sh` (src/ and tests/) with clang-format pinned to 23.1.3 (pip); bump on purpose.
+  - `format`: `ci/lint.sh` (src/ and tests/) with clang-format pinned to 23.1.3 (`ci/requirements-format.txt`, hash-pinned); bump on purpose.
   - `qt-app (linux)`: qmake app and `ar_bench`, `ci/smoke_test.sh` on both (1,200-2,400 quads).
   - `addon (linux-x64|windows-x64|macos-arm64)`: one CMake Release build per platform, the shipped
     configuration (static oneTBB everywhere; Linux built in an AlmaLinux 8 container by

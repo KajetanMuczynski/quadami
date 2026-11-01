@@ -53,6 +53,13 @@ This file is for building and packaging. **Using** the add-on: [docs/USER-GUIDE.
   still there after saving the file. A failed or cancelled run shows its
   status and message instead; the worker's last output lines go to Blender's
   console.
+- **Copy Report** (in the result box) puts one text block for a bug report on
+  the clipboard (`report.copy_text`): build ids, Blender, system, the run's
+  settings (the core's `parameters` plus the panel-only ones the add-on stores
+  under `addon` in `quadami_report`), input counts, the result box's rows and
+  warnings, step times, the worker's last output (last run of the session
+  only, at most 4,000 characters) and the report JSON. No mesh data; home and
+  user folder names are redacted.
 
 ## How the worker works (and why)
 

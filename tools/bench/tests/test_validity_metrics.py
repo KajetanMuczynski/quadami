@@ -141,6 +141,17 @@ class Validity(unittest.TestCase):
         self.assertAlmostEqual(v["area_uncovered"], 0.5, delta=0.02)
         self.assertFalse(v["islands_same_as_input"])
 
+    def test_island_shrunk_to_a_blob_is_dropped_not_same(self):
+        # The second torus comes out as a much smaller torus at its centre: one output island of the
+        # same topology votes for it, but none of its area lies within one output edge of the output.
+        a, b = self.torus_in(), self.torus_in(shift=5.0)
+        small = grid(40, 16, True, True, lambda u, v: torus_point(u, v, R=0.3, r=0.05, shift=5.0))
+        r = self.run_metrics(join(a, b), join(self.torus_out(), small))
+        t, v = r["topology"], r["validity"]
+        self.assertTrue(t["same_as_input"])  # the global check cannot see it
+        self.assertEqual((v["islands_dropped"], v["islands_topology_changed"], v["islands_merged"]), (1, 0, 0))
+        self.assertFalse(v["islands_same_as_input"])
+
     def test_cut_handle_is_two_holes_and_a_lost_handle(self):
         # The output is the torus cut open across the tube: a cylinder with two boundary loops.
         out = grid(40, 16, False, True, lambda u, v: torus_point(0.98 * u, v))

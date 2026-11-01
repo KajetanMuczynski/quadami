@@ -226,7 +226,7 @@ defaults and change one thing at a time.
 | **Adaptivity** | 0.5 | 0: all quads the same size. 1: smaller quads where the surface curves strongly, bigger on flat parts. | 0 gives the fewest folded quads; 1 gives about twice as many. Use 0 for even topology (e.g. to sculpt further on it). It does **not** move quads onto thin parts. |
 | **Sharp Edge** | 90° | Edges where the surface bends more than this angle are treated as creases: the quads follow them, but they come out slightly rounded ([§7](#7-sculpts-what-works-and-what-struggles)). An edge of exactly this angle counts (to within 0.1°), so the 90° edges of Blender's cube and cylinder are creases at the default. Marked edges are only used with **Follow Marks**. | Lower (e.g. 60°) for hard-surface models with bevels you want to keep, but it makes about twice as many triangles and other non-quads. Raise to 180° for soft organic sculpts, so nothing is treated as a crease. Tested quality numbers are for 90°. |
 | **Follow Marks** | Sharp | Edges with a ticked mark (Sharp, Crease, Seam) keep a row of quad edges along them, whatever their angle, also on smooth parts (a design line, a sphere's equator). The line under it counts the marks on the active object; after a remesh the panel says how many marked edges were followed. | For hard-surface models where you marked the edges to keep. On Blender's cube, cylinder, cone and bevelled boxes, a quad edge then follows 75–99 % of the marked length at 5,000 quads instead of 7–91 % (at 1,000 a cone's rim is still rounded off). Untick it and remesh again when you don't want the quads along your marks. When more than half of a mesh's edges (over 1,000 of them) carry a mark, as after many FBX or OBJ imports, that mark is left out with a warning. Marks that cross other creases at an angle or each other in many short lines can fold the quads; such a part is remeshed without its marks, and a warning says so. |
-| Advanced > **Resolution** | Quality | Quality solves on a finer mesh: cleaner quads, fewer flipped ones. Fast is quicker and rougher. | Fast for quick previews (Quality takes about 1.5 times as long), Quality for the result you keep. Quad count is the same. |
+| Advanced > **Resolution** | Quality | Quality solves on a finer mesh: cleaner quads, fewer flipped ones. Fast is quicker and rougher. | Fast to try settings quickly (Quality takes about twice as long), Quality for the result you keep. Quad size is about the same, but a Quality run puts its poles and edge loops elsewhere. |
 | Advanced > **Anisotropy** | 1 | Lets quads stretch along the direction the surface curves least, like long quads on a cylinder (up to about 2.3 : 1). | 0 for square quads everywhere; the result then follows the shape 25–35 % less closely. Hardly changes anything else. |
 | Advanced > **Edge Scaling** | 1 | Multiplies the quad size; 2 gives about a quarter of the quads. | Leave at 1 and use Target Quads instead; it is the same thing, less clearly. |
 | Advanced > **Smooth Normal** | 0° | 0: follow the model's own flat triangles. Above 0: follow a smooth surface through them; a triangle that turns more than this angle from the average at its corner keeps its corner sharp. | Only for rounded low-poly input (big flat facets). Not on boxes or cylinders: a box corner turns 54.7° and a cylinder rim 45°, so higher values round them off and can tear the result (see §7). Sculpts are already dense: leave 0. |
@@ -398,7 +398,15 @@ What it does and does not do:
 | **Blender closed or froze** | The remesher runs as a separate program and cannot crash Blender by itself; report it. |
 
 **Reporting a problem.** Use the [bug report form](https://github.com/KajetanMuczynski/quadami/issues/new?template=bug-report.yml) on GitHub (you need a free
-account); it asks for all of this. Send: the **build line**, the settings (Target Quads, Fast/Quality, anything
-changed), a screenshot of the result box, and, if possible, start Blender from a terminal (Windows:
-**Window > Toggle System Console**) and copy the text after `Quadami worker output:`. If you can share
-the model, say so; models are kept private and only their numbers go into the project.
+account) or e-mail [quadami.contact@gmail.com](mailto:quadami.contact@gmail.com). The quickest way: select the result (or, after a failed run,
+leave the panel as it is), press **Copy Report** at the bottom of the result box and paste the text into the
+form's first field or the e-mail. It holds the build line, Blender version, operating system, the settings of
+that run, the input's triangle count, every row and warning of the result box, the time of each step, the
+remesher's last output lines (only for the last run since Blender started) and the full report as JSON. It
+holds no mesh data, and folder names under your home folder lose your user name (`~/...`, `/home/<user>/...`).
+Read it before you send it. Add a screenshot of the result and what you did. If you can share the model, say
+so; models are kept private and only their numbers go into the project.
+
+Without Copy Report (an older build), send the **build line**, the settings (Target Quads, Fast/Quality,
+anything changed), a screenshot of the result box, and, if possible, start Blender from a terminal (Windows:
+**Window > Toggle System Console**) and copy the text after `Quadami worker output:`.

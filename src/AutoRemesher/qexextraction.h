@@ -54,6 +54,13 @@ struct QexOutcome {
     size_t droppedFaces = 0;
     // Vertex copies made to cut the island at non-manifold edges and vertices.
     size_t cutVertices = 0;
+    // Our own tracing: the map's UV area, grid line crossings, faces traced,
+    // and whether the area or the faces were over the cap
+    // (QuadExtractor::traceMesh).
+    double traceUvArea = 0.0;
+    size_t traceCrossPoints = 0;
+    size_t traceFaces = 0;
+    bool traceCapped = false;
 };
 
 // The polygons libQEx (Ebke et al. 2013) extracts from the integer-grid map,

@@ -9,6 +9,7 @@
     ab.py compare A B [--set corpus] [--per-run] [--work DIR]
     ab.py build REF [--cmake-arg=... ...] [--work DIR]
     ab.py lane BASE HEAD [--sets closed,corpus,...] [--replicates 1] [--jobs 2] [--work DIR]
+    ab.py run LABEL --app PATH [--target-map FILE] [run options]    another remesher's binary
 
 REF is any commit-ish of this repository (master, HEAD, a SHA); commit work in progress first. A
 and B are run folders printed by `run`, or refs (then without --cli-arg). The work folder (default
@@ -32,6 +33,16 @@ replicate agrees; see "Noise rule" in README.md.
 `lane` decides which test lane a change needs (README.md "Test lanes"): none if BASE and HEAD have the
 same key, light if HEAD's out.obj is byte-identical to BASE's in every run of every set (plain input and one
 float32 replicate by default), full otherwise. It runs both sides without metrics; a later `run` of the same folders adds them.
+
+`run --app PATH` runs another remesher instead of building REF (REF is then only a label): a binary with
+the Qt app's headless interface (`-i in.obj -o out.obj --report r.txt --target-quads N`, started with
+QT_QPA_PLATFORM=offscreen), which upstream AutoRemesher 1.0-1.2 and this repo's qmake app share. Its
+runs go to <work>/runs/app-<binary hash>[+<args>]/ and are measured by the same metrics.py. It has no
+--resolution: the resolution only names the run folder, so `compare` can pair it with a CLI run.
+`--target-map FILE` ({"mesh": {"T": requested}}) asks for another quad count on target T and files the
+run under T, e.g. to match another tool's actual count. `--external-rss` takes the peak RSS from
+/usr/bin/time (a real fork, so no high-water mark inherited from this harness) instead of the CLI's own
+report, in a folder of its own; app runs always measure it that way.
 
 Runs on Linux, macOS and Windows (release-check.yml uses all three); Windows records no peak RSS.
 """
@@ -197,6 +208,17 @@ def prepare_input(src, work, timeout=None):
         pass
 
 
+def cli_value(args, flag):
+    """Value of a CLI flag given as `flag value` or `flag=value` (the CLI accepts both), else None."""
+    value = None
+    for i, a in enumerate(args):
+        if a == flag and i + 1 < len(args):
+            value = args[i + 1]
+        elif a.startswith(flag + "="):
+            value = a[len(flag) + 1:]
+    return value
+
+
 def measure(rec, d, mesh, target, src, work, timeout=None):
     """metrics.json of one run into rec["metrics"]. A failure (seen: out of memory with several large
     inputs measured at once) is tried once more; if that fails too, rec["metrics"] is None and
@@ -217,9 +239,9 @@ def measure(rec, d, mesh, target, src, work, timeout=None):
             xs = [float(line.split()[col]) for line in open(src) if line.startswith("v ")]
             center = (min(xs) + max(xs)) / 2
         cmd += ["--sym-axis", axis, "--sym-center", repr(float(center))]
-    args = rec.get("cli_args") or []
-    if "--sharp-edge" in args[:-1]:  # A1theta and bent quads at the run's own sharp-edge angle
-        cmd += ["--sharp-degrees", args[args.index("--sharp-edge") + 1]]
+    sharp = cli_value(rec.get("cli_args") or [], "--sharp-edge")
+    if sharp is not None:  # A1theta and bent quads at the run's own sharp-edge angle
+        cmd += ["--sharp-degrees", sharp]
     error = ""
     rec.pop("metrics_timeout", None)
     for _ in range(2):
@@ -257,11 +279,11 @@ def copy_capped(src, dst):
             written += len(block)
 
 
-def call_measured(cmd, log, timeout):
+def call_measured(cmd, log, timeout, env=None):
     """Run cmd; return (exit status, peak RSS in MB of that child). On timeout the child is killed
     and the status is "timeout". wait4 gives this child's own rusage, unlike RUSAGE_CHILDREN, which
     mixes the runs of parallel jobs."""
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     reader = threading.Thread(target=copy_capped, args=(p.stdout, log), daemon=True)
     reader.start()
     if not hasattr(os, "wait4"):  # Windows: no rusage, so no peak RSS
@@ -297,8 +319,23 @@ def needs_metrics(rec, metrics_timeout):
     return rec.get("metrics") is None and not (limit and metrics_timeout and metrics_timeout <= limit)
 
 
+TIME = "/usr/bin/time"
+
+
+def app_report(path):
+    """Totals from the Qt app's --report text file: quads, non-quads, vertices and total seconds."""
+    out, total = {}, None
+    for line in open(path):
+        key, _, val = line.strip().partition(":")
+        if key in ("Quads", "Non-quads", "Vertices"):
+            out[key.lower().replace("-", "_")] = int(val)
+        elif key == "Total time":
+            total = float(val.split()[0])
+    return out, total
+
+
 def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jobs, remeasure=False, timeout=None,
-            metrics_timeout=None):
+            metrics_timeout=None, app=False, requested=None, external_rss=False):
     d = os.path.join(out, setname, mesh["id"], f"{res}-t{target}", f"u{k}")
     record_path = os.path.join(d, "record.json")
     src = os.path.join(work, "meshes", mesh["file"])
@@ -309,21 +346,59 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
         # once a run asks for them.
         if (remeasure or (metrics and needs_metrics(rec, metrics_timeout))) and rec["rc"] == 0 \
                 and os.path.exists(os.path.join(d, "out.obj")):
+            # An output is measured only against the input it was made from: a regenerated mesh
+            # (generator or corpus.json change) would pair an old out.obj with a new input.
+            if rec.get("input_sha") and rec["input_sha"] != file_hash(perturbed(src, k, work)):
+                print(f"not measured: {d} was made from another version of {mesh['file']}; delete the folder "
+                      "to run it again", file=sys.stderr)
+                return rec
             measure(rec, d, mesh, target, src, work, metrics_timeout)
             with open(record_path, "w") as fp:
                 json.dump(rec, fp, indent=1)
         return rec
     os.makedirs(d, exist_ok=True)
     inp = perturbed(src, k, work)
-    cmd = [cli, "--input", inp, "--output", os.path.join(d, "out.obj"), "--target-quads", str(target),
-           "--resolution", res, "--report-json", os.path.join(d, "report.json"),
-           "--stage-diagnostics", os.path.join(d, "stages.jsonl")] + cli_args
+    asked = requested or target
+    env = None
+    if app:  # the Qt app's headless mode; it has no --resolution
+        cmd = [cli, "-i", inp, "-o", os.path.join(d, "out.obj"), "--report", os.path.join(d, "report.txt"),
+               "--target-quads", str(asked)] + cli_args
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    else:
+        cmd = [cli, "--input", inp, "--output", os.path.join(d, "out.obj"), "--target-quads", str(asked),
+               "--resolution", res, "--report-json", os.path.join(d, "report.json"),
+               "--stage-diagnostics", os.path.join(d, "stages.jsonl")] + cli_args
+    rss_file = os.path.join(d, "rss.txt")
+    if external_rss:
+        cmd = [TIME, "-f", "%M", "-o", rss_file] + cmd
     t0 = time.time()
     with open(os.path.join(d, "log.txt"), "wb") as log:
-        rc, rss = call_measured(cmd, log, timeout)
+        rc, rss = call_measured(cmd, log, timeout, env)
     rec = {"mesh": mesh["id"], "set": setname, "target": target, "res": res, "replicate": k, "rc": rc,
            "wall": time.time() - t0, "peak_rss_mb": rss, "peak_rss_from": "wait4", "cli_args": cli_args, "jobs": jobs,
            "input_sha": file_hash(inp)}
+    if requested:
+        rec["requested_target"] = requested
+    if external_rss:
+        try:  # GNU time writes "Command exited with non-zero status N" above the value when rc != 0
+            rec["peak_rss_mb"], rec["peak_rss_from"] = int(open(rss_file).read().split()[-1]) / 1024, "time"
+        except (OSError, ValueError, IndexError):
+            rec["peak_rss_mb"], rec["peak_rss_from"] = None, "time failed"
+    if app:
+        rec["app"] = True
+        if os.path.exists(os.path.join(d, "out.obj")):
+            rec["out_sha"] = file_hash(os.path.join(d, "out.obj"))
+        try:
+            rec["output"], rec["time"] = app_report(os.path.join(d, "report.txt"))
+        except (OSError, ValueError) as ex:
+            rec["error"] = str(ex)
+        if rc == 0 and not os.path.exists(os.path.join(d, "out.obj")):
+            rc = rec["rc"] = "no output"  # the app exits 0 when it cannot load the mesh
+        if metrics and rc == 0:
+            measure(rec, d, mesh, target, src, work, metrics_timeout)
+        with open(record_path, "w") as fp:
+            json.dump(rec, fp, indent=1)
+        return rec
     if os.path.exists(os.path.join(d, "out.obj")):
         rec["out_sha"] = file_hash(os.path.join(d, "out.obj"))
     try:
@@ -335,7 +410,7 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
         # wait4's ru_maxrss is at least this harness's own peak: Python starts the CLI with vfork, and
         # exec keeps the parent's high-water mark (research/measurement-audit-2026-10-27.md §10.1).
         cli_rss = (rec["diagnostics"] or {}).get("peak_rss_bytes")
-        if cli_rss:
+        if cli_rss and not external_rss:
             rec["peak_rss_mb"], rec["peak_rss_from"] = cli_rss / (1 << 20), "cli"
     except (OSError, ValueError) as ex:
         rec["error"] = str(ex)
@@ -385,6 +460,20 @@ def run_dir(ref, cli_args, work, cmake_args=()):
     return os.path.join(work, "runs", source_key(ref, cmake_args) + args_tag(cli_args))
 
 
+def app_key(path):
+    return "app-" + file_hash(path)[:12]
+
+
+def run_tag(a):
+    """Folder tag of a `run`: its CLI arguments, a target map and external RSS (app runs always use it)."""
+    extra = list(a.cli_arg)
+    if a.target_map:
+        extra.append("--target-map=" + file_hash(a.target_map))
+    if a.external_rss and not a.app:
+        extra.append("--external-rss")
+    return args_tag(extra)
+
+
 def cmd_run(a):
     defaults, meshes = load_set(a.set)
     if a.only:
@@ -402,12 +491,23 @@ def cmd_run(a):
     for m in meshes:
         if not os.path.exists(os.path.join(a.work, "meshes", m["file"])):
             sys.exit(f"missing {m['file']} in {a.work}/meshes (fetch_meshes.sh, make_synthetic.py; see README.md)")
-    _, cli = build(a.ref, a.work, a.jobs, a.cmake_arg)
-    out = run_dir(a.ref, a.cli_arg, a.work, a.cmake_arg)
+    if (a.app or a.external_rss) and not os.path.exists(TIME):
+        sys.exit(f"--app and --external-rss need GNU time at {TIME}")
+    if a.app:
+        if a.cmake_arg:
+            sys.exit("--app runs a given binary; --cmake-arg does not apply")
+        cli = os.path.abspath(a.app)
+        out = os.path.join(a.work, "runs", app_key(cli) + run_tag(a))
+        source = {"label": a.ref, "app": cli, "app_sha": file_hash(cli), "key": app_key(cli)}
+    else:
+        _, cli = build(a.ref, a.work, a.jobs, a.cmake_arg)
+        out = os.path.join(a.work, "runs", source_key(a.ref, a.cmake_arg) + run_tag(a))
+        source = {"ref": a.ref, "commit": git("rev-parse", a.ref), "key": source_key(a.ref, a.cmake_arg)}
+    target_map = json.load(open(a.target_map)) if a.target_map else {}
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "source.json"), "w") as fp:
-        json.dump({"ref": a.ref, "commit": git("rev-parse", a.ref), "key": source_key(a.ref, a.cmake_arg),
-                   "cli_args": a.cli_arg, "cmake_args": a.cmake_arg}, fp, indent=1)
+        json.dump({**source, "cli_args": a.cli_arg, "cmake_args": a.cmake_arg, "target_map": target_map,
+                   "external_rss": bool(a.app or a.external_rss)}, fp, indent=1)
     targets = [int(t) for t in a.targets.split(",")] if a.targets else defaults["targets"]
     resolutions = a.resolutions.split(",") if a.resolutions else defaults["resolutions"]
     jobs = [(m, t, r, k) for m in meshes for t in targets for r in resolutions for k in range(a.replicates + 1)]
@@ -420,7 +520,8 @@ def cmd_run(a):
             list(pool.map(lambda m: prepare_input(os.path.join(a.work, "meshes", m["file"]), a.work, metrics_timeout),
                           pending.values()))
         futs = [pool.submit(run_one, cli, m, a.set, t, r, k, out, a.cli_arg, a.work, not a.no_metrics,
-                            a.jobs, a.remeasure, a.timeout, metrics_timeout)
+                            a.jobs, a.remeasure, a.timeout, metrics_timeout, bool(a.app),
+                            target_map.get(m["id"], {}).get(str(t)), bool(a.app or a.external_rss))
                 for m, t, r, k in jobs]
         for f in futs:
             rec = f.result()
@@ -491,7 +592,7 @@ def value(r, k):
     if k == "crease_bent_1k": return (m.get("creases") or {}).get("bent_quads_per_1k")
     if k == "marked_cov": return (m.get("marked") or {}).get("coverage")
     if k == "marked_bevel": return (m.get("marked") or {}).get("bevel_median")
-    if k == "count_err": return abs(o["quads"] / r["target"] - 1) if o.get("quads") else None
+    if k == "count_err": return abs(o["quads"] / r["target"] - 1) if o.get("quads") is not None else None
     if k == "energy_ratio":
         e = [(c["continuous_energy"], c["rounded_energy"]) for c in r.get("cover") or []
              if c.get("continuous_energy") and c.get("rounded_energy") is not None]
@@ -551,12 +652,22 @@ def cmd_compare(a):
           f"(only in A {len(set(A) - set(B))}, only in B {len(set(B) - set(A))})\n")
     if not keys:
         return
-    failed = [(k, side) for k in keys for side, D in (("A", A), ("B", B)) if any(D[k][u]["rc"] != 0 for u in reps)]
+    # An output without faces (metrics.py's "ok": false; the CLI normally exits 2 then) failed too.
+    failed = [(k, side) for k in keys for side, D in (("A", A), ("B", B))
+              if any(D[k][u]["rc"] != 0 or (D[k][u].get("metrics") or {}).get("ok") is False for u in reps)]
     if failed:
-        print("**Failed runs** (non-zero exit in some replicate; left out below): "
+        print("**Failed runs** (non-zero exit or no output faces in some replicate; left out below): "
               + ", ".join(f"{side} {k[0]} {k[1]} {k[2]}" for k, side in failed) + "\n")
     bad = {k for k, _ in failed}
     keys = [k for k in keys if k not in bad]
+    # A and B must have run the same input: a side made before a mesh was regenerated (generator or
+    # corpus.json change) is another experiment, not a fix or a regression.
+    other = [k for k in keys if any(A[k][u].get("input_sha") and B[k][u].get("input_sha")
+                                    and A[k][u]["input_sha"] != B[k][u]["input_sha"] for u in reps)]
+    if other:
+        print("**Different inputs** (A and B ran another version of the mesh; left out below, delete the older "
+              "side's folders to run them again): " + ", ".join(f"{k[0]} {k[1]} {k[2]}" for k in other) + "\n")
+    keys = [k for k in keys if k not in set(other)]
     # metrics.py before 2026-10-22 measured flipped_vs_input against the raw input's normals and had no
     # validity block; a side measured that way is not comparable on those rows.
     for side, D, p in (("A", A, pa), ("B", B, pb)):
@@ -573,7 +684,7 @@ def cmd_compare(a):
                 if D[k][u].get("metrics"):
                     t = D[k][u].get("metrics_tool")
                     tools[side].add(json.dumps(t, sort_keys=True) if t else "unrecorded")
-    if len(set().union(*tools.values()) - {"unrecorded"}) > 1:
+    if len(set().union(*tools.values())) > 1:  # records before 2026-10-27 name no tool: a tool of their own
         print("**A and B were measured by different metrics code** (metrics.py content or numpy/scipy/libigl); "
               "metric rows can differ for that reason alone. `ab.py run <ref> --remeasure` with the same flags "
               "measures a side again with this checkout:")
@@ -607,12 +718,17 @@ def cmd_compare(a):
         agg = sum if metric in COUNTS else st.mean
         shift = 1 if metric in COUNTS else 0
         logs = [math.log((y + shift) / (x + shift)) for x, y in pairs if x + shift > 0 and y + shift > 0]
-        gm = math.exp(st.mean(logs)) if logs else float("nan")
+        # A row that can go negative (sj_p1 on folded quads) would drop exactly those runs from the ratio,
+        # so it shows the mean difference instead. (Zeros still drop out: a known item for the metrics freeze.)
+        signed = any(x < 0 or y < 0 for x, y in pairs)
+        ratio = f"Δ {st.mean(y - x for x, y in pairs):+.4g}" if signed else \
+            (f"×{math.exp(st.mean(logs)):.3f}" if logs else "×nan")
         better = sum(1 for x, y in pairs if (y > x if metric in HIGHER_IS_BETTER else y < x))
         worse = sum(1 for x, y in pairs if (y < x if metric in HIGHER_IS_BETTER else y > x))
-        print(f"| {metric} | {fmt(agg(x for x, _ in pairs))} | {fmt(agg(y for _, y in pairs))} | ×{gm:.3f} | "
+        print(f"| {metric} | {fmt(agg(x for x, _ in pairs))} | {fmt(agg(y for _, y in pairs))} | {ratio} | "
               f"{better} / {worse} |")
-    print("\nCounts are summed over runs (geo-mean of (B+1)/(A+1)), the rest averaged. time is the CLI's own "
+    print("\nCounts are summed over runs (geo-mean of (B+1)/(A+1)), the rest averaged (Δ: mean B − A on a row "
+          "with negative values). time is the CLI's own "
           "total under --jobs parallel load: use it for large effects only.\n")
     # Gates like "no run over 2× master's time or memory" look at the worst run, not the mean.
     for metric in ("time", "peak_rss_mb"):
@@ -656,18 +772,22 @@ def cmd_compare(a):
             print(f"| {metric} | {lo} | {hi} | {st.median(cvs):.2f} |" if cvs else f"| {metric} | {lo} | {hi} | – |")
         print()
 
-    # Topology: a discrete outcome, so only unanimous replicates count as a claim.
-    ta = {k: [topology_ok(A[k][u]) for u in reps] for k in keys}
-    tb = {k: [topology_ok(B[k][u]) for u in reps] for k in keys}
-    if any(None in v for v in list(ta.values()) + list(tb.values())):
-        print("Topology: not measured in every run (run without --no-metrics).")
-    else:
+    # Topology: a discrete outcome, so only unanimous replicates count as a claim. Runs not measured in
+    # every replicate on both sides (metrics.py failed or timed out, --no-metrics) are left out by name,
+    # so one of them does not hide the verdict on all the others.
+    tkeys = [k for k in keys if all(topology_ok(D[k][u]) is not None for D in (A, B) for u in reps)]
+    if len(tkeys) < len(keys):
+        print(f"Topology: {len(keys) - len(tkeys)} runs not measured in every replicate on both sides, left out: "
+              + ", ".join(f"{k[0]} {k[1]} {k[2]}" for k in keys if k not in set(tkeys)))
+    ta = {k: [topology_ok(A[k][u]) for u in reps] for k in tkeys}
+    tb = {k: [topology_ok(B[k][u]) for u in reps] for k in tkeys}
+    if tkeys:
         n = len(reps)
-        fixed = [k for k in keys if not any(ta[k]) and all(tb[k])]
-        broken = [k for k in keys if all(ta[k]) and not any(tb[k])]
-        noisy = [k for k in keys if 0 < sum(ta[k]) < n or 0 < sum(tb[k]) < n]
+        fixed = [k for k in tkeys if not any(ta[k]) and all(tb[k])]
+        broken = [k for k in tkeys if all(ta[k]) and not any(tb[k])]
+        noisy = [k for k in tkeys if 0 < sum(ta[k]) < n or 0 < sum(tb[k]) < n]
         avg = lambda T: sum(sum(v) for v in T.values()) / n  # noqa: E731
-        print(f"Topology same as input: A {avg(ta):.1f}, B {avg(tb):.1f} of {len(keys)} runs "
+        print(f"Topology same as input: A {avg(ta):.1f}, B {avg(tb):.1f} of {len(tkeys)} runs "
               f"(mean over {n} replicate{'s' if n > 1 else ''})")
         name = lambda k: f"{k[0]} {k[1]} {k[2]}"  # noqa: E731
         if n == 1:
@@ -678,11 +798,12 @@ def cmd_compare(a):
             print("- replicates disagree (noise, count neither way): "
                   + ", ".join(f"{name(k)} (A {sum(ta[k])}/{n}, B {sum(tb[k])}/{n})" for k in noisy))
         # Per island (validity.islands_same_as_input): also catches a handle or hole moved between
-        # islands and non-manifold vertices, which the global check above cannot see.
-        ia = [island_ok(A[k][u]) for k in keys for u in reps]
-        ib = [island_ok(B[k][u]) for k in keys for u in reps]
+        # islands, an island dropped (shrunk to a blob of the same topology) and non-manifold vertices,
+        # which the global check above cannot see.
+        ia = [island_ok(A[k][u]) for k in tkeys for u in reps]
+        ib = [island_ok(B[k][u]) for k in tkeys for u in reps]
         if None not in ia + ib:
-            print(f"Topology same as input per island: A {sum(ia) / n:.1f}, B {sum(ib) / n:.1f} of {len(keys)} runs")
+            print(f"Topology same as input per island: A {sum(ia) / n:.1f}, B {sum(ib) / n:.1f} of {len(tkeys)} runs")
 
     # libQEx fallbacks (TODO 6.1b): how often B's islands went to our tracing, why, and what those
     # replicate-runs look like on both sides.
@@ -823,6 +944,11 @@ def parser():
     r.add_argument("--metrics-timeout", type=float, default=1800,
                    help="kill metrics.py on one run after this many seconds (default 1800, 0 = no limit); "
                         "recorded as metrics None with metrics_error")
+    r.add_argument("--app", help="run this binary (the Qt app's headless interface, e.g. upstream "
+                                 "AutoRemesher) instead of building REF's CLI; REF is then a label")
+    r.add_argument("--target-map", help='JSON {"mesh": {"T": requested}}: ask for another count on target T')
+    r.add_argument("--external-rss", action="store_true",
+                   help="peak RSS from /usr/bin/time instead of the CLI's report (own run folder)")
     c = sub.add_parser("compare", help="compare run folder (or ref) A with B")
     c.add_argument("a")
     c.add_argument("b")

@@ -14,6 +14,12 @@ body:
         **Everything here is public.** Do not attach a model you are not allowed to share, or one that
         shows a real person. Without the model, the build line, settings and result rows are often enough.
         A security problem goes to [a private report](https://github.com/KajetanMuczynski/quadami/security/advisories/new) instead.
+  - type: textarea
+    id: copied-report
+    attributes:
+      label: Copied report
+      description: Optional, but it answers most questions below. Press Copy Report in the Quadami panel's result box and paste here. Then write "in report" in the fields it covers (build line, Blender version, Target Quads, result box).
+      render: text
   - type: input
     id: build
     attributes:

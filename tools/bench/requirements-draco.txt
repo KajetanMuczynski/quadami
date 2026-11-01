@@ -1,0 +1,9 @@
+# DracoPy for Draco-compressed glTF sources (fetch_external.py and its test), next to
+# requirements.txt: the bench tests in ci.yml. Kept out of requirements.txt, which release-check's
+# check job installs and which needs no DracoPy. Pinned with hashes like requirements.txt (CPython
+# 3.12 wheels for Linux x86-64, Windows x64 and macOS arm64). Install with:
+#   python -m pip install --require-hashes --no-deps -r tools/bench/requirements.txt -r tools/bench/requirements-draco.txt
+DracoPy==2.2.0 \
+    --hash=sha256:862a3e20c129d05ef1cdf54216c8b122fb0e46ecfd01112d86ed1736e58a5209 \
+    --hash=sha256:95d5abce48ba75d9ebc2cf8ded97904057c69f25c4d88aaba265d22493867a1a \
+    --hash=sha256:d9a1f1d7a627b4deb4c86cf567d40f04037025104b2954d6589d846e2a210891

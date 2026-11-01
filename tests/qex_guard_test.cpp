@@ -25,9 +25,11 @@
 // forever, overflowed the heap, or grew until memory ran out, so the caller
 // can fall back. ctest's timeout and sanitizer builds catch a guard that stops
 // working. The handle count that decides whether a libQEx island is traced
-// again is checked on small surfaces.
+// again is checked on small surfaces. Our own tracing, the fallback, stops
+// under the same bound when the map's area is far over the target.
 
 #include <AutoRemesher/QexExtraction>
+#include <AutoRemesher/QuadExtractor>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -198,6 +200,28 @@ int main(int argc, char* argv[])
         AutoRemesher::extractWithQex(square.vertices, square.triangles, square.uvs,
             limitsFor(square, 16), &vertices, &polygons, &outcome);
         expect(0 == outcome.cutVertices, "a manifold square is not cut");
+    }
+
+    {
+        // The fallback tracer: a square with 16 grid units of area traces at a
+        // target of 1 (bound 8 + 1,000); the same square at 10 grid units per
+        // cell, 6,400 in all, is left empty before any tracing.
+        for (const double uvPerCell : { 0.5, 10.0 }) {
+            const Map square = makeSquare(8, uvPerCell);
+            AutoRemesher::QuadExtractor extractor(&square.vertices, &square.triangles, &square.uvs);
+            extractor.setUseQex(false);
+            extractor.setTargetQuadCount(1);
+            const bool extracted = extractor.extract();
+            const bool capped = extractor.qexOutcome().traceCapped;
+            if (uvPerCell < 1.0) {
+                expect(extracted && !capped, "a square within the bound is traced");
+                expect(!extractor.remeshedQuads().empty(), "a traced square has faces");
+            } else {
+                expect(!extracted && capped, "a square far over the bound is not traced");
+                expect(extractor.remeshedQuads().empty(), "an untraced square has no faces");
+                expect(0 == extractor.qexOutcome().traceCrossPoints, "the cap comes before the tracing");
+            }
+        }
     }
 
     {
