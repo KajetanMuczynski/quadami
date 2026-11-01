@@ -193,6 +193,8 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
             // ratio from the environment; this flag only names the run.
             if ("off" != value)
                 setenv("AUTOREMESHER_AUTO_RINGS", value.c_str(), 1);
+        } else if ("--ring-max-cross" == name) {
+            setenv("AUTOREMESHER_RING_MAXCROSS", value.c_str(), 1);
         } else if ("--fold-repair" == name) {
             if ("on" != value && "off" != value) {
                 std::fprintf(stderr, "Error: --fold-repair must be on or off, not %s\n", value.c_str());
