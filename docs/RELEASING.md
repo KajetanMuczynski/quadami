@@ -71,7 +71,7 @@ Copy into the release PR's description and tick each line there.
          data, sanitizer, sharp-edge tolerance, hang and crash guards, opt-in smoothing, the
          thin-part wording and lower memory; cone tips and crease preservation moved to 0.3. For 0.2.1
          (Kajetan, 2026-10-31): the fallback tracer cap (#153), no copying of flooded marks (#154) and
-         Copy Report (#160).
+         Copy Report (#160); 2026-11-03: the twisted-quad count (#167).
 2. **Real-machine checks** (CI runs Blender without a window): install the master zip from CI on
    Kajetan's Linux laptop and remesh a sculpt; Windows and a Mac when one is at hand (unsigned
    program: SmartScreen and Gatekeeper behaviour are untested, write down what happened).

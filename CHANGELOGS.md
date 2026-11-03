@@ -9,6 +9,9 @@ Blender add-on
 - Copy Report button in the result box: build, versions, settings, result rows, warnings, step
   times, the worker's last output and the report JSON on the clipboard; no mesh data, user names
   redacted from paths; works after a failed run
+- Folded faces counts twisted quads too (two-diagonal test, quads bent along an input crease of 90° or
+  more left out) and shows `N (T twisted)`; interface 1.11 adds `twisted_quads`,
+  `folded_or_twisted_faces` and `crease_diagonal_quads`; `folded_faces` is unchanged
 - Keep from Original no longer copies a mark that is on more than half of a large mesh's edges
   (zigzag sharp paths on FBX and OBJ imports)
 
