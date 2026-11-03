@@ -383,21 +383,67 @@ def island_topology(nv, first_vertex, E, bnd, used, vlab, nlab):
     return chi.astype(np.int64), nb
 
 
-def folded_faces(V, faces, sizes):
-    """Faces with a corner turning against the face's area vector (scaled Jacobian <= 0), degenerate
-    faces left out: the core's `folded_faces` (measureMesh in remesh.cpp), for every face size, so
-    a pleated pentagon counts too (V2 tests quads only)."""
+def folded_mask(V, faces):
+    """Per face: (folded, twisted), degenerate faces False in both, as the core's measureMesh
+    (remesh.cpp). Folded: a corner turns against the face's area vector (scaled Jacobian <= 0), any
+    face size. Twisted: a quad folded under both diagonals (each split into two triangles has them
+    facing apart), which a saddle-shaped quad can be with every corner positive."""
     fid, v, nx, pv = corners(faces)
     N = np.zeros((len(faces), 3))
     np.add.at(N, fid, np.cross(V[v], V[nx]))  # twice the area vector
     e1, e2 = V[nx] - V[v], V[pv] - V[v]
     longest = np.zeros(len(faces))
     np.maximum.at(longest, fid, np.sum(e1 * e1, 1))
-    repeated = np.array([len(set(f)) != len(f) for f in faces])
+    repeated = np.array([len(set(f)) != len(f) for f in faces], dtype=bool)
     degenerate = repeated | (0.5 * np.linalg.norm(N, axis=1) <= 1e-12 * longest)
     bad = np.zeros(len(faces), bool)
     np.logical_or.at(bad, fid, np.einsum("ij,ij->i", np.cross(e1, e2), N[fid]) <= 0)
-    return int(np.sum(bad & ~degenerate))
+    twisted = np.zeros(len(faces), bool)
+    qi = np.array([i for i, f in enumerate(faces) if len(f) == 4], dtype=np.int64)
+    if len(qi):
+        Q = np.array([faces[i] for i in qi], dtype=np.int64)
+        a, b, c, d = (V[Q[:, i]] for i in range(4))
+        dot = lambda x, y: np.einsum("ij,ij->i", x, y)
+        twisted[qi] = ((dot(np.cross(b - a, c - a), np.cross(c - a, d - a)) < 0)
+                       & (dot(np.cross(c - b, d - b), np.cross(d - b, a - b)) < 0))
+    return bad & ~degenerate, twisted & ~degenerate
+
+
+def crease_diagonal_mask(Vin, creases, V, faces, twisted):
+    """Twisted quads bent along an input crease, as discountCreaseDiagonalQuads (remesh.cpp): a diagonal
+    with both ends within 1e-6 of its length of a crease edge of 90 degrees or more (`creases`, input
+    vertex pairs) and its midpoint within 0.05 of its length of one."""
+    out = np.zeros(len(faces), bool)
+    idx = np.where(twisted)[0]
+    if not len(idx) or not len(creases):
+        return out
+    A, B = Vin[creases[:, 0]], Vin[creases[:, 1]]
+    tree = cKDTree(0.5 * (A + B))
+    half = 0.5 * float(np.linalg.norm(B - A, axis=1).max())
+
+    def near(p, tol):
+        cand = tree.query_ball_point(p, half + tol)
+        if not cand:
+            return False
+        a, ab = A[cand], B[cand] - A[cand]
+        t = np.clip(np.einsum("ij,ij->i", p - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-300), 0, 1)
+        return bool(np.min(np.linalg.norm(a + t[:, None] * ab - p, axis=1)) <= tol)
+
+    for i in idx:
+        q = faces[i]
+        for p0, p1 in ((q[0], q[2]), (q[1], q[3])):
+            L = float(np.linalg.norm(V[p1] - V[p0]))
+            if near(V[p0], 1e-6 * L) and near(V[p1], 1e-6 * L) and near(0.5 * (V[p0] + V[p1]), 0.05 * L):
+                out[i] = True
+                break
+    return out
+
+
+def folded_faces(V, faces, sizes):
+    """Faces with a corner turning against the face's area vector (scaled Jacobian <= 0), degenerate
+    faces left out: the core's `folded_faces` (measureMesh in remesh.cpp), for every face size, so
+    a pleated pentagon counts too (V2 tests quads only)."""
+    return int(folded_mask(V, faces)[0].sum())
 
 
 def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, reversed_out, h, in_tri, d, out_face, Ftri):
@@ -462,8 +508,12 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
     # Twice the genus: 2 * components - chi - boundary loops (odd only for a non-orientable surface).
     g2_in = 2 - in_chi - in_loops
     g2_out = 2 * k - chi_sum - loops_sum
+    folded, twisted = folded_mask(V, faces)
+    along_crease = crease_diagonal_mask(Vin, inp["creases_90_raw"], V, faces, twisted)
+    twisted &= ~along_crease
     res = {"non_manifold_vertices": nonmanifold_vertices(faces, len(V)),
-           "folded_faces": folded_faces(V, faces, sizes),
+           "folded_faces": int(folded.sum()), "twisted_quads": int(twisted.sum()),
+           "folded_or_twisted_faces": int((folded | twisted).sum()), "crease_diagonal_quads": int(along_crease.sum()),
            "islands_input": int(nin), "islands_input_non_manifold": int((~manifold_in).sum()),
            "islands_output": int(nout), "islands_dropped": int(dropped.sum()),
            "islands_split": int(np.sum((k > 1) & manifold_in)), "islands_merged": merged,
@@ -712,6 +762,9 @@ def input_side(input_path, cache_dir=None):
                 return {k: z[k] for k in z.files}
     Vin, fin = read_obj(input_path)
     Fin = triangulate(fin)
+    # Edges of 90 degrees and more of the input as the CLI hands it to the core (no weld, the file's
+    # winding): the creases discountCreaseDiagonalQuads (remesh.cpp) checks twisted quads against.
+    creases_90_raw = sharp_edges(Vin, Fin, np.nextafter(90.0 - SHARP_TOLERANCE_DEG, -np.inf))
     used_raw = np.unique(Fin)
     Fin, welded = weld_seams(Vin, Fin, np.linalg.norm(Vin[used_raw].max(0) - Vin[used_raw].min(0)) if len(used_raw) else 0.0)
     used_in = np.unique(Fin)
@@ -742,7 +795,7 @@ def input_side(input_path, cache_dir=None):
          "components_input": np.int64(len(np.unique(comps(len(Vin), ein)[used_in]))),
          "boundary_loops_input": np.int64(loops(len(Vin), ein_u[ein_c == 1])),
          "sharp_edges": sharp, "sharp_angles": sharp_edge_angles(Vin, Fin_oriented, sharp),
-         "marked_edges": read_obj_lines(input_path),
+         "marked_edges": read_obj_lines(input_path), "creases_90_raw": creases_90_raw,
          "tri_island": vlab[Fin[:, 0]], "island_euler": island_euler, "island_loops": island_loops,
          "island_non_manifold": island_nm, "island_area": np.bincount(vlab[Fin[:, 0]], weights=tri_area, minlength=nisl),
          "Fin_oriented": Fin_oriented, "input_reoriented": np.int64(reoriented),
