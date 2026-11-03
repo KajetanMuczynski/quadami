@@ -141,6 +141,42 @@ class Validity(unittest.TestCase):
         self.assertAlmostEqual(v["area_uncovered"], 0.5, delta=0.02)
         self.assertFalse(v["islands_same_as_input"])
 
+    def test_split_seam_is_welded_like_the_core(self):
+        # The input's vertex ring at u = 0 is written twice (a UV seam export): the core welds it first,
+        # so a closed output is right and an output that kept the seam open added two holes.
+        inp = grid(96, 48, False, True, torus_point, quads=False)
+        r = self.run_metrics(inp, self.torus_out())
+        self.assertEqual(r["topology"]["input_welded_vertices"], 48)
+        self.assertTrue(r["topology"]["same_as_input"])
+        self.assertTrue(r["validity"]["islands_same_as_input"])
+        v = self.run_metrics(inp, grid(40, 16, False, True, torus_point))["validity"]
+        self.assertEqual((v["holes_added"], v["islands_same_as_input"]), (2, False))
+
+    def test_double_sided_sheet_is_not_welded(self):
+        # Two coincident sheets, each with its own vertices and the other winding: their triangles lie on
+        # the same side of every boundary edge, so the core keeps two sheets (inputsanitizer.cpp).
+        V, F = sheet(8, 8, 1.0)
+        V2, F2 = join((V, F), (V, [f[::-1] for f in F]))
+        Ft = np.array([t for f in F2 for t in ([f[0], f[1], f[2]], [f[0], f[2], f[3]])])
+        _, welded = metrics.weld_seams(V2, Ft, np.sqrt(2))
+        self.assertEqual(welded, 0)
+
+    def test_repeated_vertex_is_not_a_hole(self):
+        # A quad written a b c c is a degenerate face, not a boundary edge from c to c.
+        V, F = self.torus_out()
+        F = [list(f) for f in F]
+        F[0] = F[0][:3] + [F[0][2]]
+        F.append([F[0][0], F[0][2], self.torus_out()[1][0][3]])
+        r = self.run_metrics(self.torus_in(), (V, F))
+        self.assertEqual((r["topology"]["boundary_edges"], r["degenerate"]["repeated_vertex"]), (0, 1))
+        self.assertTrue(r["validity"]["islands_same_as_input"])
+
+    def test_zero_normal_face_is_flipped_in_neither_orientation(self):
+        V, F = self.torus_out()
+        V = np.vstack([V, V[F[0][0]]])
+        F = [list(f) for f in F] + [[F[0][0], len(V) - 1, F[0][1]]]  # two corners at one point: normal 0
+        for out in ((V, F), (V, [f[::-1] for f in F])):
+            self.assertEqual(self.run_metrics(self.torus_in(), out)["flipped"]["faces_vs_input"], 0)
     def test_island_shrunk_to_a_blob_is_dropped_not_same(self):
         # The second torus comes out as a much smaller torus at its centre: one output island of the
         # same topology votes for it, but none of its area lies within one output edge of the output.
@@ -201,6 +237,36 @@ class Validity(unittest.TestCase):
         faces = [[0, 1, 2, 3, 4]]
         self.assertEqual(metrics.folded_faces(P, faces, np.array([5])), 1)
         self.assertEqual(metrics.folded_faces(V, [[0, 1, 2, 3]], np.array([4])), 0)
+
+    def test_twisted_quads_like_the_core(self):
+        # The cases of tests/quality_report_test.cpp: a saddle at 0.5 is twisted with no corner turned
+        # back (not folded), at 0.25 neither; a flat bow-tie is both; a flat dart is folded only.
+        def masks(P):
+            folded, twisted = metrics.folded_mask(np.array(P, float), [[0, 1, 2, 3]])
+            return bool(folded[0]), bool(twisted[0])
+        self.assertEqual(masks([[0, 0, 0.5], [1, 0, -0.5], [1, 1, 0.5], [0, 1, -0.5]]), (False, True))
+        self.assertEqual(masks([[0, 0, 0.25], [1, 0, -0.25], [1, 1, 0.25], [0, 1, -0.25]]), (False, False))
+        self.assertEqual(masks([[0, 0, 0], [3, 1, 0], [3, 0, 0], [0, 2, 0]]), (True, True))
+        self.assertEqual(masks([[0, 0, 0], [2, 0, 0], [0.5, 0.5, 0], [0, 2, 0]]), (True, False))
+        folded, twisted = metrics.folded_mask(np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0]], float), [[0, 1, 1, 2]])
+        self.assertEqual((bool(folded[0]), bool(twisted[0])), (False, False))  # repeated corner: degenerate
+
+    def test_twisted_quad_along_a_crease_like_the_core(self):
+        # tests/quality_report_test.cpp creaseDiagonalFailures: a quad sheared across a crease with its
+        # diagonal on it is bent along the crease, apart from twisted ones, if the crease is >= 90 degrees.
+        c80, s80 = np.cos(np.radians(80)), np.sin(np.radians(80))
+        V = np.array([[0, 0, 0], [0.9, 0.3, 0], [1, 0, 0], [0.1, 0.3 * c80, -0.3 * s80]], float)
+        faces = [[0, 1, 2, 3]]
+        twisted = metrics.folded_mask(V, faces)[1]
+        self.assertTrue(twisted[0])
+
+        def along(degrees, dx):
+            a = np.radians(180 - degrees)
+            Vin = np.array([[-1 + dx, 0, 0], [2 + dx, 0, 0], [0.5 + dx, 2, 0],
+                            [0.5 + dx, 2 * np.cos(a), -2 * np.sin(a)]], float)
+            creases = metrics.sharp_edges(Vin, np.array([[0, 1, 2], [1, 0, 3]]), 90.0 - 0.1)
+            return bool(metrics.crease_diagonal_mask(Vin, creases, V, faces, twisted)[0])
+        self.assertEqual((along(100, 0), along(100, 10), along(60, 0)), (True, False, False))
 
 
 class TurnedOver(unittest.TestCase):

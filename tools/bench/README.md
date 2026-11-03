@@ -116,7 +116,10 @@ $P tools/bench/ab.py run HEAD --set closed   # genus check; also --set suzanne
   libQEx gave up and our own tracing extracted the faces (blank for cores before TODO 6.1b; compare
   `--cli-arg=--extractor=trace` against the default to see what libQEx itself does). Validity rows
   (2026-10-22, `metrics.json` → `validity`): `folded_faces` (any face size, the CLI's definition),
-  `nm_vertices`, and per input island, matched to output islands by nearest input triangle:
+  `twisted_quads` (quads folded under both diagonals, most of which `folded_faces` misses, without those
+  bent along an input crease of 90° or more through a diagonal, which `validity` counts as
+  `crease_diagonal_quads`; the CLI's definitions since interface 1.11, blank for runs measured before
+  it), `nm_vertices`, and per input island, matched to output islands by nearest input triangle:
   `holes_added` / `holes_closed`, `handles_lost` / `handles_added`, `islands_dropped` (no output or under
   half its area within one output edge), `islands_merged`, `islands_changed` (Euler characteristic or
   loops differ, or split), `area_uncovered` and `area_wrong_side` (input area within one output edge
