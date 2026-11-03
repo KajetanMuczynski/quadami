@@ -108,12 +108,19 @@ def build(ref, work, jobs, cmake_args=()):
         return key, cli
     src = os.path.join(root, "src")
     os.makedirs(src, exist_ok=True)
-    # tarfile, not tar: Windows has no tar that reads git's output reliably.
-    archive = subprocess.Popen(["git", "-C", REPO, "archive", git("rev-parse", ref)], stdout=subprocess.PIPE)
-    with tarfile.open(fileobj=archive.stdout, mode="r|") as tar:
+    # To a file first, under a time limit, then tarfile (not tar: Windows has no tar that reads git's
+    # output reliably). A release-check job on Windows hung for 4 h before its first line twice
+    # (PR #167); each step now says what it does, and a stuck export fails instead of hanging.
+    archive = os.path.join(root, "src.tar")
+    print(f"exporting {ref} to {archive}", flush=True)
+    try:
+        subprocess.run(["git", "-C", REPO, "archive", "--output", archive, git("rev-parse", ref)],
+                       check=True, timeout=600)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        sys.exit(f"git archive {ref} failed: {e}")
+    with tarfile.open(archive) as tar:
         tar.extractall(src, filter="data")
-    if archive.wait() != 0:
-        sys.exit(f"git archive {ref} failed")
+    os.remove(archive)
     log = os.path.join(root, "build.log")
     print(f"building {ref} ({key}) with {jobs} jobs, log {log}", flush=True)
     nice = ["nice", "-n", "10"] if shutil.which("nice") else []
