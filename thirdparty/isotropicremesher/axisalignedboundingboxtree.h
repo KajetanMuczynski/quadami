@@ -90,6 +90,14 @@ public:
         }
     }
     
+    // The boxes of this tree that intersect one box, in the order test()
+    // reports them against a tree built from that box alone (Quadami: the
+    // per-query tree cost an allocation per call in vertex projection).
+    void queryBox(const AxisAlignedBoudingBox &box, std::vector<size_t> *indices) const
+    {
+        queryNode(m_root, box, indices);
+    }
+
     void test(const Node *first, const Node *second,
         const std::vector<AxisAlignedBoudingBox> *secondBoxes,
         std::vector<std::pair<size_t, size_t>> *pairs) const
@@ -98,6 +106,21 @@ public:
     }
     
 private:
+    void queryNode(const Node *node, const AxisAlignedBoudingBox &box, std::vector<size_t> *indices) const
+    {
+        if (!node->boundingBox.intersectWith(box))
+            return;
+        if (node->isLeaf()) {
+            for (const auto &a: node->boxIndices) {
+                if ((*m_boxes)[a].intersectWith(box))
+                    indices->push_back(a);
+            }
+            return;
+        }
+        queryNode(node->left, box, indices);
+        queryNode(node->right, box, indices);
+    }
+
     const std::vector<AxisAlignedBoudingBox> *m_boxes = nullptr;
     Node *m_root = nullptr;
     std::vector<size_t> m_boxIndicesOrderList;

@@ -509,6 +509,11 @@ void IsotropicRemesher::projectVertices()
     const std::vector<std::vector<size_t>> *projTriangles = m_smoothTriangles.empty() ? m_triangles : &m_smoothTriangles;
     const std::vector<Vector3> *projNormals = m_smoothTriangleNormals.empty() ? m_triangleNormals : &m_smoothTriangleNormals;
 
+    // Reused across vertices (Quadami): allocating them per vertex cost
+    // about as much as the projection itself.
+    std::vector<size_t> candidates;
+    std::vector<std::pair<Vector3, double>> hits;
+
     for (IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr);
             nullptr != vertex;
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
@@ -519,8 +524,7 @@ void IsotropicRemesher::projectVertices()
         if (nullptr == startHalfedge)
             continue;
 
-        std::vector<AxisAlignedBoudingBox> rayBox(1);
-        auto &box = rayBox[0];
+        AxisAlignedBoudingBox box;
         box.update(vertex->position);
 
         IsotropicHalfedgeMesh::Halfedge *loopHalfedge = startHalfedge;
@@ -539,24 +543,21 @@ void IsotropicRemesher::projectVertices()
             loopHalfedge = loopHalfedge->oppositeHalfedge->nextHalfedge;
         } while (loopHalfedge != startHalfedge);
 
-        AxisAlignedBoudingBoxTree testTree(&rayBox,
-            {0},
-            rayBox[0]);
-        std::vector<std::pair<size_t, size_t>> pairs;
-        m_axisAlignedBoundingBoxTree->test(m_axisAlignedBoundingBoxTree->root(), testTree.root(), &rayBox, &pairs);
+        candidates.clear();
+        m_axisAlignedBoundingBoxTree->queryBox(box, &candidates);
 
-        std::vector<std::pair<Vector3, double>> hits;
+        hits.clear();
 
         auto boundingBoxSize = box.upperBound() - box.lowerBound();
         Vector3 segment = vertex->_normal * (boundingBoxSize[0] + boundingBoxSize[1] + boundingBoxSize[2]);
-        for (const auto &it: pairs) {
+        for (const size_t triangleIndex: candidates) {
             // The segment runs both ways along the normal and reaches well
             // past the one ring, so on thin parts it also hits the surface
             // facing the other way. Landing there tears the neighborhood open.
-            if (Vector3::dotProduct((*projNormals)[it.first], vertex->_normal) <= 0)
+            if (Vector3::dotProduct((*projNormals)[triangleIndex], vertex->_normal) <= 0)
                 continue;
-            const auto &triangle = (*projTriangles)[it.first];
-            std::vector<Vector3> trianglePositions = {
+            const auto &triangle = (*projTriangles)[triangleIndex];
+            const Vector3 trianglePositions[3] = {
                 (*projVertices)[triangle[0]],
                 (*projVertices)[triangle[1]],
                 (*projVertices)[triangle[2]]
@@ -564,12 +565,12 @@ void IsotropicRemesher::projectVertices()
             Vector3 intersection;
             if (Vector3::intersectSegmentAndPlane(vertex->position - segment, vertex->position + segment,
                     trianglePositions[0],
-                    (*projNormals)[it.first],
+                    (*projNormals)[triangleIndex],
                     &intersection)) {
-                std::vector<Vector3> normals;
+                Vector3 normals[3];
                 for (size_t i = 0; i < 3; ++i) {
                     size_t j = (i + 1) % 3;
-                    normals.push_back(Vector3::normal(intersection, trianglePositions[i], trianglePositions[j]));
+                    normals[i] = Vector3::normal(intersection, trianglePositions[i], trianglePositions[j]);
                 }
                 if (Vector3::dotProduct(normals[0], normals[1]) > 0 &&
                         Vector3::dotProduct(normals[0], normals[2]) > 0) {

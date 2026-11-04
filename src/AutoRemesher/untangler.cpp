@@ -79,12 +79,18 @@ namespace {
             - ratio * (dn * dd.transpose() + dd * dn.transpose())
             + numerator * (2.0 * c.first * c.first * inverse * inverse * inverse - c.second * inverse * inverse) * dd * dd.transpose()
             - numerator * ratio * ddd;
-        const Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> eigen(*hessian);
-        Eigen::Vector4d values = eigen.eigenvalues();
-        if (values.minCoeff() < 0.0) {
-            for (int k = 0; k < 4; ++k)
-                values[k] = std::max(values[k], 0.0);
-            *hessian = eigen.eigenvectors() * values.asDiagonal() * eigen.eigenvectors().transpose();
+        // A Hessian that already has a Cholesky factor is positive definite
+        // and needs no projection. The 4x4 Cholesky costs a few dozen flops,
+        // the eigen solve below many times that.
+        const Eigen::LLT<Eigen::Matrix4d> cholesky(*hessian);
+        if (Eigen::Success != cholesky.info()) {
+            const Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> eigen(*hessian);
+            Eigen::Vector4d values = eigen.eigenvalues();
+            if (values.minCoeff() < 0.0) {
+                for (int k = 0; k < 4; ++k)
+                    values[k] = std::max(values[k], 0.0);
+                *hessian = eigen.eigenvectors() * values.asDiagonal() * eigen.eigenvectors().transpose();
+            }
         }
         if (alignment > 0.0) {
             *gradient += 2.0 * alignment * (a - Eigen::Vector4d(1.0, 0.0, 0.0, 1.0));
