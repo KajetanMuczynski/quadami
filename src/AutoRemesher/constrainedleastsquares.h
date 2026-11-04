@@ -76,6 +76,9 @@ public:
         // Whether this solve rebuilt and refactorised the system, or reused
         // the factorisation of an earlier solve with a new right-hand side.
         bool refactorized = false;
+        // Held columns this solve deleted from the factor of an earlier one
+        // instead of refactorising (refactorized is false then).
+        size_t deletedRows = 0;
         // The constraints did not reduce to substitutions, so the dense
         // Lagrange (KKT) system was solved with SparseLU instead.
         bool lagrangeFallback = false;
