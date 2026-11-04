@@ -158,7 +158,7 @@ def script():
     with window_override():
         bpy.ops.mesh.primitive_uv_sphere_add(segments=64, ring_count=32)
     sphere = bpy.context.view_layer.objects.active
-    yield from remesh(addon, sphere, sphere, 2000)
+    sphere_result = yield from remesh(addon, sphere, sphere, 2000)
 
     torus = thin_torus("Thin torus")
     first = yield from remesh(addon, torus, torus, 300)
@@ -166,9 +166,10 @@ def script():
     yield from remesh(addon, first, torus, 400)
     assert not first.visible_get()
 
-    # Cancel from the panel: no result, the remesher stopped.
+    # Cancel from the panel, on the sphere's result (its hidden source cannot be
+    # active): no result, the remesher stopped.
     getattr(bpy.context.scene, ID).target_quads = 50000
-    make_active(sphere)
+    make_active(sphere_result)
     before = set(bpy.data.objects)
     press_remesh(addon)
     job = addon._job
