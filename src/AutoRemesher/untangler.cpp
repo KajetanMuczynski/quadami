@@ -105,7 +105,12 @@ namespace {
         } else if (larger > 0.0) {
             // Keep the eigenvector of the larger eigenvalue only.
             Eigen::Vector2d e = p >= t ? Eigen::Vector2d(p - smaller, w) : Eigen::Vector2d(w, t - smaller);
-            e.normalize();
+            // normalize() would overflow to a zero vector past about 1e154.
+            const double length2 = e.squaredNorm();
+            if (std::isfinite(length2))
+                e /= std::sqrt(length2);
+            else
+                e.stableNormalize();
             clamped.topLeftCorner<2, 2>() = larger * e * e.transpose();
         }
         clamped(2, 2) = std::max(rotated(2, 2), 0.0);
