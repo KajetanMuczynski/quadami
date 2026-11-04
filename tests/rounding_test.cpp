@@ -79,11 +79,16 @@ bool heldMatchesConstrained(const char* name, const Terms& held)
     bool atValue = true;
     for (const auto& h : held)
         atValue = atValue && withHeld.size() == 6 && withHeld[h.first] == h.second;
-    // One numeric refactorisation for the held values, no new analysis.
-    const bool refactorizedOnce = 2 == fixed.lastSolveStats().factorizations;
-    const bool ok = first && second && third && difference < 1e-8 && atValue && refactorizedOnce;
-    std::printf("%-26s difference %.2e, held exactly %d, factorisations %zu%s\n", name, difference,
-        atValue ? 1 : 0, fixed.lastSolveStats().factorizations, ok ? "" : "  FAIL");
+    // The held values enter by deleting their rows from the first
+    // factorisation or, where that costs more than refactorising (tiny
+    // systems like this one), by one numeric refactorisation; never a new
+    // analysis.
+    const auto& stats = fixed.lastSolveStats();
+    const bool oneStep = stats.deletedRows > 0 ? 1 == stats.factorizations && !stats.refactorized
+                                               : 2 == stats.factorizations && stats.refactorized;
+    const bool ok = first && second && third && difference < 1e-8 && atValue && oneStep;
+    std::printf("%-26s difference %.2e, held exactly %d, factorisations %zu, deleted rows %zu%s\n", name,
+        difference, atValue ? 1 : 0, stats.factorizations, stats.deletedRows, ok ? "" : "  FAIL");
     return ok;
 }
 
@@ -159,11 +164,108 @@ bool greedyKeepsCoupledIntegersTogether()
 
 }
 
+// A grid of 6,400 unknowns that wants unit steps, with tied pairs, held in
+// growing batches as the greedy rounding does: every solve after the first
+// must delete the newly held rows from the factor and agree with a fresh
+// factorisation of the same held system. A batch holding nearly everything
+// at once costs more than half a factorisation and must refactorise.
+void addGrid(AutoRemesher::ConstrainedLeastSquares* system, size_t side)
+{
+    for (size_t y = 0; y < side; ++y) {
+        for (size_t x = 0; x < side; ++x) {
+            const size_t i = y * side + x;
+            const double w = 1.0 + 0.5 * std::sin(0.7 * (double)i);
+            if (x + 1 < side)
+                system->addEnergy({ { i + 1, 1.0 }, { i, -1.0 } }, 1.0 + 0.1 * std::cos((double)i), w);
+            if (y + 1 < side)
+                system->addEnergy({ { i + side, 1.0 }, { i, -1.0 } }, -0.5, 2.0 - w);
+        }
+    }
+    system->addEnergy({ { 0, 1.0 } }, 0.0, 0.1);
+    for (size_t i = 3; i + side < side * side; i += 97)
+        system->addConstraint({ { i, 1.0 }, { i + side, -1.0 } });
+}
+
+bool deletionMatchesRefactorization()
+{
+    const size_t side = 80, count = side * side;
+    AutoRemesher::ConstrainedLeastSquares updated(count);
+    addGrid(&updated, side);
+    std::vector<double> solution;
+    bool ok = updated.solve(&solution);
+    Terms held;
+    std::vector<size_t> heldOrder;
+    const size_t batches[] = { 400, 60, 60, 60, 60, 5000 };
+    size_t next = 0, factorizations = 0;
+    for (size_t pass = 0; pass < sizeof(batches) / sizeof(batches[0]); ++pass) {
+        // Every 7th unknown first, then the rest in order. Tied unknowns
+        // have equal values, so holding both of a pair stays consistent.
+        for (size_t added = 0; added < batches[pass] && next < 2 * count; ++next) {
+            const size_t i = next < count ? next : next - count;
+            if (next < count && 0 != i % 7)
+                continue;
+            if (std::find(heldOrder.begin(), heldOrder.end(), i) != heldOrder.end())
+                continue;
+            heldOrder.push_back(i);
+            held.push_back({ i, std::round(solution[i]) });
+            ++added;
+        }
+        updated.fixVariables(held);
+        std::vector<double> viaDeletion, viaFactorization;
+        const bool solved = updated.solve(&viaDeletion);
+        AutoRemesher::ConstrainedLeastSquares fresh(count);
+        addGrid(&fresh, side);
+        fresh.fixVariables(held);
+        const bool freshSolved = fresh.solve(&viaFactorization);
+        const auto& stats = updated.lastSolveStats();
+        // The first batch may go either way; the small ones must delete
+        // without a factorisation, the last must refactorise.
+        const bool last = pass + 1 == sizeof(batches) / sizeof(batches[0]);
+        const bool path = 0 == pass ? true
+            : last                  ? stats.refactorized && 0 == stats.deletedRows
+                                    : !stats.refactorized && stats.deletedRows == 60 && factorizations == stats.factorizations;
+        factorizations = stats.factorizations;
+        const double difference = maximumDifference(viaDeletion, viaFactorization);
+        const bool good = solved && freshSolved && difference < 1e-9 && path;
+        std::printf("deletion pass %zu: %zu held, deleted %zu, refactorised %d, difference %.2e%s\n", pass,
+            held.size(), stats.deletedRows, stats.refactorized ? 1 : 0, difference, good ? "" : "  FAIL");
+        ok = good && ok;
+        solution = viaDeletion;
+    }
+
+    // Releasing holds needs a refactorisation; holding the released ones
+    // again deletes rows that an earlier factor had deleted too.
+    const auto heldStep = [&](size_t keep, bool expectDeletion) {
+        held.resize(keep);
+        updated.fixVariables(held);
+        std::vector<double> viaUpdate, viaFactorization;
+        const bool solved = updated.solve(&viaUpdate);
+        AutoRemesher::ConstrainedLeastSquares fresh(count);
+        addGrid(&fresh, side);
+        fresh.fixVariables(held);
+        const bool freshSolved = fresh.solve(&viaFactorization);
+        const auto& stats = updated.lastSolveStats();
+        const bool path = expectDeletion ? !stats.refactorized && stats.deletedRows > 0 : stats.refactorized;
+        const double difference = maximumDifference(viaUpdate, viaFactorization);
+        const bool good = solved && freshSolved && difference < 1e-9 && path;
+        std::printf("deletion after release: %zu held, deleted %zu, refactorised %d, difference %.2e%s\n",
+            held.size(), stats.deletedRows, stats.refactorized ? 1 : 0, difference, good ? "" : "  FAIL");
+        return good;
+    };
+    const Terms all = held;
+    ok = heldStep(300, false) && ok;
+    held = all;
+    held.resize(360);
+    ok = heldStep(360, true) && ok;
+    return ok;
+}
+
 int main()
 {
     std::printf("\n");
     int failures = 0;
     failures += heldCases() ? 0 : 1;
     failures += greedyKeepsCoupledIntegersTogether() ? 0 : 1;
+    failures += deletionMatchesRefactorization() ? 0 : 1;
     return failures ? 1 : 0;
 }
