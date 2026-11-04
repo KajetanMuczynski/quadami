@@ -246,6 +246,7 @@ class RemeshJob:
         self.cancel_requested = False
         self.killed = False
         self._cancel_time = None
+        self._start_time = None
         self._process = None
         self._reader = None
         self._lines = queue.Queue()
@@ -280,8 +281,14 @@ class RemeshJob:
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             env=env, cwd=self._workdir, creationflags=creationflags,
             text=True, encoding="utf-8", errors="replace", bufsize=1)
+        self._start_time = time.monotonic()
         self._reader = threading.Thread(target=self._read_output, daemon=True)
         self._reader.start()
+
+    @property
+    def elapsed(self):
+        """Seconds since start() (0 before it)."""
+        return 0.0 if self._start_time is None else time.monotonic() - self._start_time
 
     def _read_output(self):
         try:

@@ -108,7 +108,9 @@ def setup():
     outcome = worker.remesh(worker.bundled_executable(), positions, triangles, settings.parameters(),
                             marked_edges=marked)
     assert outcome.ok, (outcome.status, outcome.message, outcome.log)
-    obj, final_report = addon._build_object(bpy.context, source, outcome, smooth)
+    # The imported-marks warning is not true of this mesh; it is added so the
+    # OCR check covers the longest warning text too.
+    obj, final_report = addon._build_object(bpy.context, source, outcome, smooth, [addon._flood_warning(["SHARP"])])
     addon._show_result(bpy.context, obj, (source,))
     for label, value, problem in report.summary_rows(final_report):
         print("panel_shot: %-20s %s%s" % (label, value, "  <-" if problem else ""))
