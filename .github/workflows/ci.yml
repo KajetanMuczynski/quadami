@@ -177,6 +177,10 @@ jobs:
             blender: 4.2.23
             blender_file: blender-4.2.23-linux-x64.tar.xz
             blender_sha256: bea0eb3146be13eae6225409a117b215184f41b7f79e799f97cb3abb8f6dc404
+            # And the current LTS, where the buttons are pressed in a window too.
+            blender_lts: 4.5.15
+            blender_lts_file: blender-4.5.15-linux-x64.tar.xz
+            blender_lts_sha256: 0d2b8bb2efe97e6c8eb57de6b7322f8800e1984e3125b60decca5f6771e4773e
             cmake_args: ''  # as addon-macos, which sets it; ci/build_linux_portable.sh sets its own
             ship: true
           - os: windows-latest
@@ -378,6 +382,49 @@ jobs:
           name: panel-linux-x64
           path: build/panel/
           if-no-files-found: ignore
+
+      # The current LTS (Linux only): the zip installed again, the background test,
+      # then the Remesh, Copy Report and Cancel buttons pressed in Blender's window
+      # under Xvfb, so the modal operator, its timer and the clipboard really run
+      # (blender_operator.py). Steps run only where the matrix names an LTS.
+      - name: Cache Blender ${{ matrix.blender_lts }}
+        id: blender-lts-cache
+        if: matrix.blender_lts
+        # As the cache above: checked by SHA-256 before use, nothing goes into the zip.
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0 # zizmor: ignore[cache-poisoning]
+        with:
+          path: blender-download/${{ matrix.blender_lts_file }}
+          key: ${{ matrix.blender_lts_file }}
+
+      - name: Download, verify and unpack Blender ${{ matrix.blender_lts }}
+        if: matrix.blender_lts
+        run: |
+          file="${{ matrix.blender_lts_file }}"
+          mkdir -p blender-download
+          if [ "${{ steps.blender-lts-cache.outputs.cache-hit }}" != true ]; then
+            series=$(echo "${{ matrix.blender_lts }}" | cut -d. -f1-2)
+            curl -fsSL --retry 3 -o "blender-download/$file" \
+              "https://download.blender.org/release/Blender$series/$file"
+          fi
+          echo "${{ matrix.blender_lts_sha256 }}  blender-download/$file" | sha256sum -c -
+          mkdir -p blender-lts
+          tar -xJf "blender-download/$file" -C blender-lts
+          echo "BLENDER_LTS=$PWD/$(find blender-lts -maxdepth 2 -type f -name blender | head -n 1)" >> "$GITHUB_ENV"
+
+      - name: Blender ${{ matrix.blender_lts }}, install the zip and press the buttons
+        if: matrix.blender_lts
+        timeout-minutes: 10
+        run: |
+          ci/apt_install.sh xvfb xauth libgl1-mesa-dri
+          "$BLENDER_LTS" --version | head -n 1
+          "$BLENDER_LTS" --command extension install-file -r user_default -e "${{ steps.package.outputs.zip }}"
+          "$BLENDER_LTS" -b --factory-startup --python-exit-code 1 \
+            --python addon/tests/blender_smoke.py -- --installed
+          # A file on the command line keeps the splash screen away.
+          "$BLENDER_LTS" -b --factory-startup --python-expr \
+            "import bpy; bpy.ops.wm.save_as_mainfile(filepath='build/start-lts.blend')"
+          xvfb-run -a -s "-screen 0 1400x1000x24" "$BLENDER_LTS" --factory-startup build/start-lts.blend \
+            --python addon/tests/blender_operator.py
 
       - name: Upload the extension zip
         if: matrix.ship
