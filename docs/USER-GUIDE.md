@@ -248,7 +248,8 @@ long as a Remesh at the same Target Quads. Then:
   at once, nothing is recomputed. Change sets Target Quads, so Remesh then uses the count you settled on.
 - It is a plan, not the result, but a close one: a region's quads usually come out within about 5 % of
   the shown size, about as close as two Remesh runs of the same model are to each other. Small flat parts
-  (leaves, flower cards) and CAD parts can be 10-30 % off. It shows size only, never edge loops or poles.
+  (leaves, flower cards) and flat CAD faces can be 10-30 % off, and at low Target Quads two runs of a
+  sculpt can differ by about 10 % anyway. It shows size only, never edge loops or poles.
 - Editing the mesh removes the preview. Changing another setting, or Target Quads more than 20 % away from
   the planned count, asks you to preview again. Click the button again to hide it.
 

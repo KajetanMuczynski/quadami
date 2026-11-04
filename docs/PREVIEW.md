@@ -374,6 +374,20 @@ error 0.05-0.06 (first plan 0.32-0.47 / 0.14-0.15; uniform size 0.245), r² 0.82
 replicates, and no leak from the run into the plan. So the numbers above depend on the region
 definition by about 0.05 in r²; the conclusion does not.
 
+Second independent check [checked] (another fresh worker, balls of 2.5 local quads on surface samples,
+bias kept): the ±20 % band holds (plan at 5k against runs at 4.2k / 6k: corpus 0.058, sculpt 0.052; at
+5k 0.037 / 0.038; a uniform plan 0.22 / 0.37-0.40), and the first plan was far worse on the private
+sculpts (head 0.37-0.50, cube 0.10-0.13, sword 0.12-0.20). It found the weak spots below, which the
+set medians hide:
+- csg_bracket is worse than a uniform plan at every target (0.22-0.28 against 0.14-0.18; the plan's
+  size on the flat faces about 16 % too small); spot_noisy is no better than uniform away from the
+  planned count; cloth_sheet is 0.03 at the planned count but 0.18 at the band's ends.
+- Private head: 0.02 against the plain run, but its 1-ulp replicates at 3k come out 0.10 off
+  (r² 0.3-0.5), 0.04-0.05 at 6k: at low counts two runs of the head differ more than the plan does
+  from either, so the plan cannot be closer than that.
+- Private sword: small flat parts (the flowers) come out 11-28 % larger than planned, growing with the
+  target, in every replicate (worse than uniform at 6k and 10k); the blade drifts by 3-12 %.
+
 **Reading** [I]
 - The plan's region error is now about one third of the band's half-width (±20 % quads = −9/+12 %
   edge = 0.13-0.16 log₂), so the ±20 % bar shows real differences; ±30 % would too.
@@ -381,7 +395,9 @@ definition by about 0.05 in r²; the conclusion does not.
   per mesh and settings; swipes inside the band redraw only. Reusing the plan's solve when Remesh runs
   at the planned count is the follow-up that makes the plan not wasted work.
 - P1 as written (r² ≥ 0.8) passes on both sets; the absolute region error is the better gate for the
-  bar, and it sits close to the noise floor.
+  bar, and it sits close to the noise floor on organic meshes and sculpts. Flat CAD faces and small flat
+  parts are the exception (above): there the overlay is a rough guide only, which the tooltip and user
+  guide say.
 
 **What would falsify this**
 - A replicate set where the plan's region error rises well above the band's half-width on organic meshes.
