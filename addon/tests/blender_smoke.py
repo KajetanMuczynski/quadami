@@ -119,6 +119,14 @@ try:
     flood.attributes.new("sharp_edge", "BOOLEAN", "EDGE").data.foreach_set("value", [True] * len(flood.edges))
     assert addon._flooded_marks(flood, addon._mark_counts(flood), {"SHARP"}) == ["SHARP"], len(flood.edges)
     assert addon._flood_warning(["SHARP"]).startswith("Follow Marks left out Sharp")
+    # Both the panel line and the warning say how to clear the imported marks.
+    assert "Edge > Clear Sharp" in addon._flood_warning(["SHARP"]) and "Outliner" in addon._flood_warning(["SHARP"])
+    hint = addon._flood_hint(["SHARP", "SEAM"])
+    assert "Clear Sharp and Edge > Clear Seam" in hint and "Outliner" not in hint, hint
+    flooded_object = bpy.data.objects.new("Flood", flood)
+    line = addon._mark_line(flooded_object, {"SHARP"})
+    assert "not followed" in line[0] and "Edge > Mark Sharp" in line[1], line
+    bpy.data.objects.remove(flooded_object)
     # Nor are such marks copied onto the result (zigzag paths all over it).
     assert "sharp" in addon.transfer.marked_edges(flood) and "sharp" not in addon.transfer.copied_marks(flood)
     assert "sharp" in addon.transfer.copied_marks(mesh)
