@@ -32,14 +32,21 @@ def check_quad_count(output, target):
 
 
 def check_build(build):
-    """The add-on's build line names the commit CI built (SOURCE_COMMIT), with
-    nothing uncommitted. Skipped without SOURCE_COMMIT (a local run)."""
+    """The add-on's build line names the commit CI built, as the CI build step
+    sets it: "pr<N> <head>+master" on a PR (PR_NUMBER, PR_HEAD), else
+    "[<tag> ]<commit> <date>" with SOURCE_COMMIT, nothing uncommitted (no
+    -dirty) and not "dev". Skipped without SOURCE_COMMIT (a local run)."""
     commit = os.environ.get("SOURCE_COMMIT", "")
     if not commit:
         print("blender_checks: SOURCE_COMMIT not set, build line not checked against a commit")
         return
-    match = re.fullmatch(r"([0-9a-f]{7,40}) (\d{4}-\d{2}-\d{2})", build)
-    assert match, "build id %r is not '<commit> <date>' (a -dirty or dev build?)" % build
+    head = os.environ.get("PR_HEAD", "")
+    if head:
+        expected = "pr%s %s+master" % (os.environ.get("PR_NUMBER", ""), head[:7])
+        assert build == expected, (build, expected)
+        return
+    match = re.fullmatch(r"(?:\S+ )?([0-9a-f]{7,40}) (\d{4}-\d{2}-\d{2})", build)
+    assert match, "build id %r is not '[<tag> ]<commit> <date>' (a -dirty or dev build?)" % build
     assert commit.startswith(match.group(1)), (build, commit)
 
 
