@@ -108,12 +108,19 @@ def build(ref, work, jobs, cmake_args=()):
         return key, cli
     src = os.path.join(root, "src")
     os.makedirs(src, exist_ok=True)
-    # tarfile, not tar: Windows has no tar that reads git's output reliably.
-    archive = subprocess.Popen(["git", "-C", REPO, "archive", git("rev-parse", ref)], stdout=subprocess.PIPE)
-    with tarfile.open(fileobj=archive.stdout, mode="r|") as tar:
+    # To a file first, under a time limit, then tarfile (not tar: Windows has no tar that reads git's
+    # output reliably). A release-check job on Windows hung for 4 h before its first line twice
+    # (PR #167); each step now says what it does, and a stuck export fails instead of hanging.
+    archive = os.path.join(root, "src.tar")
+    print(f"exporting {ref} to {archive}", flush=True)
+    try:
+        subprocess.run(["git", "-C", REPO, "archive", "--output", archive, git("rev-parse", ref)],
+                       check=True, timeout=600)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        sys.exit(f"git archive {ref} failed: {e}")
+    with tarfile.open(archive) as tar:
         tar.extractall(src, filter="data")
-    if archive.wait() != 0:
-        sys.exit(f"git archive {ref} failed")
+    os.remove(archive)
     log = os.path.join(root, "build.log")
     print(f"building {ref} ({key}) with {jobs} jobs, log {log}", flush=True)
     nice = ["nice", "-n", "10"] if shutil.which("nice") else []
@@ -576,7 +583,7 @@ def value(r, k):
     if k == "flipped_vs_raw": return (m.get("flipped") or {}).get("faces_vs_raw_input")
     if k == "flipped_off_folds": return (m.get("flipped") or {}).get("faces_off_input_folds")
     if k == "flipped_over_folds": return (m.get("flipped") or {}).get("faces_over_input_folds")
-    if k in ("folded_faces", "holes_added", "holes_closed", "handles_lost", "handles_added", "islands_dropped",
+    if k in ("folded_faces", "twisted_quads", "holes_added", "holes_closed", "handles_lost", "handles_added", "islands_dropped",
              "islands_merged", "area_uncovered", "area_wrong_side"):
         return (m.get("validity") or {}).get(k)
     if k == "nm_vertices": return (m.get("validity") or {}).get("non_manifold_vertices")
@@ -612,16 +619,16 @@ def value(r, k):
 COUNTS = ["flips_cont", "flips_round", "flips", "degenerate", "non_quads", "sj_le_0", "flipped_vs_input",
           "t_non_manifold", "t_opened", "qex_fallbacks",
           # Validity from metrics.py (2026-10-22): per input island, matched to the output's islands.
-          "folded_faces", "nm_vertices", "holes_added", "holes_closed", "handles_lost", "handles_added",
-          "islands_dropped", "islands_merged", "islands_changed", "flipped_vs_raw",
+          "folded_faces", "twisted_quads", "nm_vertices", "holes_added", "holes_closed", "handles_lost",
+          "handles_added", "islands_dropped", "islands_merged", "islands_changed", "flipped_vs_raw",
           # V3's split (2026-10-23): flips over folded input vs the rest
           "flipped_off_folds", "flipped_over_folds"]
 MEANS = ["area_uncovered", "area_wrong_side", "irregular_1k", "in_out_p99", "hausdorff", "in_out_mean", "normal_dev", "vertex_dist", "sj_p1",
          "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel", "count_err", "energy_ratio", "time", "peak_rss_mb"]
 # Rows computed by metrics.py (the rest come from the CLI's own report and stage records).
 FROM_METRICS = {"sj_le_0", "flipped_vs_input", "flipped_vs_raw", "flipped_off_folds", "flipped_over_folds",
-                "folded_faces", "holes_added", "holes_closed", "handles_lost", "handles_added", "islands_dropped",
-                "islands_merged", "area_uncovered", "area_wrong_side", "nm_vertices", "islands_changed",
+                "folded_faces", "twisted_quads", "holes_added", "holes_closed", "handles_lost", "handles_added",
+                "islands_dropped", "islands_merged", "area_uncovered", "area_wrong_side", "nm_vertices", "islands_changed",
                 "irregular_1k", "hausdorff", "in_out_mean", "in_out_p99", "vertex_dist", "normal_dev", "sj_p1",
                 "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel"}
 # Rows where a higher value is the better one (for "runs B better / worse").
