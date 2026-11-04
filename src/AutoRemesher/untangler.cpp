@@ -57,6 +57,62 @@ namespace {
         return (frobenius + lambda * (d * d + 1.0)) / chi(d, eps).value + alignment * offTarget;
     }
 
+    // Projects the Hessian of triangleEnergy onto the positive semidefinite
+    // cone in closed form. The Hessian is a I + b C + terms in J and cof(J),
+    // where C is the constant Hessian of det J. C is +1 on the similarity
+    // matrices (p1, p2 below) and -1 on the anti-similarity ones (m1, m2), and
+    // J and cof(J) span the same plane as J's two parts in those spaces. So in
+    // the basis of those two parts and their in-space normals the Hessian is a
+    // 2x2 block plus two diagonal entries, and only the block needs an
+    // eigenvalue (Smith et al. 2019, "Analytic eigensystems for isotropic
+    // distortion energies", for the same idea).
+    void projectToPositiveSemidefinite(const double* j, Eigen::Matrix4d* hessian)
+    {
+        const double s = 0.70710678118654752440;
+        // J = x p1 + y p2 + u m1 + v m2, with p1 = (1, 0, 0, 1) s,
+        // p2 = (0, 1, -1, 0) s, m1 = (1, 0, 0, -1) s, m2 = (0, 1, 1, 0) s.
+        double x = (j[0] + j[3]) * s, y = (j[1] - j[2]) * s;
+        double u = (j[0] - j[3]) * s, v = (j[1] + j[2]) * s;
+        const double r = std::hypot(x, y), q = std::hypot(u, v);
+        if (r > 0.0) {
+            x /= r;
+            y /= r;
+        } else {
+            x = 1.0;
+            y = 0.0;
+        }
+        if (q > 0.0) {
+            u /= q;
+            v /= q;
+        } else {
+            u = 1.0;
+            v = 0.0;
+        }
+        Eigen::Matrix4d basis;
+        basis.col(0) << s * x, s * y, -s * y, s * x;
+        basis.col(1) << s * u, s * v, s * v, -s * u;
+        basis.col(2) << -s * y, s * x, -s * x, -s * y;
+        basis.col(3) << -s * v, s * u, s * u, s * v;
+        const Eigen::Matrix4d rotated = basis.transpose() * (*hessian) * basis;
+        const double p = rotated(0, 0), w = .5 * (rotated(0, 1) + rotated(1, 0)), t = rotated(1, 1);
+        const double mean = .5 * (p + t), half = std::hypot(.5 * (p - t), w);
+        const double larger = mean + half, smaller = mean - half;
+        Eigen::Matrix4d clamped = Eigen::Matrix4d::Zero();
+        if (smaller >= 0.0) {
+            clamped(0, 0) = p;
+            clamped(0, 1) = clamped(1, 0) = w;
+            clamped(1, 1) = t;
+        } else if (larger > 0.0) {
+            // Keep the eigenvector of the larger eigenvalue only.
+            Eigen::Vector2d e = p >= t ? Eigen::Vector2d(p - smaller, w) : Eigen::Vector2d(w, t - smaller);
+            e.normalize();
+            clamped.topLeftCorner<2, 2>() = larger * e * e.transpose();
+        }
+        clamped(2, 2) = std::max(rotated(2, 2), 0.0);
+        clamped(3, 3) = std::max(rotated(3, 3), 0.0);
+        *hessian = basis * clamped * basis.transpose();
+    }
+
     // Gradient and Hessian of triangleEnergy by J (row-major), with the
     // Hessian projected onto the positive semidefinite cone.
     void triangleDerivatives(const double* j, double lambda, double alignment, double eps,
@@ -80,18 +136,9 @@ namespace {
             + numerator * (2.0 * c.first * c.first * inverse * inverse * inverse - c.second * inverse * inverse) * dd * dd.transpose()
             - numerator * ratio * ddd;
         // A Hessian that already has a Cholesky factor is positive definite
-        // and needs no projection. The 4x4 Cholesky costs a few dozen flops,
-        // the eigen solve below many times that.
-        const Eigen::LLT<Eigen::Matrix4d> cholesky(*hessian);
-        if (Eigen::Success != cholesky.info()) {
-            const Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> eigen(*hessian);
-            Eigen::Vector4d values = eigen.eigenvalues();
-            if (values.minCoeff() < 0.0) {
-                for (int k = 0; k < 4; ++k)
-                    values[k] = std::max(values[k], 0.0);
-                *hessian = eigen.eigenvectors() * values.asDiagonal() * eigen.eigenvectors().transpose();
-            }
-        }
+        // and needs no projection.
+        if (Eigen::Success != Eigen::LLT<Eigen::Matrix4d>(*hessian).info())
+            projectToPositiveSemidefinite(j, hessian);
         if (alignment > 0.0) {
             *gradient += 2.0 * alignment * (a - Eigen::Vector4d(1.0, 0.0, 0.0, 1.0));
             *hessian += 2.0 * alignment * Eigen::Matrix4d::Identity();
