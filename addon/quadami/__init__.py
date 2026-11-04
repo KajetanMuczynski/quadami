@@ -499,7 +499,9 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         if _job.cancel_requested:
             text = NAME + ": cancelling..."
         else:
-            text = "%s: %d%% %s   (Esc to cancel)" % (NAME, round(_job.fraction * 100), _job.step)
+            stall = report_rows.stall_status(_job.silent, _job.elapsed, _job.parameters["target_quads"])
+            text = "%s: %d%% %s%s   (Esc to cancel)" % (NAME, round(_job.fraction * 100), _job.step,
+                                                       "   " + stall if stall else "")
         context.workspace.status_text_set(text)
 
     def modal(self, context, event):
@@ -730,6 +732,14 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
             text = "Cancelling..." if _job.cancel_requested else \
                 "%d%% %s" % (round(_job.fraction * 100), _job.step)
             layout.progress(factor=_job.fraction, type="BAR", text=text)
+            stall = None if _job.cancel_requested else \
+                report_rows.stall_note(_job.silent, _job.elapsed, _job.parameters["target_quads"], _job.step)
+            if stall:
+                room = _text_room(context)
+                column = layout.column(align=True)
+                column.alert = True
+                for i, part in enumerate(report_rows.wrap(stall, room.panel - room.icon - room.pad, room.measure)):
+                    column.label(text=part, icon="ERROR" if 0 == i else "BLANK1")
             layout.operator(OBJECT_OT_remesh_quads_cancel.bl_idname, icon="CANCEL")
         else:
             layout.operator(OBJECT_OT_remesh_quads.bl_idname, icon="MOD_REMESH")

@@ -246,12 +246,14 @@ class RemeshJob:
         self.cancel_requested = False
         self.killed = False
         self._cancel_time = None
+        self._start_time = None
         self._process = None
         self._reader = None
         self._lines = queue.Queue()
         self._log = collections.deque(maxlen=40)
         self._workdir = None
         self._outcome = None
+        self._progress_time = None
 
     def _path(self, name):
         return os.path.join(self._workdir, name)
@@ -280,8 +282,14 @@ class RemeshJob:
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             env=env, cwd=self._workdir, creationflags=creationflags,
             text=True, encoding="utf-8", errors="replace", bufsize=1)
+        self._start_time = time.monotonic()
         self._reader = threading.Thread(target=self._read_output, daemon=True)
         self._reader.start()
+
+    @property
+    def elapsed(self):
+        """Seconds since start() (0 before it)."""
+        return 0.0 if self._start_time is None else time.monotonic() - self._start_time
 
     def _read_output(self):
         try:
@@ -302,6 +310,7 @@ class RemeshJob:
                 continue
             match = _PROGRESS_LINE.match(line)
             if match:
+                self._progress_time = time.monotonic()
                 self.fraction = max(self.fraction, min(int(match.group(1)), 100) / 100.0)
                 if match.group(2):
                     self.step = match.group(2)
@@ -322,6 +331,14 @@ class RemeshJob:
             self._process.stdin.flush()
         except (BrokenPipeError, OSError, ValueError):
             pass  # already exiting
+
+    @property
+    def silent(self):
+        """Seconds since poll() last took in a progress line from the worker,
+        or since start() before the first one (0 before start()).  The CLI
+        prints one whenever the percentage or the step changes."""
+        last = self._progress_time if self._progress_time is not None else self._start_time
+        return 0.0 if last is None else time.monotonic() - last
 
     @property
     def done(self):
