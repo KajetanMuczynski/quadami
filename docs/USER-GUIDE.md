@@ -395,6 +395,7 @@ What it does and does not do:
 | **Too few or too many quads** | Within 60–150 % of the target is normal. Thin parts and many small pieces push it around. Adjust Target Quads. |
 | **Folded faces / non-quads in one area** | Look at the input there ([§7](#7-sculpts-what-works-and-what-struggles)): a pleat, a thin part, a narrow groove. Try ±10 % Target Quads; small changes in the count move defects around. |
 | **It takes very long or the computer slows down** | Press Esc. Lower Target Quads or use Fast. Memory is about 2 GB per 100,000 quads. |
+| **Red "No progress for N min in …" under the progress bar** | The remesher has not moved on for far longer than any step took in our tests at that Target Quads: 5 minutes up to about 150,000 quads, 19 minutes at 400,000, longer above. It may be stuck in one step, or only very slow. Nothing is stopped for you. | Press **Cancel** (or Esc) and lower Target Quads. If you wait, it can still finish. If it happens at a normal count, report it with the step name and the build line. |
 | **Blender closed or froze** | The remesher runs as a separate program and cannot crash Blender by itself; report it. |
 
 **Reporting a problem.** Use the [bug report form](https://github.com/KajetanMuczynski/quadami/issues/new?template=bug-report.yml) on GitHub (you need a free
