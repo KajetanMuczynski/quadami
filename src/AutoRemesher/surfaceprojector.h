@@ -109,9 +109,10 @@ public:
     // crease and vertices with a face turned more than 45 degrees from their
     // normal (a fold of the output with no input crease, mostly quads
     // bridging a rim thinner than a quad, which smoothing would cut) stay. Every round keeps moves under half the mean edge and
-    // undoes moves that make a face worse, as project() does.
+    // undoes moves that make a face worse, as project() does. Vertices
+    // flagged in `pinned` (the edge loops along guides, TODO 5.7) stay too.
     RelaxResult relax(std::vector<Vector3>* points, const std::vector<std::vector<size_t>>& faces,
-        size_t iterations) const;
+        size_t iterations, const std::vector<char>* pinned = nullptr) const;
 
     // Distance from `position` to the closest point of the surface, whichever
     // way its face points; `maxDistance` when nothing is closer.

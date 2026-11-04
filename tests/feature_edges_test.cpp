@@ -272,6 +272,29 @@ bool remesherHandsTheEdgesOnToT()
     return ok;
 }
 
+// pointsOnFeatureEdges (TODO 5.7): a point on a hard edge counts, a point
+// on an edge without the flag or off the edge by more than the tolerance
+// does not.
+bool pointsOnHardEdgesAreFound()
+{
+    const std::vector<Vector3> vertices = { Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 1, 0), Vector3(0, 1, 0) };
+    FeatureEdgeSet set;
+    set.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 } };
+    set.flags = { FeatureEdgeSet::Hard, FeatureEdgeSet::Hard, 0 };
+    const std::vector<Vector3> points = { Vector3(0.25, 0, 0), Vector3(1, 0.5, 1e-9), Vector3(0.5, 1, 0),
+        Vector3(0.5, 1e-3, 0), Vector3(1, 1, 0), Vector3(5, 5, 5) };
+    const std::vector<char> on = pointsOnFeatureEdges(points, set, vertices, FeatureEdgeSet::Hard, 1e-6);
+    bool ok = check(on.size() == points.size(), "one flag per point");
+    ok = check(on[0] && on[1], "points on hard edges are found") && ok;
+    ok = check(!on[2], "a point on an edge without the hard flag is not") && ok;
+    ok = check(!on[3], "a point farther than the tolerance is not") && ok;
+    ok = check(on[4], "the end of a hard edge is on it") && ok;
+    ok = check(!on[5], "a far point is not") && ok;
+    const std::vector<char> any = pointsOnFeatureEdges(points, set, vertices, 0, 1e-6);
+    ok = check(any[2], "with no flag required every edge counts") && ok;
+    return ok;
+}
+
 }
 
 int main()
@@ -281,6 +304,7 @@ int main()
     failures += decimationKeepsTheChain() ? 0 : 1;
     failures += tKeepsOnlyHardEdgesAndItsOwnCreases() ? 0 : 1;
     failures += remesherHandsTheEdgesOnToT() ? 0 : 1;
+    failures += pointsOnHardEdgesAreFound() ? 0 : 1;
     std::printf("%s\n", 0 == failures ? "all passed" : "FAILED");
     return 0 == failures ? 0 : 1;
 }

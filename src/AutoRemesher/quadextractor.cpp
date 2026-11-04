@@ -1898,6 +1898,21 @@ bool QuadExtractor::removeNonManifoldFaces()
     return changed;
 }
 
+std::vector<size_t> QuadExtractor::pinnedVertices() const
+{
+    std::vector<size_t> pinned;
+    if (nullptr == m_featureEdges || m_featureEdges->empty() || nullptr == m_vertices)
+        return pinned;
+    const double meanLength = featureEdgeLength(*m_featureEdges, *m_vertices) / m_featureEdges->size();
+    const std::vector<char> on = pointsOnFeatureEdges(m_remeshedVertices, *m_featureEdges, *m_vertices,
+        FeatureEdgeSet::Hard, kPinnedToleranceOfEdge * meanLength);
+    for (size_t v = 0; v < on.size(); ++v) {
+        if (on[v])
+            pinned.push_back(v);
+    }
+    return pinned;
+}
+
 void QuadExtractor::smoothAndProject(size_t iterations,
     const std::unordered_set<size_t>* movableVertices)
 {
@@ -1927,6 +1942,8 @@ void QuadExtractor::smoothAndProject(size_t iterations,
         for (size_t i = 0; i < locked.size(); ++i)
             locked[i] = movableVertices->end() == movableVertices->find(i);
     }
+    for (size_t v : pinnedVertices())
+        locked[v] = true;
     for (const auto& it : edgeUseCount) {
         if (1 == it.second) {
             locked[it.first.first] = true;

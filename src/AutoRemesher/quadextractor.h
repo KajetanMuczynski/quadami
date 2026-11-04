@@ -20,6 +20,7 @@
  */
 #ifndef AUTO_REMESHER_QUAD_EXTRACTOR_H
 #define AUTO_REMESHER_QUAD_EXTRACTOR_H
+#include "featureedges.h"
 #include "qexextraction.h"
 #include <AutoRemesher/Progress>
 #include <AutoRemesher/Vector2>
@@ -70,6 +71,18 @@ public:
     {
         m_singularVertices = singularVertices;
     }
+
+    // T's feature edges: the smoothing keeps the quad vertices that lie on a
+    // hard one where they are, so an edge loop along a guide stays on it
+    // (TODO 5.7). The set must outlive the extractor.
+    void setFeatureEdges(const FeatureEdgeSet* featureEdges)
+    {
+        m_featureEdges = featureEdges;
+    }
+    // Output vertices on a hard edge of T (setFeatureEdges): within this
+    // share of T's mean feature edge length of it. A vertex the extractor
+    // puts on an isoline that runs along T's edge is on it up to rounding.
+    static constexpr double kPinnedToleranceOfEdge = 1e-6;
 
     void setProgressHandler(ProgressHandler progressHandler)
     {
@@ -166,6 +179,7 @@ private:
     std::vector<uint8_t> m_extractedConnectionMoved;
     const std::vector<std::vector<Vector2>>* m_originalTriangleUvs = nullptr;
     const std::vector<size_t>* m_singularVertices = nullptr;
+    const FeatureEdgeSet* m_featureEdges = nullptr;
     const Boundary* m_inputBoundary = nullptr;
     ProgressHandler m_progressHandler;
     bool m_useQex = true;
@@ -219,6 +233,7 @@ private:
     // Vertices whose faces form more than one fan: two pieces of surface
     // touching at a point.
     static std::unordered_set<size_t> findPinchedVertices(const std::vector<std::vector<size_t>>& polygons);
+    std::vector<size_t> pinnedVertices() const;
     void smoothAndProject(size_t iterations,
         const std::unordered_set<size_t>* movableVertices = nullptr);
     void smoothAroundVertices(const std::unordered_set<size_t>& seedVertices,

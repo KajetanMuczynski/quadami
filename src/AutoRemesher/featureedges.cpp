@@ -21,6 +21,7 @@
 #include <cmath>
 #include <limits>
 #include <meshoptimizer.h>
+#include <unordered_map>
 
 namespace AutoRemesher {
 
@@ -230,6 +231,64 @@ double featureEdgeLength(const FeatureEdgeSet& set, const std::vector<Vector3>& 
     for (const auto& edge : set.edges)
         length += (vertices[edge.second] - vertices[edge.first]).length();
     return length;
+}
+
+std::vector<char> pointsOnFeatureEdges(const std::vector<Vector3>& points, const FeatureEdgeSet& set,
+    const std::vector<Vector3>& vertices, unsigned char requiredFlags, double tolerance)
+{
+    std::vector<char> on(points.size(), 0);
+    std::vector<size_t> chosen;
+    double lengthSum = 0.0;
+    for (size_t i = 0; i < set.edges.size(); ++i) {
+        if ((set.flags[i] & requiredFlags) != requiredFlags)
+            continue;
+        chosen.push_back(i);
+        lengthSum += (vertices[set.edges[i].second] - vertices[set.edges[i].first]).length();
+    }
+    if (chosen.empty() || points.empty())
+        return on;
+    // A hash grid of cells about one edge long; each edge goes into every
+    // cell its box (grown by the tolerance) touches.
+    const double cell = std::max(lengthSum / chosen.size(), 4.0 * tolerance);
+    if (!(cell > 0.0))
+        return on;
+    const auto cellOf = [cell](double value) { return (long long)std::floor(value / cell); };
+    const auto key = [](long long x, long long y, long long z) {
+        return ((unsigned long long)(x * 73856093LL) ^ (unsigned long long)(y * 19349663LL)
+            ^ (unsigned long long)(z * 83492791LL));
+    };
+    std::unordered_map<unsigned long long, std::vector<size_t>> grid;
+    for (const size_t i : chosen) {
+        const Vector3& a = vertices[set.edges[i].first];
+        const Vector3& b = vertices[set.edges[i].second];
+        const long long x0 = cellOf(std::min(a.x(), b.x()) - tolerance), x1 = cellOf(std::max(a.x(), b.x()) + tolerance);
+        const long long y0 = cellOf(std::min(a.y(), b.y()) - tolerance), y1 = cellOf(std::max(a.y(), b.y()) + tolerance);
+        const long long z0 = cellOf(std::min(a.z(), b.z()) - tolerance), z1 = cellOf(std::max(a.z(), b.z()) + tolerance);
+        for (long long x = x0; x <= x1; ++x)
+            for (long long y = y0; y <= y1; ++y)
+                for (long long z = z0; z <= z1; ++z)
+                    grid[key(x, y, z)].push_back(i);
+    }
+    const double toleranceSquared = tolerance * tolerance;
+    for (size_t p = 0; p < points.size(); ++p) {
+        const Vector3& point = points[p];
+        const auto found = grid.find(key(cellOf(point.x()), cellOf(point.y()), cellOf(point.z())));
+        if (found == grid.end())
+            continue;
+        for (const size_t i : found->second) {
+            const Vector3& a = vertices[set.edges[i].first];
+            const Vector3 ab = vertices[set.edges[i].second] - a;
+            const double lengthSquared = Vector3::dotProduct(ab, ab);
+            double t = lengthSquared > 0.0 ? Vector3::dotProduct(point - a, ab) / lengthSquared : 0.0;
+            t = std::max(0.0, std::min(1.0, t));
+            const Vector3 offset = point - (a + ab * t);
+            if (Vector3::dotProduct(offset, offset) <= toleranceSquared) {
+                on[p] = 1;
+                break;
+            }
+        }
+    }
+    return on;
 }
 
 }
