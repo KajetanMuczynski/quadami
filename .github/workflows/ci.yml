@@ -317,21 +317,11 @@ jobs:
           path: blender-download/${{ matrix.blender_file }}
           key: ${{ matrix.blender_file }}
 
-      - name: Download Blender ${{ matrix.blender }}
-        if: steps.blender-cache.outputs.cache-hit != 'true'
-        run: |
-          series=$(echo "${{ matrix.blender }}" | cut -d. -f1-2)
-          mkdir -p blender-download
-          curl -fsSL --retry 3 -o "blender-download/${{ matrix.blender_file }}" \
-            "https://download.blender.org/release/Blender$series/${{ matrix.blender_file }}"
-
-      # Checked on every run, cached or not, against the sum in blender-<version>.sha256
-      # next to the download (copied into the matrix when the version is bumped).
-      - name: Verify Blender ${{ matrix.blender }}
-        run: |
-          sum="${{ matrix.blender_sha256 }}  blender-download/${{ matrix.blender_file }}"
-          if command -v sha256sum > /dev/null; then echo "$sum" | sha256sum -c -
-          else echo "$sum" | shasum -a 256 -c -; fi
+      # Downloaded (download.blender.org, then official mirrors) unless cached, and
+      # checked on every run against the sum in blender-<version>.sha256 next to the
+      # download (copied into the matrix when the version is bumped).
+      - name: Download and verify Blender ${{ matrix.blender }}
+        run: ci/fetch_blender.sh "${{ matrix.blender }}" "${{ matrix.blender_file }}" "${{ matrix.blender_sha256 }}"
 
       - name: Unpack Blender
         run: |
@@ -400,13 +390,7 @@ jobs:
         if: matrix.blender_lts
         run: |
           file="${{ matrix.blender_lts_file }}"
-          mkdir -p blender-download
-          if [ "${{ steps.blender-lts-cache.outputs.cache-hit }}" != true ]; then
-            series=$(echo "${{ matrix.blender_lts }}" | cut -d. -f1-2)
-            curl -fsSL --retry 3 -o "blender-download/$file" \
-              "https://download.blender.org/release/Blender$series/$file"
-          fi
-          echo "${{ matrix.blender_lts_sha256 }}  blender-download/$file" | sha256sum -c -
+          ci/fetch_blender.sh "${{ matrix.blender_lts }}" "$file" "${{ matrix.blender_lts_sha256 }}"
           mkdir -p blender-lts
           tar -xJf "blender-download/$file" -C blender-lts
           echo "BLENDER_LTS=$PWD/$(find blender-lts -maxdepth 2 -type f -name blender | head -n 1)" >> "$GITHUB_ENV"
