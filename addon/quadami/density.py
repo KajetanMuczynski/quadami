@@ -16,8 +16,9 @@
 
 """Density preview: the planned quad size drawn over the mesh (docs/PREVIEW.md).
 
-The worker plans the run once (autoremesher-cli --plan-only, a fraction
-of a run): the quad edge each vertex would get and each part's quads.  The
+The worker plans the run once (autoremesher-cli --plan-only, the run up to
+its continuous cover solve, about half a run): the quad edge each vertex
+would get and each part's quads.  The
 plan, the mesh arrays it was made from and a GPU batch stay in memory here.
 Changing the preview count only changes one number the shader reads: every
 part's quads go as max(count * area share, floor), its edges with one over
@@ -31,16 +32,17 @@ one it was made with or the object is gone.
 import numpy as np
 
 # Settings that change the plan beyond the count; a change asks for a new plan.
-PLAN_SETTINGS = ("adaptivity", "sharp_edge_degrees", "resolution", "edge_scaling",
+PLAN_SETTINGS = ("adaptivity", "sharp_edge_degrees", "resolution", "anisotropy", "edge_scaling",
                  "smooth_normal_degrees", "follow_marks")
 
-# The preview's range around the count it was planned at: Change goes
-# from count / RANGE to count * RANGE.  Within it the rescaled plan stays
-# within about 5 % of a fresh plan at that count (docs/PREVIEW.md §4.4).
-# A narrower bar would hardly show anything: the quad edge goes with one
-# over the square root of the count, so +-20 % quads is only -9 to +12 %
-# edge, less than the plan's own error.
-RANGE = 2.0
+# The preview's range around the count it was planned at, in percent:
+# Change goes from -BAND to +BAND.  +-20 % quads moves the quad edge by -9 to
+# +12 %; a region of the plan is about 4 % off the run there (about 3 % at
+# the planned count, close to the 2-5 % two runs of the same mesh differ by),
+# so the difference shows.  Farther out the rescaled plan drifts from a
+# fresh one (about 6 % at 2x), so the panel asks for a new preview
+# (docs/PREVIEW.md §4.5).
+BAND = 20.0
 
 # The overlay is pushed this many planned quad edges towards the eye, so it
 # wins against its own mesh and a result that lies within a fraction of a
@@ -48,9 +50,14 @@ RANGE = 2.0
 PUSH_EDGES = 0.25
 
 
-# The Change bar's limits in percent: count / RANGE to count * RANGE.
-CHANGE_MIN = round(100.0 * (1.0 / RANGE - 1.0), 6)
-CHANGE_MAX = round(100.0 * (RANGE - 1.0), 6)
+# The Change bar's limits in percent.
+CHANGE_MIN = -BAND
+CHANGE_MAX = BAND
+
+
+def in_band(planned, quads):
+    """Whether Target Quads `quads` lies within the preview's band around `planned`."""
+    return planned * (1.0 + CHANGE_MIN / 100.0) - 0.5 <= quads <= planned * (1.0 + CHANGE_MAX / 100.0) + 0.5
 
 
 def change_quads(planned, change):

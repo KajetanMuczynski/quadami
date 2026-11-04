@@ -79,7 +79,7 @@ def _preview_state(context):
     if density.settings_key(settings) != preview.key:
         return preview, "Settings changed since the preview"
     planned = preview.plan.quads
-    if not planned / density.RANGE - 0.5 <= settings.target_quads <= planned * density.RANGE + 0.5:
+    if not density.in_band(planned, settings.target_quads):
         return preview, "Target Quads is outside the preview's range"
     return preview, None
 
@@ -716,10 +716,10 @@ class OBJECT_OT_remesh_quads_cancel(bpy.types.Operator):
 
 
 class OBJECT_OT_density_preview(bpy.types.Operator):
-    """Plan the remesh at Target Quads (a fraction of a run) and draw the planned quad size over """ \
-        """the mesh; drag Change to try nearby counts. A planned size, on average 10-15 % off the """ \
-        """result's, less reliable on hard-surface and thin parts. Click again to hide it """ \
-        """(Esc cancels)"""
+    """Plan the remesh at Target Quads (about half the time of a Remesh) and draw the planned """ \
+        """quad size over the mesh; drag Change (+-20 %) to try nearby counts without planning """ \
+        """again. A region is usually within about 5 % of the result's size; small flat parts """ \
+        """and CAD parts can be 10-30 % off. Click again to hide it (Esc cancels)"""
     bl_idname = "object." + ID + "_density_preview"
     bl_label = "Preview Density"
 

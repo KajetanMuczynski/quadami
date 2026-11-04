@@ -238,20 +238,19 @@ so expect a bit more variation.
 ### Density Preview: pick Target Quads before you remesh
 
 **Preview Density** (in a box under the main settings) shows how big the quads will be, painted on your
-model, without remeshing. It plans the run once (a progress bar; Esc cancels): under a second on most
-models, a few seconds on a sculpt of a million triangles or more. Then:
+model, without remeshing. It plans the run once (a progress bar; Esc cancels), which takes about half as
+long as a Remesh at the same Target Quads. Then:
 
 - Orange parts get smaller quads, blue parts larger ones; the panel says about how many quads are planned
   and the quad edge length in scene units. **Checker** draws squares about one quad across, so you can see
   whether a detail (an ear, a finger, a ridge) gets one quad or several.
-- Drag **Change** (−50 % to +100 %) or type a new Target Quads: the colours and squares follow at once,
-  nothing is recomputed. Change sets Target Quads, so Remesh then uses the count you settled on.
-- It is a plan, not the result: a region's quads come out on average about 10-15 % off the shown size
-  (more on some parts), but the change between two counts is right to within a few percent. It is less reliable on hard-surface parts and thin
-  sheets (a sword blade, a bracket), where it can overstate the difference between parts. It shows size
-  only, never edge loops or poles.
-- Editing the mesh removes the preview. Changing another setting, or Target Quads beyond half or double the
-  planned count, asks you to preview again. Click the button again to hide it.
+- Drag **Change** (±20 %) or type a new Target Quads within that range: the colours and squares follow
+  at once, nothing is recomputed. Change sets Target Quads, so Remesh then uses the count you settled on.
+- It is a plan, not the result, but a close one: a region's quads usually come out within about 5 % of
+  the shown size, about as close as two Remesh runs of the same model are to each other. Small flat parts
+  (leaves, flower cards) and CAD parts can be 10-30 % off. It shows size only, never edge loops or poles.
+- Editing the mesh removes the preview. Changing another setting, or Target Quads more than 20 % away from
+  the planned count, asks you to preview again. Click the button again to hide it.
 
 ---
 

@@ -121,7 +121,10 @@ def size_stats(centres, run_size, plan_size):
     sr = 0.5 * np.log2((run_size[near] ** 2).mean(axis=1))
     sp = 0.5 * np.log2((plan_size[near] ** 2).mean(axis=1))
     area = run_size ** 2
+    rres = np.abs(sr - sp)
     return {"r2": explained(lr, lp), "r2s": explained(sr, sp),
+            "rerr": float(np.median(rres)), "rerrA": float(np.average(rres, weights=area)),
+            "rp90": float(np.percentile(rres, 90)),
             "bias": float(np.median(resid)), "err": float(np.median(np.abs(resid))),
             "errA": float(np.average(np.abs(resid), weights=area)),
             "p90": float(np.percentile(np.abs(resid), 90)), "n": int(ok.sum())}
@@ -139,12 +142,13 @@ def region_sizes(run_dir, points):
 CHANGE_PAIRS = ((4200, 5000), (5000, 6000), (3500, 5000), (5000, 7100), (2500, 5000), (5000, 10000))
 
 
-def targets_of(root, set_name, mesh):
+def targets_of(root, set_name, mesh, resolution="quality"):
     d = os.path.join(root, set_name, mesh)
     out = []
+    prefix = f"{resolution}-t"
     for cfg in os.listdir(d) if os.path.isdir(d) else []:
-        if cfg.startswith("quality-t"):
-            out.append(int(cfg[len("quality-t"):]))
+        if cfg.startswith(prefix):
+            out.append(int(cfg[len(prefix):]))
     return sorted(out)
 
 
@@ -163,27 +167,29 @@ def main():
     ap.add_argument("--set", default="corpus")
     ap.add_argument("--work", default=os.environ.get("AR_WORK", os.path.expanduser("~/ar-work")))
     ap.add_argument("--json", help="write the per-mesh rows here")
+    ap.add_argument("--plan-resolution", default="quality", help="resolution of the plans (runs: quality)")
+    ap.add_argument("--replicate", default="u0", help="replicate of the runs to compare with (u0 = plain input)")
     a = ap.parse_args()
 
-    corpus = json.load(open(os.path.join(HERE, "corpus.json")))
+    corpus = json.load(open(os.environ.get("AR_CORPUS") or os.path.join(HERE, "corpus.json")))
     files = {m["id"]: m["file"] for m in corpus["meshes"] if m.get("set", "corpus") == a.set}
     rows = []
     changes = []
     for mesh in sorted(files):
-        plan_targets = [t for t in targets_of(a.plans, a.set, mesh)
-                        if run_ok(os.path.join(a.plans, a.set, mesh, f"quality-t{t}", "u0"), "plan.bin")]
+        plan_targets = [t for t in targets_of(a.plans, a.set, mesh, a.plan_resolution)
+                        if run_ok(os.path.join(a.plans, a.set, mesh, f"{a.plan_resolution}-t{t}", "u0"), "plan.bin")]
         run_targets = [t for t in targets_of(a.runs, a.set, mesh)
-                       if run_ok(os.path.join(a.runs, a.set, mesh, f"quality-t{t}", "u0"), "out.obj")]
+                       if run_ok(os.path.join(a.runs, a.set, mesh, f"quality-t{t}", a.replicate), "out.obj")]
         if not plan_targets or not run_targets:
             continue
         inp, _ = read_obj(os.path.join(a.work, "meshes", files[mesh]))
         tree = cKDTree(inp)
-        plans = {t: read_plan(os.path.join(a.plans, a.set, mesh, f"quality-t{t}", "u0")) for t in plan_targets}
+        plans = {t: read_plan(os.path.join(a.plans, a.set, mesh, f"{a.plan_resolution}-t{t}", "u0")) for t in plan_targets}
         for edge, _, _, _ in plans.values():
             if edge.size != len(inp):
                 sys.exit(f"{mesh}: plan has {edge.size} vertices, input {len(inp)}")
         for n in run_targets:
-            d = os.path.join(a.runs, a.set, mesh, f"quality-t{n}", "u0")
+            d = os.path.join(a.runs, a.set, mesh, f"quality-t{n}", a.replicate)
             v, faces = read_obj(os.path.join(d, "out.obj"))
             report = json.load(open(os.path.join(d, "report.json")))
             centres, size = quad_sizes(v, faces)
@@ -235,7 +241,7 @@ def main():
     ratios = sorted({round(r["ratio"], 2) for r in rows})
     print(f"set {a.set}: {len({r['mesh'] for r in rows})} meshes, medians over (mesh, N0) pairs")
     print(f"{'N/N0':>6} {'pairs':>5} {'r2':>5} {'r2s':>5} {'min r2s':>7} {'bias':>6} {'err':>5} {'errA':>5} "
-          f"{'p90':>5} {'count':>6} {'in10%':>6} {'replan':>6}")
+          f"{'p90':>5} {'rerr':>5} {'rp90':>5} {'count':>6} {'in10%':>6} {'replan':>6}")
     for ratio in ratios:
         sel = [r for r in rows if round(r["ratio"], 2) == ratio and r["size"]]
         r2 = [r["size"]["r2"] for r in sel if r["size"]["r2"] is not None]
@@ -245,7 +251,8 @@ def main():
         print(f"{ratio:6.2f} {len(sel):5d} {fmt(med(r2))} {fmt(med(r2s))} {fmt(min(r2s) if r2s else None):>7} "
               f"{fmt(med([r['size']['bias'] for r in sel])):>6} {fmt(med([r['size']['err'] for r in sel])):>5} "
               f"{fmt(med([r['size']['errA'] for r in sel])):>5} "
-              f"{fmt(med([r['size']['p90'] for r in sel])):>5} {fmt(med(counts), 3):>6} {fmt(within):>6} "
+              f"{fmt(med([r['size']['p90'] for r in sel])):>5} {fmt(med([r['size']['rerr'] for r in sel])):>5} "
+              f"{fmt(med([r['size']['rp90'] for r in sel])):>5} {fmt(med(counts), 3):>6} {fmt(within):>6} "
               f"{fmt(med([r.get('replan') for r in sel]), 3):>6}")
     if changes:
         print("region size change between two runs against the plan's change (log2, median |error| per mesh)")
@@ -256,11 +263,11 @@ def main():
                 print(f"  {a_n:>6} -> {b_n:<6} planned {med([c['planned'] for c in sel]):+.3f}  "
                       f"error median {med([c['err'] for c in sel]):.3f}, max {worst['err']:.3f} ({worst['mesh']})")
     fresh = [r for r in rows if r["n0"] == r["n"]]
-    print("fresh plans (N = N0), per mesh: r2, r2s, errA (medians over targets)")
+    print("fresh plans (N = N0), per mesh: r2, r2s, errA, rerrA, rp90 (medians over targets)")
     for mesh in sorted({r["mesh"] for r in fresh}):
         sel = [r["size"] for r in fresh if r["mesh"] == mesh and r["size"]]
         print(f"  {mesh:24s} {fmt(med([x['r2'] for x in sel]))} {fmt(med([x['r2s'] for x in sel]))} "
-              f"{fmt(med([x['errA'] for x in sel]))}")
+              f"{fmt(med([x['errA'] for x in sel]))} {fmt(med([x['rerrA'] for x in sel]))} {fmt(med([x['rp90'] for x in sel]))}")
     times = [r["time_ratio"] for r in fresh if r.get("time_ratio")]
     if times:
         print(f"P3 plan time / run time at the same target: median {med(times):.3f}, max {max(times):.3f} "

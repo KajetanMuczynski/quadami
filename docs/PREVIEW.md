@@ -214,6 +214,9 @@ edge loops differ." The Resolution tooltip in the add-on says "about twice as lo
 
 ### 4.4 Built: plan-only core and the overlay (2026-10-31)
 
+*Superseded in part by §4.5 (2026-11-04): the plan now comes from the continuous cover solve, and the
+Change bar spans ±20 %. The numbers below are those of the first plan (the size law on the decimated mesh).*
+
 Thread "Build density preview overlay", branch `feat/density-overlay`. Kajetan's ask: a swipe check
 around a typed Target Quads (for example 4k-6k around 5k) that shows which details keep their quads,
 fast enough to drag; plan once, rescale on every move.
@@ -324,6 +327,72 @@ and the corpus runs are byte-identical on re-run with the current build, and the
 - The overlay on real Blender 4.2 and 5.2 with a GPU: drawing was checked in pip `bpy` 5.2.3 with
   software EGL (image looked right); the CI smoke runs in background mode without drawing.
 - Timings ran with `ab.py --jobs 3` on both sides, not alone.
+
+### 4.5 Plan from the continuous cover; ±20 % bar (2026-11-04)
+
+Thread "Narrow density overlay prediction bar". Kajetan's ask: the ±20 % bar of §4.4, which needs the
+plan's absolute region size to be right (his call of 2026-10-31: P1 must pass first).
+
+**Why P1 failed** [M, stage diagnostics, one run each]: the cover solve realises only part of the size
+field it is asked for. Its own `continuous_size_slope` (realised log edge against requested, per face
+of T) is 0.43 on sword and 0.77 on spot; rounding and untangling change it by under 0.02. Any size law,
+on the decimated mesh or on T, predicts what the cover is asked for, not what it gives: hence the
+plan's doubled contrast on sword and nefertiti, and the flat plan on CAD and noisy parts.
+
+**What changed** [C]: `planRemesh()` runs each island as a run does up to the first (continuous) solve
+of the cover (`QuadParameterizer::parameterize(..., planFaceEdges)`; the rounding, untangling and
+extraction are skipped) and takes per face of T the edge of a unit cell of that map,
+√(3D area / uv area). 8 Jacobi steps of log smoothing on T (was 32 on the decimated mesh), the count
+kept, nearest-vertex transfer as before. If the cover fails on an island, that island falls back to
+the size law. The add-on's Change bar spans ±20 % and the overlay asks for a new preview outside it;
+Anisotropy is now a planning setting.
+
+**Measured** (`tools/bench/plan_report.py`, new columns `rerr` = median |log₂ run / plan| of 16-quad
+regions with the bias left in, `rp90` its 90th percentile; ab.py Quality runs at 2.5k/5k/10k, fresh
+plans, medians over mesh × target; core tree 4e709af32016 with the prototype, one replicate unless noted)
+
+| | first plan (§4.4) region r² / rerr / rp90 | continuous-cover plan |
+|---|---|---|
+| corpus (18) | 0.63 / 0.16 / 0.41 | 0.96 / 0.04 / 0.13 |
+| corpus, runs u1-u5 at 5k (5 replicates) | 0.62-0.67 / 0.155-0.166 | 0.94-0.96 / 0.043-0.049 |
+| sculpt (7) | 0.78 / 0.17 / 0.56 | 0.96 / 0.04 / 0.11 (5k: 0.99) |
+| plan at 5k against runs at 4.2k / 6k (the band's ends) | corpus 0.16, sculpt 0.18 | corpus 0.064, sculpt 0.058 |
+| two runs of the same mesh (u0 against u1-u5 at 5k, the noise floor) | | corpus 0.022, sculpt 0.051 |
+| plan time / run time at the same target, median (max) | 0.07 (0.64) | corpus 0.62 (0.75), sculpt 0.72 (0.76); 19.5 s max (2M triangles) |
+
+Per mesh (fresh plan, region r² / area-weighted rerr): every corpus mesh improved; worst after:
+csg_bracket 0.40 / 0.20 (was −0.04 / 0.19: the pattern is better, the size on its flat faces still
+about 15 % off), sword 0.79 / 0.09, spot_x8 0.89 / 0.07, spot_noisy and wingnut 0.91. Smoothing
+steps (corpus fresh r² / rerr): 0: 0.95 / 0.05, 4: 0.96 / 0.04, 8: 0.96 / 0.04, 16: 0.94 / 0.05,
+32: 0.89 / 0.07. Rejected: the requested size after the curl correction (0.74 / 0.11 at 0.50 of a run)
+and the cover on Fast's T against Quality runs (0.70 / 0.12 at 0.33). The private sculpts give the same
+picture (only metrics here); his sword's small flat parts stay 10-35 % off.
+
+Independent check [checked]: a fresh worker with its own metric code (sizes sampled on the input
+surface, a ball of three local edges as the region) found the continuous-cover plan at r² 0.89-0.92,
+error 0.05-0.06 (first plan 0.32-0.47 / 0.14-0.15; uniform size 0.245), r² 0.82-0.88 over the five
+replicates, and no leak from the run into the plan. So the numbers above depend on the region
+definition by about 0.05 in r²; the conclusion does not.
+
+**Reading** [I]
+- The plan's region error is now about one third of the band's half-width (±20 % quads = −9/+12 %
+  edge = 0.13-0.16 log₂), so the ±20 % bar shows real differences; ±30 % would too.
+- The cost is the gate P3 failure: about half a run (Kajetan accepted it, 2026-11-04). A plan runs once
+  per mesh and settings; swipes inside the band redraw only. Reusing the plan's solve when Remesh runs
+  at the planned count is the follow-up that makes the plan not wasted work.
+- P1 as written (r² ≥ 0.8) passes on both sets; the absolute region error is the better gate for the
+  bar, and it sits close to the noise floor.
+
+**What would falsify this**
+- A replicate set where the plan's region error rises well above the band's half-width on organic meshes.
+- A geodesic region definition (the checks used Euclidean balls, which can cross thin parts) giving much
+  lower r².
+- On his laptop, plan time far above half a run.
+
+**What I did not re-check**
+- The `external`, `brush`, `usage`, `cad` sets; Fast-resolution plans against Fast runs.
+- Plans made at other targets and rescaled beyond the band (only 2× and ½×, about 0.08 log₂ from fresh).
+- Timings ran with `ab.py --jobs 3` on both sides.
 
 ## 5. Design critique (what may have been missed)
 

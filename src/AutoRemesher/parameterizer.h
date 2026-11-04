@@ -120,11 +120,19 @@ public:
 
     bool parameterize();
 
+    // Makes parameterize() a plan: it stops after the continuous cover solve,
+    // before the rounding, and fills faceEdges with the quad edge the cover
+    // gives each triangle (QuadParameterizer::parameterize).
+    void setPlanFaceEdges(std::vector<double>* faceEdges)
+    {
+        m_planFaceEdges = faceEdges;
+    }
+
     // The quad edge length the cover asks of each triangle, in input units:
     // scaling times the base edge times the scaling field (with anisotropy
     // the geometric mean of the two directions).  The same sizing as
-    // parameterize() uses, without the field and the cover (the plan,
-    // RemeshPlan).
+    // parameterize() uses, without the field and the cover: what a plan
+    // falls back on when the cover solve fails.
     std::vector<double> plannedFaceEdgeLengths() const;
 
     // Records of the field, simplification and cover solves of the last
@@ -148,6 +156,7 @@ private:
     double m_sharpEdgeDegrees = 90.0;
     const FeatureEdgeSet* m_featureEdges = nullptr;
     double m_anisotropy = 1.0;
+    std::vector<double>* m_planFaceEdges = nullptr;
     double m_maxAspectRatio = 2.3;
     bool m_singularitySimplification = true;
     size_t m_maximumSingularityPairDistance = 6;

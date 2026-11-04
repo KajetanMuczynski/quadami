@@ -574,8 +574,7 @@ private:
         std::atomic<long long>* adaptiveFieldTimeUs,
         const ProgressHandler* progressHandler,
         std::vector<Vector3>* decimatedVerticesOut,
-        std::vector<std::vector<size_t>>* decimatedTrianglesOut,
-        bool stopAfterDecimation = false);
+        std::vector<std::vector<size_t>>* decimatedTrianglesOut);
     static double calculateMeshArea(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles);
 };

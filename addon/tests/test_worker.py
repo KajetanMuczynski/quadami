@@ -485,9 +485,15 @@ class PlanTest(unittest.TestCase):
 
     def test_change_limits(self):
         self.assertEqual(density.change_quads(5000, 0.0), 5000)
-        self.assertEqual(density.change_quads(5000, density.CHANGE_MAX), round(5000 * density.RANGE))
-        self.assertEqual(density.change_quads(5000, density.CHANGE_MIN), round(5000 / density.RANGE))
-        self.assertEqual(density.change_quads(5000, 1000.0), round(5000 * density.RANGE))
+        self.assertEqual(density.change_quads(5000, density.CHANGE_MAX), 6000)
+        self.assertEqual(density.change_quads(5000, density.CHANGE_MIN), 4000)
+        self.assertEqual(density.change_quads(5000, 1000.0), 6000)
+
+    def test_band(self):
+        self.assertTrue(density.in_band(5000, 4000))
+        self.assertTrue(density.in_band(5000, 6000))
+        self.assertFalse(density.in_band(5000, 3999))
+        self.assertFalse(density.in_band(5000, 6001))
 
 
 @unittest.skipIf(EXECUTABLE is None, "set AUTOREMESHER_EXECUTABLE to a built autoremesher-cli")

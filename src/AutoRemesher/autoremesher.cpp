@@ -409,17 +409,15 @@ namespace {
         return nearest;
     }
 
-    // The run's quads follow the planned sizes only as smoothly as the cover
-    // can: it averages the per-face sizes over a few quads, and the field's
-    // integrability moves them by up to 1.5x (REFERENCE §3 rows 12-13).
-    // Averaging the log edge over the plan's own mesh brings the plan
-    // closer to the run's quads (docs/PREVIEW.md §4.4).  A decimated island
-    // has about 18 triangles per planned quad at Quality (4 x T's 4.5), so
-    // the averaging reaches about a quad edge or two whatever the target;
-    // on an island too coarse to decimate it reaches farther.  The count is kept:
-    // sum(area / edge^2) stays as before.  sum and weight hold, per vertex,
-    // the area-weighted sum of its faces' edges and their area.
-    const int plannedEdgeSmoothing = 32;
+    // The plan's sizes come from the continuous cover on T, which already
+    // averages them over a few quads; a light average of the log edge over
+    // T removes the face-to-face noise of the map (8 steps reach about one
+    // quad edge at Quality's 4.5 triangles per quad; 0, 4, 16 and 32 steps
+    // fit the runs' regions worse or the same, docs/PREVIEW.md §4.5).  The
+    // count is kept: sum(area / edge^2) stays as before.  sum and weight hold,
+    // per vertex, the area-weighted sum of its faces' edges and their area;
+    // a vertex with no weight (only degenerate faces) takes no part.
+    const int plannedEdgeSmoothing = 8;
 
     void smoothPlannedEdges(const std::vector<Vector3>& vertices, const std::vector<std::vector<size_t>>& triangles,
         const std::vector<double>& faceEdges, std::vector<double>* sum, const std::vector<double>* weight)
@@ -437,10 +435,15 @@ namespace {
         std::vector<double> next(x.size());
         for (int iteration = 0; iteration < plannedEdgeSmoothing; ++iteration) {
             for (size_t v = 0; v < x.size(); ++v) {
-                double total = x[v];
-                for (const size_t u : ring[v])
-                    total += x[u];
-                next[v] = total / (1.0 + ring[v].size());
+                double total = (*weight)[v] > 0.0 ? x[v] : 0.0;
+                double count = (*weight)[v] > 0.0 ? 1.0 : 0.0;
+                for (const size_t u : ring[v]) {
+                    if ((*weight)[u] > 0.0) {
+                        total += x[u];
+                        count += 1.0;
+                    }
+                }
+                next[v] = count > 0.0 ? total / count : x[v];
             }
             x.swap(next);
         }
@@ -449,6 +452,8 @@ namespace {
         for (size_t f = 0; f < triangles.size(); ++f) {
             const auto& t = triangles[f];
             const double area = Vector3::area(vertices[t[0]], vertices[t[1]], vertices[t[2]]);
+            if (!(faceEdges[f] > 0.0))
+                continue;
             before += area / (faceEdges[f] * faceEdges[f]);
             const double edge = std::exp((x[t[0]] + x[t[1]] + x[t[2]]) / 3.0);
             after += area / (edge * edge);
@@ -946,8 +951,7 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     std::atomic<long long>* adaptiveFieldTimeUs,
     const ProgressHandler* progressHandler,
     std::vector<Vector3>* decimatedVerticesOut,
-    std::vector<std::vector<size_t>>* decimatedTrianglesOut,
-    bool stopAfterDecimation)
+    std::vector<std::vector<size_t>>* decimatedTrianglesOut)
 {
     auto t_decimateStart = std::chrono::high_resolution_clock::now();
     decimateIfTooDense(vertices, triangles, topology, voxelSize, sharpEdgeDegrees, featureEdges,
@@ -964,10 +968,6 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
         *decimatedVerticesOut = vertices;
     if (nullptr != decimatedTrianglesOut)
         *decimatedTrianglesOut = triangles;
-    // A plan sizes the quads on the decimated mesh: as good a guide to the
-    // run's quad size as T, at a third to a fifth of the time (docs/PREVIEW.md).
-    if (stopAfterDecimation)
-        return;
 
     auto t_fieldStart = std::chrono::high_resolution_clock::now();
     std::vector<double> vertexTargetLengths;
@@ -1560,7 +1560,7 @@ bool AutoRemesher::remeshIslands()
         resample(ctx.vertices, ctx.triangles, ctx.inputTopology, ctx.voxelSize, ctx.adaptivity,
             ctx.sharpEdgeDegrees, run.isotropicFeatureEdges, &sharpEdgeStats, ctx.smoothNormalDegrees, islandIndex, stats,
             &adaptiveFieldTime, &isotropicProgress,
-            &run.decimatedVertices, &run.decimatedTriangles, m_planOnly);
+            &run.decimatedVertices, &run.decimatedTriangles);
         auto t1 = std::chrono::high_resolution_clock::now();
         run.resampleUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
         resampleTime += run.resampleUs;
@@ -1760,13 +1760,13 @@ bool AutoRemesher::remeshIslands()
     auto t_isotropicEnd = std::chrono::high_resolution_clock::now();
     throwIfCancelled();
 
-    // The plan: the quad edge the cover would ask of each face of the
-    // decimated island (resample() stops there in a plan), smoothed, and
-    // carried to the input vertices by the nearest vertex of the decimated
-    // island, which lies on the input within its own edge length.
+    // The plan: each island is parameterized as in a run up to the
+    // continuous cover solve, whose map gives the quad edge of every face of
+    // T (the cover realises only part of the size field it is asked for, so
+    // the field alone mispredicts, docs/PREVIEW.md §4.5).  Smoothed, and
+    // carried to the input vertices by the nearest vertex of T, which lies on
+    // the input within its own edge length.
     if (m_planOnly) {
-        if (nullptr != m_progressHandler)
-            m_progressHandler(m_tag, 0.9f, "Planning quad sizes");
         m_planIslands.assign(islandContexes.size(), PlanIsland());
         m_planVertexEdgeLengths.assign(givenVertexCount, 0.0f);
         m_planVertexIslands.assign(givenVertexCount, NoPlanIsland);
@@ -1797,13 +1797,37 @@ bool AutoRemesher::remeshIslands()
                         parameterizer.setScaling(ctx.scaling);
                     parameterizer.setTargetQuadCount(ctx.targetQuadCount);
                     parameterizer.setGradientAdaptivity(ctx.adaptivity);
-                    const std::vector<double> faceEdges = parameterizer.plannedFaceEdgeLengths();
+                    parameterizer.setAnisotropy(ctx.anisotropy);
+                    parameterizer.setSharpEdgeDegrees(ctx.sharpEdgeDegrees);
+                    parameterizer.setFeatureEdges(&islandRuns[i].isotropicFeatureEdges);
+                    // A plan has no extraction: the solve fills the rest of the bar.
+                    parameterizer.setProgressHandler(makeStageProgress(i, islandResampleEnd, 1.0f, 0.0f));
+                    std::vector<double> faceEdges;
+                    parameterizer.setPlanFaceEdges(&faceEdges);
+                    bool solved = false;
+                    try {
+                        solved = parameterizer.parameterize();
+                    } catch (const RemeshCancelled&) {
+                        throw;
+                    } catch (const std::exception&) {
+                        // As in a run: the island falls back, the plan goes on.
+                    }
+                    // Without a cover, what the cover is asked for.
+                    if (!solved || faceEdges.size() != ctx.triangles.size())
+                        faceEdges = parameterizer.plannedFaceEdgeLengths();
+                    for (auto& edge : faceEdges) {
+                        // Faces the map degenerates on take their neighbours' value.
+                        if (!(edge > 0.0) || !std::isfinite(edge))
+                            edge = 0.0;
+                    }
                     // Area-weighted mean of the faces around each vertex of T.
                     std::vector<double> sum(ctx.vertices.size(), 0.0);
                     std::vector<double> weight(ctx.vertices.size(), 0.0);
                     for (size_t f = 0; f < ctx.triangles.size(); ++f) {
                         const auto& t = ctx.triangles[f];
                         const double area = Vector3::area(ctx.vertices[t[0]], ctx.vertices[t[1]], ctx.vertices[t[2]]);
+                        if (!(faceEdges[f] > 0.0))
+                            continue;
                         for (const size_t v : t) {
                             sum[v] += area * faceEdges[f];
                             weight[v] += area;
