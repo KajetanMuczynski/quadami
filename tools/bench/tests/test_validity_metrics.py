@@ -189,6 +189,7 @@ class Validity(unittest.TestCase):
         self.assertEqual((v["islands_input"], v["islands_output"], v["islands_dropped"]), (2, 1, 1))
         share = r["validity"]["per_island"][1]["area_share"]
         self.assertAlmostEqual(v["area_uncovered"], share, delta=0.3 * share)
+        self.assertLess(v["area_uncovered_any_island"], 0.1 * share)  # the torus's output is near it
         self.assertFalse(v["islands_same_as_input"])
 
     def test_reversed_islands_are_counted(self):

@@ -37,14 +37,17 @@ named *_rel_edge, which are relative to the output mean edge length):
               the old count against the file's own normals
   validity    per input island (vertex-connected part), matched to output
               islands by nearest input triangle: dropped (under half its area
-              within one output edge), split, merged (covered but without an
+              within one target edge of its own output), split, merged (covered but without an
               output island of its own),
               Euler characteristic / boundary loops changed, holes added or
               closed, handles lost or added (genus per island; a handle moved
               between islands shows here, not in same_as_input), non-manifold
               vertices, folded faces of any size (the CLI's folded_faces),
-              input area farther than one output edge from the output
-              (area_uncovered) or that near but under an output face facing the
+              input area farther than one target edge (the output's mean edge
+              without a target) from the output faces of its own island
+              (area_uncovered; area_uncovered_any_island: from every output
+              face, so the difference is area only another island's output
+              lies near), or that near but under an output face facing the
               other way (area_wrong_side: thin parts collapsed into one sheet,
               pleats), islands_same_as_input (none dropped, split, merged or
               changed, output manifold). Input islands that are not manifold
@@ -478,10 +481,11 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
     """Validity per input island (TARGETS H2, H4, H5, V6 and the thin-part part of V3).
 
     Output islands are matched to input islands by the input triangle nearest to each output face's
-    centroid (majority). Coverage: an area sample of the input is covered when the output is within
-    h (output mean edge) of it, and on the wrong side when it is that near but the nearest output
-    face faces the other way (a thin part collapsed into one sheet, or a pleat). Islands with fewer
-    than 200 area samples are measured on up to 2000 of their triangles' centroids instead.
+    centroid (majority). Coverage: an area sample of the input is covered when an output face that
+    stands for its island (own_island_distance) is within h (one target edge) of it, and on the wrong
+    side when it is that near but the nearest such face faces the other way (a thin part collapsed
+    into one sheet, or a pleat). Islands with fewer than 200 area samples are measured on up to 2000
+    of their triangles' centroids instead.
     """
     from scipy.sparse import coo_matrix
 
@@ -509,9 +513,10 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
     vote = tri_island[cf]
     if in_tri is None:  # input without area
         cov = np.ones(nin)
-        uncovered = wrong = 0.0
+        uncovered = uncovered_any = wrong = 0.0
     else:
         isl = tri_island[in_tri]
+        uncovered_any = float(np.mean(d > h))
         d, out_face = own_island_distance(Pin, isl, d, out_face, vote, V, Ftri, tri_face)
         near = d <= h
         opposite = sign * np.einsum("ij,ij->i", nin_o[in_tri], normals[out_face]) < 0
@@ -557,7 +562,7 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
            "holes_closed": int(np.sum(np.maximum(in_loops - loops_sum, 0)[kept])),
            "handles_lost": float(np.sum(np.maximum(g2_in - g2_out, 0)[kept & (k == 1)]) / 2),
            "handles_added": float(np.sum(np.maximum(g2_out - g2_in, 0)[kept & (k == 1)]) / 2),
-           "area_uncovered": uncovered, "area_wrong_side": wrong,
+           "area_uncovered": uncovered, "area_uncovered_any_island": uncovered_any, "area_wrong_side": wrong,
            "island_coverage_min": float(cov.min()) if nin else None}
     if nin <= 32:
         res["per_island"] = [{"area_share": float(inp["island_area"][i] / max(inp["island_area"].sum(), 1e-300)),
