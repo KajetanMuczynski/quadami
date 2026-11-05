@@ -20,6 +20,7 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *  SOFTWARE.
  */
+#include "envelope.h"
 #include "inputsanitizer.h"
 #include "measuremesh.h"
 #include "qexextraction.h"
@@ -127,6 +128,27 @@ namespace {
     const double maximumMarkedEdgeDensity = 0.25;
     const size_t maximumIslandRetries = 4;
     const double maximumRetriedIslandTriangleCount = 1024.0;
+
+    // A closed quad mesh of Euler characteristic chi < 0 whose vertices have
+    // valence 6 or less has at least 3|chi| faces: the valences exceed 4 by
+    // 4|chi| in all, so at least 2|chi| vertices are irregular, and such a
+    // mesh has |chi| more faces than vertices.  An island asked for fewer
+    // quads than that (chain mail, strung beads or feathers of crossing
+    // strands at a few dozen quads) cannot keep its holes and handles: its
+    // map breaks and the extraction comes out as spikes at several times the
+    // island's count, or nearly empty (ext_nemetona 3000: research/nemetona-spikes-2026-11-05.md).
+    // Such an island is remeshed on its envelope instead (envelope.h), which
+    // closes gaps narrower than about two quads.  Distances in quad widths
+    // sqrt(area / target quads): the closing radius, how far the envelope lies
+    // outside the input, and the grid cell.  At an offset of half a quad, 16 %
+    // of the output of ext_nemetona 3000 lay more than half a quad off the
+    // input (the back of a single-sided sheet's slab); a quarter gave 1.2-1.6 %
+    // at the same spikes and folds within 5 % (6 replicates, 3000 and 10000).
+    const double minimumQuadsPerNegativeEuler = 3.0;
+    const double envelopeClosingRadius = 1.0;
+    const double envelopeOffset = 0.25;
+    const double envelopeCellSize = 0.25;
+    const size_t maximumEnvelopeGridNodes = (size_t)1 << 22;
 
     // A sliver is a strip-shaped island (area below 1e-3 of its bounding
     // diagonal squared) whose mean width, area over diagonal, is under half
@@ -1184,8 +1206,20 @@ bool AutoRemesher::remeshIslands()
         std::vector<std::vector<size_t>> triangles;
         // Taken before resampling replaces vertices and triangles.
         QuadExtractor::Boundary inputBoundary;
+        // Of the surface the island is remeshed from: its input, or its
+        // envelope (enveloped below).
         SurfaceTopology inputTopology;
         long long inputTwiceHandles = -1;
+        // Of the input itself, which the report compares the output with.
+        SurfaceTopology originalTopology;
+        long long originalTwiceHandles = -1;
+        // Remeshed on its envelope, which the quads are then projected onto
+        // instead of the input.
+        bool enveloped = false;
+        std::vector<Vector3> envelopeVertices;
+        std::vector<std::vector<size_t>> envelopeTriangles;
+        double envelopeCellSize = 0.0;
+        size_t envelopeDroppedTriangles = 0;
         double voxelSize;
         double area;
         // Of the island's bounding box.
@@ -1245,6 +1279,8 @@ bool AutoRemesher::remeshIslands()
         context.inputTwiceHandles = 0 == context.inputTopology.nonManifoldEdges
             ? twiceHandleCount(context.vertices.size(), context.triangles)
             : -1;
+        context.originalTopology = context.inputTopology;
+        context.originalTwiceHandles = context.inputTwiceHandles;
         context.inputBoundary = QuadExtractor::findBoundary(context.vertices, context.triangles);
         context.markedEdges = islandMarkedEdges(island, oldToNewVertexMap, m_markedEdges);
         context.inputMarkedEdgeCount = context.markedEdges.size();
@@ -1274,6 +1310,44 @@ bool AutoRemesher::remeshIslands()
             context.followMarks = false;
             context.markedEdgesTooDense = true;
         }
+    };
+
+    // Whether the island's holes and handles need more quads than it is
+    // asked for (minimumQuadsPerNegativeEuler).
+    const auto needsEnvelope = [&](const IslandContext& context) {
+        return !context.leftOut && context.targetQuadCount > 0.0 && context.area > 0.0
+            && context.originalTopology.eulerCharacteristic < 0
+            && context.targetQuadCount < minimumQuadsPerNegativeEuler * (double)(-context.originalTopology.eulerCharacteristic);
+    };
+
+    // Replaces the island's surface by its envelope at the island's quad
+    // width.  The envelope has no sharp edges (its cell steps are not
+    // creases) and no marks (they lie on the input), and the report still
+    // compares the output with the input.  Left as it was if no envelope
+    // comes out.
+    const auto applyEnvelope = [&](IslandContext& context) {
+        const double quadWidth = std::sqrt(context.area / context.targetQuadCount);
+        EnvelopeResult envelope;
+        if (!buildEnvelope(context.vertices, context.triangles, envelopeClosingRadius * quadWidth,
+                envelopeOffset * quadWidth, envelopeCellSize * quadWidth, maximumEnvelopeGridNodes, &envelope))
+            return false;
+        context.enveloped = true;
+        context.envelopeCellSize = envelope.cellSize;
+        context.envelopeDroppedTriangles = envelope.droppedTriangles;
+        context.vertices = envelope.vertices;
+        context.triangles = envelope.triangles;
+        context.envelopeVertices = std::move(envelope.vertices);
+        context.envelopeTriangles = std::move(envelope.triangles);
+        context.inputVertices.clear();
+        context.inputTopology = surfaceTopology(context.triangles, context.vertices.size());
+        context.inputTwiceHandles = 0 == context.inputTopology.nonManifoldEdges
+            ? twiceHandleCount(context.vertices.size(), context.triangles)
+            : -1;
+        context.inputBoundary = QuadExtractor::findBoundary(context.vertices, context.triangles);
+        context.featureEdges = FeatureEdgeSet();
+        context.markedEdges.clear();
+        context.followMarks = false;
+        return true;
     };
 
     // The island's sharp edges with its followed marks as hard edges
@@ -1339,6 +1413,13 @@ bool AutoRemesher::remeshIslands()
         context.followMarks = false;
         ++sliverIslands;
     }
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                if (needsEnvelope(islandContexes[i]))
+                    applyEnvelope(islandContexes[i]);
+            }
+        });
     for (auto& context : islandContexes)
         applyMarkedEdgeDensity(context);
     auto t_buildEnd = std::chrono::high_resolution_clock::now();
@@ -1563,7 +1644,8 @@ bool AutoRemesher::remeshIslands()
                     creases.edges.emplace_back(ctx.inputVertices[edge.first], ctx.inputVertices[edge.second]);
                 creases.flags = islandCreases.flags;
                 creases.normalize();
-                SurfaceProjector projector(&m_vertices, &trianglesIslands[islandIndex], &creases);
+                SurfaceProjector projector(ctx.enveloped ? &ctx.envelopeVertices : &m_vertices,
+                    ctx.enveloped ? &ctx.envelopeTriangles : &trianglesIslands[islandIndex], &creases);
                 const auto projection = projector.project(&run.remeshedVertices, run.remeshedQuads);
                 DiagnosticRecord record("surface_projection");
                 record.set("vertices", (double)projection.vertices);
@@ -1664,6 +1746,8 @@ bool AutoRemesher::remeshIslands()
                     buildIslandContext(i, ctx);
                     ctx.voxelSize = voxelSize;
                     ctx.targetQuadCount = targetQuadCount;
+                    if (islandContexes[i].enveloped)
+                        applyEnvelope(ctx);
                     applyMarkedEdgeDensity(ctx);
                     IslandRun run;
                     resampleIsland(i, ctx, run, &retryDecimationStats);
@@ -1757,6 +1841,9 @@ bool AutoRemesher::remeshIslands()
             });
     }
     m_markedEdgesDroppedIslandCount = (size_t)std::count(markedEdgesDropped.begin(), markedEdgesDropped.end(), 1);
+    m_envelopedIslandCount = 0;
+    for (const auto& ctx : islandContexes)
+        m_envelopedIslandCount += ctx.enveloped ? 1 : 0;
     m_markedEdgesTooDenseIslandCount = 0;
     for (const auto& ctx : islandContexes)
         m_markedEdgesTooDenseIslandCount += ctx.markedEdgesTooDense ? 1 : 0;
@@ -1842,14 +1929,14 @@ bool AutoRemesher::remeshIslands()
     m_remeshedIslands.reserve(islandRuns.size());
     for (size_t i = 0; i < islandRuns.size(); ++i) {
         const auto& run = islandRuns[i];
-        const auto& input = islandContexes[i].inputTopology;
+        const auto& input = islandContexes[i].originalTopology;
         RemeshedIsland island;
         island.closedInput = 0 == input.boundaryEdges && 0 == input.nonManifoldEdges;
         island.targetQuads = islandContexes[i].targetQuadCount;
         if (!run.remeshedQuads.empty()) {
             island.vertexCount = run.remeshedVertices.size();
             island.faceCount = run.remeshedQuads.size();
-            island.inputTwiceHandles = islandContexes[i].inputTwiceHandles;
+            island.inputTwiceHandles = islandContexes[i].originalTwiceHandles;
             if (island.inputTwiceHandles >= 0)
                 island.outputTwiceHandles = twiceHandleCount(run.remeshedVertices.size(), run.remeshedQuads);
         }
@@ -2087,6 +2174,7 @@ bool AutoRemesher::remeshIslands()
             run.set("thin_parts_ms", milliseconds(std::chrono::duration_cast<std::chrono::microseconds>(t_thinPartsEnd - t_isotropicEnd).count()));
         }
         run.set("retried_islands", (double)islandsToRetry.size());
+        run.set("enveloped_islands", (double)m_envelopedIslandCount);
         run.set("repaired_islands", (double)islandsRepaired.load());
         m_diagnostics.push_back(std::move(run));
 
@@ -2114,8 +2202,15 @@ bool AutoRemesher::remeshIslands()
             record.set("input_triangles", (double)trianglesIslands[i].size());
             record.set("target_quads", islandContexes[i].targetQuadCount);
             record.set("isotropic_triangles", (double)islandContexes[i].triangles.size());
-            record.set("input_boundary_edges", (double)islandContexes[i].inputTopology.boundaryEdges);
-            record.set("input_non_manifold_edges", (double)islandContexes[i].inputTopology.nonManifoldEdges);
+            record.set("input_boundary_edges", (double)islandContexes[i].originalTopology.boundaryEdges);
+            record.set("input_non_manifold_edges", (double)islandContexes[i].originalTopology.nonManifoldEdges);
+            record.set("input_euler_characteristic", (double)islandContexes[i].originalTopology.eulerCharacteristic);
+            record.set("enveloped", islandContexes[i].enveloped ? 1.0 : 0.0);
+            if (islandContexes[i].enveloped) {
+                record.set("envelope_cell_size", islandContexes[i].envelopeCellSize);
+                record.set("envelope_triangles", (double)islandContexes[i].envelopeTriangles.size());
+                record.set("envelope_dropped_triangles", (double)islandContexes[i].envelopeDroppedTriangles);
+            }
             record.set("decimated_boundary_edges", (double)islandRun.decimatedTopology.boundaryEdges);
             record.set("decimated_non_manifold_edges", (double)islandRun.decimatedTopology.nonManifoldEdges);
             record.set("isotropic_boundary_edges", (double)islandRun.isotropicTopology.boundaryEdges);
