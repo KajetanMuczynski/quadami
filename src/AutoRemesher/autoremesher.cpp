@@ -32,6 +32,8 @@
 #include <AutoRemesher/QuadExtractor>
 #include <AutoRemesher/SurfaceProjector>
 #include <AutoRemesher/ThinParts>
+#include <Eigen/Sparse>
+#include <Eigen/SparseCholesky>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -467,21 +469,27 @@ namespace {
     }
     // The plan's edge at the vertices of one input island, from the edges at
     // the sites (vertices of T).  Where the input is as fine as T, a vertex
-    // takes its nearest site.  An input triangle wider than T's edge covers
-    // many sites, and its corners see only the field at the corners (a box's
-    // eight corners, where the run makes its smallest quads): there the plan
-    // is carried by area instead.  Such a triangle's quads per area
-    // (1 / edge^2) is the mean over k x k equal sub-triangles, k = its longest
-    // side over T's mean edge (at most 32), and a vertex with such a
-    // triangle around it takes the area-weighted mean of its triangles'
-    // quads per area: the overlay, which interpolates the vertex values, then
-    // shows each coarse face's true mean (docs/PREVIEW.md §4.5).  Returns the
-    // edge per entry of `vertexIds`, the island's vertices in first use.
+    // takes its nearest site.  An input triangle wider than T's mean edge
+    // covers many sites, and its corners alone see only the field there (a
+    // box's eight corners, where the run makes its smallest quads, so the
+    // corner value painted every face 2-3x too fine; docs/PREVIEW.md §4.6).
+    // The vertices of such triangles are fitted instead: the overlay
+    // interpolates vertex edges linearly over each triangle, so their values
+    // are the least-squares fit of that interpolation to the plan sampled at
+    // the centres of k x k equal sub-triangles (k = longest side over T's
+    // mean edge, at most 32; 1 = the centre) of every triangle around them,
+    // with the other vertices held at their nearest site.  A cone's fan
+    // keeps its gradient to the tip; a box face shows its mean.  A small
+    // pull to each vertex's area mean keeps the fit unique, a vertex stays
+    // within the range of its samples, and a last scale keeps the quad
+    // count the samples give.  Returns the edge per entry of
+    // `vertexIds`, the island's vertices in first use.
     std::vector<double> transferPlannedEdges(const std::vector<Vector3>& sites, const std::vector<double>& siteEdges,
         double tEdge, const std::vector<Vector3>& vertices, const std::vector<std::vector<size_t>>& triangles,
         std::vector<size_t>* vertexIds)
     {
         const int maximumSplit = 32;
+        const double pull = 1e-3;
         std::unordered_map<size_t, size_t> local;
         std::vector<std::array<size_t, 3>> corners;
         corners.reserve(triangles.size());
@@ -497,73 +505,156 @@ namespace {
             }
             corners.push_back(c);
         }
-        std::vector<Vector3> queries;
-        queries.reserve(vertexIds->size());
-        for (const size_t v : *vertexIds)
-            queries.push_back(vertices[v]);
+        const size_t vertexCount = vertexIds->size();
+        const auto position = [&](size_t localVertex) -> const Vector3& { return vertices[(*vertexIds)[localVertex]]; };
         std::vector<int> split(corners.size(), 1);
-        std::vector<size_t> firstSample(corners.size(), 0);
+        std::vector<size_t> fitted(vertexCount, std::numeric_limits<size_t>::max());
+        size_t fittedCount = 0;
         for (size_t t = 0; t < corners.size(); ++t) {
-            const Vector3& a = vertices[(*vertexIds)[corners[t][0]]];
-            const Vector3& b = vertices[(*vertexIds)[corners[t][1]]];
-            const Vector3& c = vertices[(*vertexIds)[corners[t][2]]];
+            const Vector3& a = position(corners[t][0]);
+            const Vector3& b = position(corners[t][1]);
+            const Vector3& c = position(corners[t][2]);
             const double longest = std::max({ (b - a).length(), (c - b).length(), (a - c).length() });
             const double ratio = tEdge > 0.0 ? longest / tEdge : 1.0;
             const int k = std::isfinite(ratio) ? (int)std::min<double>(maximumSplit, std::ceil(ratio)) : 1;
             if (k < 2)
                 continue;
             split[t] = k;
+            for (const size_t v : corners[t]) {
+                if (std::numeric_limits<size_t>::max() == fitted[v])
+                    fitted[v] = fittedCount++;
+            }
+        }
+        // Samples: the vertices, then each triangle around a fitted vertex
+        // (barycentric weights of corners 1 and 2 kept for the fit).
+        std::vector<Vector3> queries;
+        queries.reserve(vertexCount);
+        for (size_t v = 0; v < vertexCount; ++v)
+            queries.push_back(position(v));
+        std::vector<size_t> firstSample(corners.size(), 0);
+        std::vector<std::pair<double, double>> weights;
+        for (size_t t = 0; t < corners.size(); ++t) {
+            const auto& c = corners[t];
+            if (std::numeric_limits<size_t>::max() == fitted[c[0]] && std::numeric_limits<size_t>::max() == fitted[c[1]]
+                && std::numeric_limits<size_t>::max() == fitted[c[2]])
+                continue;
             firstSample[t] = queries.size();
+            const int k = split[t];
+            const Vector3& a = position(c[0]);
+            const Vector3& b = position(c[1]);
+            const Vector3& d = position(c[2]);
             // Centres of the k x k sub-triangles: k(k+1)/2 upright, k(k-1)/2 upside down.
             for (int i = 0; i < k; ++i) {
                 for (int j = 0; i + j < k; ++j) {
-                    const double u = (i + 1.0 / 3.0) / k;
-                    const double w = (j + 1.0 / 3.0) / k;
-                    queries.push_back(a + (b - a) * u + (c - a) * w);
-                    if (i + j + 1 < k) {
-                        const double u2 = (i + 2.0 / 3.0) / k;
-                        const double w2 = (j + 2.0 / 3.0) / k;
-                        queries.push_back(a + (b - a) * u2 + (c - a) * w2);
+                    weights.emplace_back((i + 1.0 / 3.0) / k, (j + 1.0 / 3.0) / k);
+                    if (i + j + 1 < k)
+                        weights.emplace_back((i + 2.0 / 3.0) / k, (j + 2.0 / 3.0) / k);
+                }
+            }
+            for (size_t q = queries.size() - vertexCount; q < weights.size(); ++q)
+                queries.push_back(a + (b - a) * weights[q].first + (d - a) * weights[q].second);
+        }
+        const std::vector<size_t> nearest = nearestSites(sites, queries);
+        std::vector<double> edges(vertexCount);
+        for (size_t v = 0; v < vertexCount; ++v)
+            edges[v] = siteEdges[nearest[v]];
+        if (0 == fittedCount)
+            return edges;
+
+        std::vector<Eigen::Triplet<double>> entries;
+        Eigen::VectorXd rhs = Eigen::VectorXd::Zero((Eigen::Index)fittedCount);
+        std::vector<double> mass(fittedCount, 0.0);
+        std::vector<double> massEdge(fittedCount, 0.0);
+        std::vector<double> lowest(fittedCount, std::numeric_limits<double>::max());
+        std::vector<double> highest(fittedCount, 0.0);
+        for (size_t t = 0; t < corners.size(); ++t) {
+            const auto& c = corners[t];
+            if (std::numeric_limits<size_t>::max() == fitted[c[0]] && std::numeric_limits<size_t>::max() == fitted[c[1]]
+                && std::numeric_limits<size_t>::max() == fitted[c[2]])
+                continue;
+            const size_t count = (size_t)split[t] * (size_t)split[t];
+            const double area = Vector3::area(position(c[0]), position(c[1]), position(c[2])) / (double)count;
+            if (!(area > 0.0) || !std::isfinite(area))
+                continue;
+            for (size_t q = firstSample[t]; q < firstSample[t] + count; ++q) {
+                const auto& w = weights[q - vertexCount];
+                const double phi[3] = { 1.0 - w.first - w.second, w.first, w.second };
+                const double sample = siteEdges[nearest[q]];
+                double target = sample;
+                for (size_t m = 0; m < 3; ++m) {
+                    if (std::numeric_limits<size_t>::max() == fitted[c[m]])
+                        target -= phi[m] * edges[c[m]];
+                }
+                for (size_t m = 0; m < 3; ++m) {
+                    const size_t row = fitted[c[m]];
+                    if (std::numeric_limits<size_t>::max() == row)
+                        continue;
+                    rhs[(Eigen::Index)row] += area * phi[m] * target;
+                    mass[row] += area * phi[m];
+                    massEdge[row] += area * phi[m] * sample;
+                    lowest[row] = std::min(lowest[row], sample);
+                    highest[row] = std::max(highest[row], sample);
+                    for (size_t n = 0; n < 3; ++n) {
+                        const size_t column = fitted[c[n]];
+                        if (std::numeric_limits<size_t>::max() != column)
+                            entries.emplace_back((Eigen::Index)row, (Eigen::Index)column, area * phi[m] * phi[n]);
                     }
                 }
             }
         }
-        const std::vector<size_t> nearest = nearestSites(sites, queries);
-        const auto density = [&](size_t q) {
-            const double edge = siteEdges[nearest[q]];
-            return 1.0 / (edge * edge);
-        };
-        std::vector<double> edges(vertexIds->size());
-        for (size_t v = 0; v < edges.size(); ++v)
-            edges[v] = siteEdges[nearest[v]];
-        std::vector<double> sum(vertexIds->size(), 0.0);
-        std::vector<double> weight(vertexIds->size(), 0.0);
-        std::vector<bool> coarse(vertexIds->size(), false);
-        for (size_t t = 0; t < corners.size(); ++t) {
-            const auto& c = corners[t];
-            const int k = split[t];
-            double mean = 0.0;
-            if (k < 2) {
-                mean = (density(c[0]) + density(c[1]) + density(c[2])) / 3.0;
-            } else {
-                const size_t count = (size_t)k * (size_t)k;
-                for (size_t q = firstSample[t]; q < firstSample[t] + count; ++q)
-                    mean += density(q);
-                mean /= (double)count;
-                for (const size_t v : c)
-                    coarse[v] = true;
-            }
-            const double area = Vector3::area(vertices[(*vertexIds)[c[0]]], vertices[(*vertexIds)[c[1]]], vertices[(*vertexIds)[c[2]]]);
-            if (!(area > 0.0) || !std::isfinite(mean))
+        for (size_t row = 0; row < fittedCount; ++row) {
+            if (!(mass[row] > 0.0)) {
+                entries.emplace_back((Eigen::Index)row, (Eigen::Index)row, 1.0);
                 continue;
-            for (const size_t v : c) {
-                sum[v] += area * mean;
-                weight[v] += area;
             }
+            entries.emplace_back((Eigen::Index)row, (Eigen::Index)row, pull * mass[row]);
+            rhs[(Eigen::Index)row] += pull * massEdge[row];
         }
-        for (size_t v = 0; v < edges.size(); ++v) {
-            if (coarse[v] && weight[v] > 0.0 && sum[v] > 0.0)
-                edges[v] = std::sqrt(weight[v] / sum[v]);
+        Eigen::SparseMatrix<double> system((Eigen::Index)fittedCount, (Eigen::Index)fittedCount);
+        system.setFromTriplets(entries.begin(), entries.end());
+        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver(system);
+        Eigen::VectorXd solution;
+        const bool solved = Eigen::Success == solver.info() && (solution = solver.solve(rhs), Eigen::Success == solver.info());
+        for (size_t v = 0; v < vertexCount; ++v) {
+            const size_t row = fitted[v];
+            if (std::numeric_limits<size_t>::max() == row || !(mass[row] > 0.0))
+                continue;
+            double value = solved ? solution[(Eigen::Index)row] : massEdge[row] / mass[row];
+            if (!std::isfinite(value))
+                value = massEdge[row] / mass[row];
+            edges[v] = std::min(highest[row], std::max(lowest[row], value));
+        }
+        // An edge fit shows the mean edge, which is larger than the size of
+        // the same quad count (sqrt(area / quads)) where the size varies: scale
+        // the fitted vertices until the interpolation holds the samples' quads.
+        for (int iteration = 0; iteration < 3; ++iteration) {
+            double wanted = 0.0;
+            double shown = 0.0;
+            for (size_t t = 0; t < corners.size(); ++t) {
+                const auto& c = corners[t];
+                if (std::numeric_limits<size_t>::max() == fitted[c[0]] && std::numeric_limits<size_t>::max() == fitted[c[1]]
+                    && std::numeric_limits<size_t>::max() == fitted[c[2]])
+                    continue;
+                const size_t count = (size_t)split[t] * (size_t)split[t];
+                const double area = Vector3::area(position(c[0]), position(c[1]), position(c[2])) / (double)count;
+                if (!(area > 0.0) || !std::isfinite(area))
+                    continue;
+                for (size_t q = firstSample[t]; q < firstSample[t] + count; ++q) {
+                    const auto& w = weights[q - vertexCount];
+                    const double edge = (1.0 - w.first - w.second) * edges[c[0]] + w.first * edges[c[1]] + w.second * edges[c[2]];
+                    const double sample = siteEdges[nearest[q]];
+                    wanted += area / (sample * sample);
+                    if (edge > 0.0)
+                        shown += area / (edge * edge);
+                }
+            }
+            if (!(wanted > 0.0) || !(shown > 0.0))
+                break;
+            const double factor = std::sqrt(shown / wanted);
+            for (size_t v = 0; v < vertexCount; ++v) {
+                if (std::numeric_limits<size_t>::max() != fitted[v])
+                    edges[v] *= factor;
+            }
         }
         return edges;
     }
@@ -1868,7 +1959,7 @@ bool AutoRemesher::remeshIslands()
     // T (the cover realises only part of the size field it is asked for, so
     // the field alone mispredicts, docs/PREVIEW.md §4.5).  Smoothed, and
     // carried to the input vertices by the nearest vertex of T (which lies on
-    // the input within its own edge length), or by area where the input is
+    // the input within its own edge length), or fitted where the input is
     // coarser than T (transferPlannedEdges()).
     if (m_planOnly) {
         m_planIslands.assign(islandContexes.size(), PlanIsland());
