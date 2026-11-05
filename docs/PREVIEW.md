@@ -445,13 +445,22 @@ Per mesh [M, B at T]: cad_box q4000 1.83 → 0.46 (uniform 0.46), wedge 1.88 →
 Organic meshes: no case worse than before by more than 0.02.
 
 **Reading** [I]
-- The 2-3x error is gone and the overlay is no longer worse than uniform on CAD. On a box, wedge or
-  cube it equals uniform: the run's quads still shrink toward corners and rims by about 1.4x inside
+- The 2-3x error is gone. Most of the gain is the overall size (the old overlay was about 2x too small
+  everywhere); with the scale factored out, cad is old 0.220 / fitted 0.213 / uniform 0.209 (check
+  below). Set medians beat uniform; single meshes (wedge, box, a 64-segment cylinder, an L-shape) stay
+  0.01-0.03 worse than uniform. On a box, wedge or cube it is about uniform: the run's quads still shrink toward corners and rims by about 1.4x inside
   each face (B 0.46 at 4k), and eight corner values cannot draw that. Showing it needs a finer display
   mesh (the plan sampled inside big faces and drawn on a subdivided copy), which changes `plan.bin` and
   the add-on; not built. The user guide says big faces show their average.
 - The ±20 % bar remains meaningful on organic meshes; on low-poly hard surface it is a guide to the
   average per face only.
+
+Independent check [checked] (fresh worker, own metric: each run quad's √area against the shader's
+edge at the closest input point, plus cubic regions of ~16 quads; research note
+density-coarse-disprover-2026-11-05): survives. Low-poly sets old / fitted / uniform 0.366 / 0.175 /
+0.222; organic 0.039 / 0.039 / 0.233, no run worse by more than 0.005; five new low-poly meshes
+(thin box, L-shape, 8×6 torus, plate with peg, star) 0.898 / 0.164 / 0.191, fitted better than old in
+90 of 90 runs. Its qualification is in the reading below.
 
 **What would falsify this**
 - A low-poly mesh (not in cad, primitives, usage) where the fitted overlay is worse than uniform in B.
