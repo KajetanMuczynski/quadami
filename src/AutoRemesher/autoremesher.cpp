@@ -33,6 +33,7 @@
 #include <AutoRemesher/SurfaceProjector>
 #include <AutoRemesher/ThinParts>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -463,6 +464,108 @@ namespace {
             if ((*weight)[v] > 0.0)
                 (*sum)[v] = factor * std::exp(x[v]) * (*weight)[v];
         }
+    }
+    // The plan's edge at the vertices of one input island, from the edges at
+    // the sites (vertices of T).  Where the input is as fine as T, a vertex
+    // takes its nearest site.  An input triangle wider than T's edge covers
+    // many sites, and its corners see only the field at the corners (a box's
+    // eight corners, where the run makes its smallest quads): there the plan
+    // is carried by area instead.  Such a triangle's quads per area
+    // (1 / edge^2) is the mean over k x k equal sub-triangles, k = its longest
+    // side over T's mean edge (at most 32), and a vertex with such a
+    // triangle around it takes the area-weighted mean of its triangles'
+    // quads per area: the overlay, which interpolates the vertex values, then
+    // shows each coarse face's true mean (docs/PREVIEW.md §4.5).  Returns the
+    // edge per entry of `vertexIds`, the island's vertices in first use.
+    std::vector<double> transferPlannedEdges(const std::vector<Vector3>& sites, const std::vector<double>& siteEdges,
+        double tEdge, const std::vector<Vector3>& vertices, const std::vector<std::vector<size_t>>& triangles,
+        std::vector<size_t>* vertexIds)
+    {
+        const int maximumSplit = 32;
+        std::unordered_map<size_t, size_t> local;
+        std::vector<std::array<size_t, 3>> corners;
+        corners.reserve(triangles.size());
+        for (const auto& triangle : triangles) {
+            if (triangle.size() != 3)
+                continue;
+            std::array<size_t, 3> c;
+            for (size_t k = 0; k < 3; ++k) {
+                const auto inserted = local.emplace(triangle[k], vertexIds->size());
+                if (inserted.second)
+                    vertexIds->push_back(triangle[k]);
+                c[k] = inserted.first->second;
+            }
+            corners.push_back(c);
+        }
+        std::vector<Vector3> queries;
+        queries.reserve(vertexIds->size());
+        for (const size_t v : *vertexIds)
+            queries.push_back(vertices[v]);
+        std::vector<int> split(corners.size(), 1);
+        std::vector<size_t> firstSample(corners.size(), 0);
+        for (size_t t = 0; t < corners.size(); ++t) {
+            const Vector3& a = vertices[(*vertexIds)[corners[t][0]]];
+            const Vector3& b = vertices[(*vertexIds)[corners[t][1]]];
+            const Vector3& c = vertices[(*vertexIds)[corners[t][2]]];
+            const double longest = std::max({ (b - a).length(), (c - b).length(), (a - c).length() });
+            const double ratio = tEdge > 0.0 ? longest / tEdge : 1.0;
+            const int k = std::isfinite(ratio) ? (int)std::min<double>(maximumSplit, std::ceil(ratio)) : 1;
+            if (k < 2)
+                continue;
+            split[t] = k;
+            firstSample[t] = queries.size();
+            // Centres of the k x k sub-triangles: k(k+1)/2 upright, k(k-1)/2 upside down.
+            for (int i = 0; i < k; ++i) {
+                for (int j = 0; i + j < k; ++j) {
+                    const double u = (i + 1.0 / 3.0) / k;
+                    const double w = (j + 1.0 / 3.0) / k;
+                    queries.push_back(a + (b - a) * u + (c - a) * w);
+                    if (i + j + 1 < k) {
+                        const double u2 = (i + 2.0 / 3.0) / k;
+                        const double w2 = (j + 2.0 / 3.0) / k;
+                        queries.push_back(a + (b - a) * u2 + (c - a) * w2);
+                    }
+                }
+            }
+        }
+        const std::vector<size_t> nearest = nearestSites(sites, queries);
+        const auto density = [&](size_t q) {
+            const double edge = siteEdges[nearest[q]];
+            return 1.0 / (edge * edge);
+        };
+        std::vector<double> edges(vertexIds->size());
+        for (size_t v = 0; v < edges.size(); ++v)
+            edges[v] = siteEdges[nearest[v]];
+        std::vector<double> sum(vertexIds->size(), 0.0);
+        std::vector<double> weight(vertexIds->size(), 0.0);
+        std::vector<bool> coarse(vertexIds->size(), false);
+        for (size_t t = 0; t < corners.size(); ++t) {
+            const auto& c = corners[t];
+            const int k = split[t];
+            double mean = 0.0;
+            if (k < 2) {
+                mean = (density(c[0]) + density(c[1]) + density(c[2])) / 3.0;
+            } else {
+                const size_t count = (size_t)k * (size_t)k;
+                for (size_t q = firstSample[t]; q < firstSample[t] + count; ++q)
+                    mean += density(q);
+                mean /= (double)count;
+                for (const size_t v : c)
+                    coarse[v] = true;
+            }
+            const double area = Vector3::area(vertices[(*vertexIds)[c[0]]], vertices[(*vertexIds)[c[1]]], vertices[(*vertexIds)[c[2]]]);
+            if (!(area > 0.0) || !std::isfinite(mean))
+                continue;
+            for (const size_t v : c) {
+                sum[v] += area * mean;
+                weight[v] += area;
+            }
+        }
+        for (size_t v = 0; v < edges.size(); ++v) {
+            if (coarse[v] && weight[v] > 0.0 && sum[v] > 0.0)
+                edges[v] = std::sqrt(weight[v] / sum[v]);
+        }
+        return edges;
     }
 }
 
@@ -1764,8 +1867,9 @@ bool AutoRemesher::remeshIslands()
     // continuous cover solve, whose map gives the quad edge of every face of
     // T (the cover realises only part of the size field it is asked for, so
     // the field alone mispredicts, docs/PREVIEW.md §4.5).  Smoothed, and
-    // carried to the input vertices by the nearest vertex of T, which lies on
-    // the input within its own edge length.
+    // carried to the input vertices by the nearest vertex of T (which lies on
+    // the input within its own edge length), or by area where the input is
+    // coarser than T (transferPlannedEdges()).
     if (m_planOnly) {
         m_planIslands.assign(islandContexes.size(), PlanIsland());
         m_planVertexEdgeLengths.assign(givenVertexCount, 0.0f);
@@ -1844,22 +1948,30 @@ bool AutoRemesher::remeshIslands()
                             siteEdges.push_back(sum[v] / weight[v]);
                         }
                     }
-                    std::vector<size_t> inputIndices;
-                    std::vector<Vector3> queries;
-                    for (const auto& triangle : island) {
-                        for (const size_t v : triangle) {
-                            if (v < givenVertexCount && NoPlanIsland == m_planVertexIslands[v]) {
-                                m_planVertexIslands[v] = (uint32_t)i;
-                                inputIndices.push_back(v);
-                                queries.push_back(m_vertices[v]);
+                    if (sites.empty()) {
+                        for (const auto& triangle : island) {
+                            for (const size_t v : triangle) {
+                                if (v < givenVertexCount && NoPlanIsland == m_planVertexIslands[v])
+                                    m_planVertexIslands[v] = (uint32_t)i;
                             }
                         }
-                    }
-                    if (sites.empty())
                         continue;
-                    const std::vector<size_t> nearest = nearestSites(sites, queries);
-                    for (size_t k = 0; k < inputIndices.size(); ++k)
-                        m_planVertexEdgeLengths[inputIndices[k]] = (float)siteEdges[nearest[k]];
+                    }
+                    double tEdgeSum = 0.0;
+                    for (const auto& t : ctx.triangles) {
+                        for (size_t k = 0; k < 3; ++k)
+                            tEdgeSum += (ctx.vertices[t[k]] - ctx.vertices[t[(k + 1) % 3]]).length();
+                    }
+                    const double tEdge = tEdgeSum / (3.0 * (double)ctx.triangles.size());
+                    std::vector<size_t> vertexIds;
+                    const std::vector<double> edges = transferPlannedEdges(sites, siteEdges, tEdge, m_vertices, island, &vertexIds);
+                    for (size_t k = 0; k < vertexIds.size(); ++k) {
+                        const size_t v = vertexIds[k];
+                        if (v < givenVertexCount && NoPlanIsland == m_planVertexIslands[v]) {
+                            m_planVertexIslands[v] = (uint32_t)i;
+                            m_planVertexEdgeLengths[v] = (float)edges[k];
+                        }
+                    }
                 }
             });
         // Vertices no face uses any more (the cleanup merged them, or they
