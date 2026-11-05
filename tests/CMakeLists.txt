@@ -91,3 +91,9 @@ add_test(NAME feature_edges COMMAND feature_edges_test)
 add_executable(marked_edges_test marked_edges_test.cpp)
 target_link_libraries(marked_edges_test PRIVATE autoremesher_core)
 add_test(NAME marked_edges COMMAND marked_edges_test)
+
+add_executable(amd_ordering_test amd_ordering_test.cpp)
+target_link_libraries(amd_ordering_test PRIVATE autoremesher_core)
+add_test(NAME amd_ordering COMMAND amd_ordering_test)
+# Unpatched, Eigen's AMD ordering of this matrix runs for minutes: a hang.
+set_tests_properties(amd_ordering PROPERTIES TIMEOUT 60)
