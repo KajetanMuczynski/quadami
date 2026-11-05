@@ -481,6 +481,21 @@ size_t splitPinchedVertices(std::vector<Vector3>& vertices,
     return added;
 }
 
+size_t removeRepeatedCornerTriangles(std::vector<std::vector<size_t>>& triangles)
+{
+    size_t kept = 0;
+    for (size_t t = 0; t < triangles.size(); ++t) {
+        if (isDegenerate(triangles[t]))
+            continue;
+        if (kept != t)
+            triangles[kept] = std::move(triangles[t]);
+        ++kept;
+    }
+    const size_t removed = triangles.size() - kept;
+    triangles.resize(kept);
+    return removed;
+}
+
 size_t removeDuplicateTriangles(std::vector<std::vector<size_t>>& triangles)
 {
     std::vector<std::array<size_t, 4>> keys(triangles.size());
