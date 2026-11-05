@@ -501,6 +501,33 @@ def vertex_votes(faces, used, vertex_island, nv):
     return np.where(2 * count[np.arange(len(faces)), best] > n, win, -1)
 
 
+def coincident_groups(Vin, Fin, tri_island, nin, diag):
+    """Per input island, a group label: islands lying on each other (at least half of the smaller
+    one's vertices on the other's, within 1e-7 of the diagonal) share one. Islands that only touch
+    along a seam stay apart."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    vis = np.full(len(Vin), -1, np.int64)
+    vis[Fin.ravel()] = np.repeat(tri_island, 3)
+    vi = np.flatnonzero(vis >= 0)
+    pairs = cKDTree(Vin[vi]).query_pairs(1e-7 * diag, output_type="ndarray")
+    if len(pairs) == 0:
+        return np.arange(nin)
+    a, b = vis[vi[pairs[:, 0]]], vis[vi[pairs[:, 1]]]
+    keep = a != b
+    if not keep.any():
+        return np.arange(nin)
+    lo, hi = np.minimum(a[keep], b[keep]), np.maximum(a[keep], b[keep])
+    key, cnt = np.unique(lo * nin + hi, return_counts=True)
+    lo, hi = key // nin, key % nin
+    size = np.bincount(vis[vi], minlength=nin)
+    on = 2 * cnt >= np.minimum(size[lo], size[hi])
+    if not on.any():
+        return np.arange(nin)
+    g = coo_matrix((np.ones(int(on.sum())), (lo[on], hi[on])), shape=(nin, nin))
+    return connected_components(g, directed=False)[1]
+
+
 def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, reversed_out, h, Pin, in_tri, d, out_face, Ftri,
              tri_face, face_vote=None):
     """Validity per input island (TARGETS H2, H4, H5, V6 and the thin-part part of V3).
@@ -540,14 +567,18 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
     nin_o = np.cross(Vin[Fo[:, 1]] - Vin[Fo[:, 0]], Vin[Fo[:, 2]] - Vin[Fo[:, 0]])
     sign = -1.0 if reversed_out else 1.0
     vote = tri_island[cf] if face_vote is None else np.where(face_vote >= 0, face_vote, tri_island[cf])
-    votes = (vote, major[olab[first]])
+    # Islands lying exactly on each other (a double-sided sheet as two islands) cannot be told apart
+    # by nearest distance: the tie goes to one of them for every output face. They are covered as a
+    # group (and the wrong-side test below still sees an output that keeps one side only).
+    group = coincident_groups(Vin, Fin, tri_island, nin, inp["diag"])
+    votes = (group[vote], group[major[olab[first]]])
     if in_tri is None:  # input without area
         cov = np.ones(nin)
         uncovered = uncovered_any = wrong = 0.0
     else:
         isl = tri_island[in_tri]
         uncovered_any = float(np.mean(d > h))
-        d, out_face = own_island_distance(Pin, isl, d, out_face, votes, V, Ftri, tri_face)
+        d, out_face = own_island_distance(Pin, group[isl], d, out_face, votes, V, Ftri, tri_face)
         near = d <= h
         opposite = sign * np.einsum("ij,ij->i", nin_o[in_tri], normals[out_face]) < 0
         uncovered = float(np.mean(~near))
@@ -563,7 +594,7 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
                 tris = np.nonzero(tri_island == i)[0]
                 pick.append(rng.choice(tris, 2000, replace=False) if len(tris) > 2000 else tris)
             tris = np.concatenate(pick)
-            dd, _ = own_island_distance(Vin[Fin[tris]].mean(1), tri_island[tris], None, None, votes, V, Ftri, tri_face)
+            dd, _ = own_island_distance(Vin[Fin[tris]].mean(1), group[tri_island[tris]], None, None, votes, V, Ftri, tri_face)
             w = area[tris]
             for i, ix in zip(small, np.split(np.arange(len(tris)), np.cumsum([len(t) for t in pick])[:-1])):
                 cov[i] = float(np.sum(w[ix] * (dd[ix] <= h)) / w[ix].sum()) if w[ix].sum() > 0 else float(np.mean(dd[ix] <= h))

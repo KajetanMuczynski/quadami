@@ -203,6 +203,18 @@ class Validity(unittest.TestCase):
         self.assertEqual((v["islands_dropped"], v["islands_reversed"]), (0, 0))
         self.assertLess(v["area_uncovered"], 1e-3)
 
+    def test_coincident_double_sided_sheet_is_not_dropped(self):
+        # Two exactly coincident sheets (one island each, opposite windings) remeshed right: nearest-face
+        # ties go to one sheet, so neither sheet alone can claim its area; they are covered as a group.
+        tri = lambda m: (m[0], [t for f in m[1] for t in ([f[0], f[1], f[2]], [f[0], f[2], f[3]])])
+        V, F = sheet(24, 24, 1.0)
+        rev = [f[::-1] for f in F]
+        inp = join(tri((V, F)), tri((V, rev)))
+        Vo, Fo = sheet(8, 8, 1.0)
+        v = self.run_metrics(inp, join((Vo, Fo), (Vo, [f[::-1] for f in Fo])))["validity"]
+        self.assertEqual((v["islands_input"], v["islands_dropped"]), (2, 0))
+        self.assertLess(v["area_uncovered"], 1e-3)
+
     def test_reversed_islands_are_counted(self):
         # The big torus reversed holds most faces, so faces_vs_input counts the small one's faces; the
         # reversed island is counted on its own, and a reversed output counts every island.
