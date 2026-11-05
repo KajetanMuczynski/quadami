@@ -449,25 +449,30 @@ def folded_faces(V, faces, sizes):
     return int(folded_mask(V, faces)[0].sum())
 
 
-def own_island_distance(P, isl, d, out_face, vote, V, Ftri, tri_face):
+def own_island_distance(P, isl, d, out_face, votes, V, Ftri, tri_face):
     """Distance from points P on input islands isl to the output faces that stand for the same island,
-    and the nearest such face. An output face stands for the input island of the input triangle
-    nearest to its centroid (vote). Starts from the distance d to the whole output and its nearest face
-    out_face (None: computed here); a point whose nearest face votes for another island is measured
-    again against its own island's faces only (inf when the island has none, i.e. it was dropped)."""
+    and the nearest such face. votes holds per output face the input island(s) it stands for, one
+    array per rule (validity: the input island nearest the face's centroid, and the majority of those
+    votes over the face's output island); a face stands for every island one of the rules names. Starts
+    from the distance d to the whole output and its nearest face out_face (None: computed here); a
+    point whose nearest face stands for another island is measured again against its own island's
+    faces only (inf when the island has none, i.e. it was dropped)."""
     if d is None:
         d, tri = point_to_mesh(P, V, Ftri)
         out_face = tri_face[tri]
     d, out_face = d.copy(), out_face.copy()
-    redo = np.flatnonzero(vote[out_face] != isl)
+    redo = np.flatnonzero(np.all([v[out_face] != isl for v in votes], axis=0))
     if len(redo) == 0:
         return d, out_face
-    tri_vote = vote[tri_face]
-    order = np.argsort(tri_vote, kind="stable")
-    bounds = np.searchsorted(tri_vote[order], np.arange(int(max(tri_vote.max(), isl.max())) + 2))
+    n = int(max(max(v.max() for v in votes), isl.max())) + 2
+    tables = []
+    for v in votes:
+        tv = v[tri_face]
+        order = np.argsort(tv, kind="stable")
+        tables.append((order, np.searchsorted(tv[order], np.arange(n))))
     for i in np.unique(isl[redo]):
         pts = redo[isl[redo] == i]
-        own = order[bounds[i]:bounds[i + 1]]
+        own = np.unique(np.concatenate([order[bounds[i]:bounds[i + 1]] for order, bounds in tables]))
         if len(own) == 0:
             d[pts] = np.inf
             continue
@@ -507,17 +512,20 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
     loops_sum = np.bincount(major, weights=out_loops, minlength=nin).astype(np.int64)
 
     # Coverage per input island, by the output faces that stand for that island (own_island_distance):
-    # a dropped island next to another island's output is not covered by that output.
+    # a dropped island next to another island's output is not covered by that output. A face stands
+    # for the island its centroid is nearest to (so an output island spanning two merged input islands
+    # covers both) and for its output island's majority (so a small island's output whose faces lie
+    # nearer a neighbour, e.g. an eyelet on fabric, still covers it).
     nin_o = np.cross(Vin[Fo[:, 1]] - Vin[Fo[:, 0]], Vin[Fo[:, 2]] - Vin[Fo[:, 0]])
     sign = -1.0 if reversed_out else 1.0
-    vote = tri_island[cf]
+    votes = (tri_island[cf], major[olab[first]])
     if in_tri is None:  # input without area
         cov = np.ones(nin)
         uncovered = uncovered_any = wrong = 0.0
     else:
         isl = tri_island[in_tri]
         uncovered_any = float(np.mean(d > h))
-        d, out_face = own_island_distance(Pin, isl, d, out_face, vote, V, Ftri, tri_face)
+        d, out_face = own_island_distance(Pin, isl, d, out_face, votes, V, Ftri, tri_face)
         near = d <= h
         opposite = sign * np.einsum("ij,ij->i", nin_o[in_tri], normals[out_face]) < 0
         uncovered = float(np.mean(~near))
@@ -533,7 +541,7 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
                 tris = np.nonzero(tri_island == i)[0]
                 pick.append(rng.choice(tris, 2000, replace=False) if len(tris) > 2000 else tris)
             tris = np.concatenate(pick)
-            dd, _ = own_island_distance(Vin[Fin[tris]].mean(1), tri_island[tris], None, None, vote, V, Ftri, tri_face)
+            dd, _ = own_island_distance(Vin[Fin[tris]].mean(1), tri_island[tris], None, None, votes, V, Ftri, tri_face)
             w = area[tris]
             for i, ix in zip(small, np.split(np.arange(len(tris)), np.cumsum([len(t) for t in pick])[:-1])):
                 cov[i] = float(np.sum(w[ix] * (dd[ix] <= h)) / w[ix].sum()) if w[ix].sum() > 0 else float(np.mean(dd[ix] <= h))
