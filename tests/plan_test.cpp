@@ -21,7 +21,9 @@
 // small-island floor, and a vertex no face uses.  Every vertex gets a planned
 // edge and an island, the islands' quads add up, the small one sits at its
 // floor, the large one's edge at adaptivity 0 is sqrt(area / quads), and a
-// run at the same target lands near the planned count.
+// run at the same target lands near the planned count.  A box given by its
+// eight corners gets the mean edge of its faces at every corner, not the
+// small quads the run makes right at the corners.
 
 #include <AutoRemesher/Remesh>
 #include <algorithm>
@@ -141,6 +143,22 @@ int main()
     std::printf("planned %.1f quads, large sphere median edge %.5f, sqrt(area / quads) %.5f\n",
         plan.plannedQuads, median, expected);
     check(std::fabs(median / expected - 1.0) < 0.03, "uniform edge is sqrt(area / quads)");
+
+    // A unit box of 12 triangles: the corners carry the faces' mean, about
+    // sqrt(area / quads) (before the area transfer, 0.37 of it).
+    RemeshRequest box;
+    box.positions = { 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1 };
+    box.triangles = { 0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0,
+        4, 3, 4, 7 };
+    box.parameters.targetQuadCount = 1000;
+    const RemeshResult boxPlanned = planRemesh(box);
+    check(RemeshStatus::Ok == boxPlanned.status && 8 == boxPlanned.plan.vertexEdgeLengths.size(), "box plan ok");
+    if (RemeshStatus::Ok == boxPlanned.status && 8 == boxPlanned.plan.vertexEdgeLengths.size()) {
+        const double boxExpected = std::sqrt(6.0 / boxPlanned.plan.plannedQuads);
+        const auto range = std::minmax_element(boxPlanned.plan.vertexEdgeLengths.begin(), boxPlanned.plan.vertexEdgeLengths.end());
+        std::printf("box corners %.5f-%.5f, sqrt(area / quads) %.5f\n", *range.first, *range.second, boxExpected);
+        check(*range.first > 0.85 * boxExpected && *range.second < 1.15 * boxExpected, "box corners carry the faces' mean edge");
+    }
 
     const RemeshResult run = remesh(request);
     check(RemeshStatus::Ok == run.status, "run status ok");
