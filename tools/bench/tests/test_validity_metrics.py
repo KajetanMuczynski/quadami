@@ -192,6 +192,17 @@ class Validity(unittest.TestCase):
         self.assertLess(v["area_uncovered_any_island"], 0.1 * share)  # the torus's output is near it
         self.assertFalse(v["islands_same_as_input"])
 
+    def test_thin_shell_layers_are_each_covered_by_their_own_output(self):
+        # A shell 0.001 thick (outer and inner wall, separate islands), remeshed right. Each output
+        # face's centroid lies inside the curved wall, nearer the inner one; its vertices lie on its
+        # own wall, so voting by vertices keeps both walls covered and facing the right way.
+        rev = lambda m: (m[0], [f[::-1] for f in m[1]])
+        inp = join(self.torus_in(), rev(self.torus_in(r=0.299)))
+        out = join(self.torus_out(), rev(self.torus_out(r=0.299)))
+        v = self.run_metrics(inp, out)["validity"]
+        self.assertEqual((v["islands_dropped"], v["islands_reversed"]), (0, 0))
+        self.assertLess(v["area_uncovered"], 1e-3)
+
     def test_reversed_islands_are_counted(self):
         # The big torus reversed holds most faces, so faces_vs_input counts the small one's faces; the
         # reversed island is counted on its own, and a reversed output counts every island.

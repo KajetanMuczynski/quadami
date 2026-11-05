@@ -481,8 +481,28 @@ def own_island_distance(P, isl, d, out_face, votes, V, Ftri, tri_face):
     return d, out_face
 
 
+def vertex_votes(faces, used, vertex_island, nv):
+    """Per output face, the input island most of its vertices are nearest to (-1 without a majority).
+    Output vertices lie on (or near) the input surface, while a face's centroid lies inside a curved
+    surface: with two layers closer than that sag (a thin shell, an eyeball in its socket) the
+    centroid's nearest triangle is often on the other layer, the vertices' rarely."""
+    lab = np.full(nv + 1, -2, np.int64)  # index nv: padding
+    lab[used] = vertex_island
+    m = max(len(f) for f in faces)
+    pad = np.full((len(faces), m), nv, np.int64)
+    for i, f in enumerate(faces):
+        pad[i, :len(f)] = f
+    L = lab[pad]
+    count = (L[:, :, None] == L[:, None, :]).sum(2)
+    count[L < 0] = 0
+    best = count.argmax(1)
+    n = (pad != nv).sum(1)
+    win = L[np.arange(len(faces)), best]
+    return np.where(2 * count[np.arange(len(faces)), best] > n, win, -1)
+
+
 def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, reversed_out, h, Pin, in_tri, d, out_face, Ftri,
-             tri_face):
+             tri_face, face_vote=None):
     """Validity per input island (TARGETS H2, H4, H5, V6 and the thin-part part of V3).
 
     Output islands are matched to input islands by the input triangle nearest to each output face's
@@ -513,12 +533,14 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
 
     # Coverage per input island, by the output faces that stand for that island (own_island_distance):
     # a dropped island next to another island's output is not covered by that output. A face stands
-    # for the island its centroid is nearest to (so an output island spanning two merged input islands
+    # for the island most of its vertices are nearest to, else its centroid (vertex_votes; so an output
+    # island spanning two merged input islands
     # covers both) and for its output island's majority (so a small island's output whose faces lie
     # nearer a neighbour, e.g. an eyelet on fabric, still covers it).
     nin_o = np.cross(Vin[Fo[:, 1]] - Vin[Fo[:, 0]], Vin[Fo[:, 2]] - Vin[Fo[:, 0]])
     sign = -1.0 if reversed_out else 1.0
-    votes = (tri_island[cf], major[olab[first]])
+    vote = tri_island[cf] if face_vote is None else np.where(face_vote >= 0, face_vote, tri_island[cf])
+    votes = (vote, major[olab[first]])
     if in_tri is None:  # input without area
         cov = np.ones(nin)
         uncovered = uncovered_any = wrong = 0.0
@@ -1030,7 +1052,7 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
     cos_in = (-dots if reversed_out else dots) / np.maximum(np.linalg.norm(nin, axis=1) * np.linalg.norm(normals, axis=1), 1e-300)
     out["normal_deviation_deg"] = stats(np.degrees(np.arccos(np.clip(cos_in, -1, 1))))
     Pout = np.concatenate([sample_surface(V, Ftri, samples, rng), V[used]])
-    d_out, _ = point_to_mesh(Pout, Vin, Fin)
+    d_out, near_in = point_to_mesh(Pout, Vin, Fin)
     Pin_area, in_tri = sample_surface(Vin, Fin, samples, rng, with_faces=True)
     Pin = np.concatenate([Pin_area, Vin[rng.choice(used_in, min(len(used_in), samples))]])
     d_in, out_tri = point_to_mesh(Pin, V, Ftri)
@@ -1047,7 +1069,8 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
     in_area = float(inp["island_area"].sum())
     h_cov = float(np.sqrt(in_area / target_quads)) if target_quads and in_area > 0 else mean_edge
     out["validity"] = validity(inp, V, faces, sizes, normals, E, bnd, used, lab, cf, reversed_out, h_cov,
-                               Pin_area, in_tri, d_in[:len(Pin_area)], tri_face[out_tri[:len(Pin_area)]], Ftri, tri_face)
+                               Pin_area, in_tri, d_in[:len(Pin_area)], tri_face[out_tri[:len(Pin_area)]], Ftri, tri_face,
+                               vertex_votes(faces, used, inp["tri_island"][near_in[-len(used):]], len(V)))
     # same_as_input per island: no island dropped (a part shrunk to a blob can keep its topology and
     # its own output island), changed its Euler characteristic or boundary loops, split or merged with
     # another, and the output is manifold at edges and vertices.
@@ -1056,8 +1079,15 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
     # Output islands facing against the oriented input (most of their area): faces_vs_input takes the
     # smaller count over the whole output, so a reversed output, or a reversed island holding most of
     # the faces, does not show there.
+    # Each face is judged against the oriented input normals nearest to its vertices (not to its
+    # centroid, which on a thin shell can be nearest the other layer, see vertex_votes).
+    vn = np.zeros((len(V), 3))
+    vn[used] = nin_unit = np.cross(Vin[Fo[near_in[-len(used):], 1]] - Vin[Fo[near_in[-len(used):], 0]],
+                                   Vin[Fo[near_in[-len(used):], 2]] - Vin[Fo[near_in[-len(used):], 0]])
+    vn[used] /= np.maximum(np.linalg.norm(nin_unit, axis=1, keepdims=True), 1e-300)
+    vdots = np.einsum("ij,ij->i", normals, np.array([vn[f].sum(0) for f in faces]))
     f_isl = lab[[f[0] for f in faces]]
-    against = np.bincount(f_isl, weights=area * (dots < 0)) > np.bincount(f_isl, weights=area * (dots > 0))
+    against = np.bincount(f_isl, weights=area * (vdots < 0)) > np.bincount(f_isl, weights=area * (vdots > 0))
     vd["islands_reversed"] = int(against[np.unique(f_isl)].sum())
     vd["islands_same_as_input"] = bool(vd["islands_dropped"] == 0 and vd["islands_topology_changed"] == 0
                                        and vd["islands_merged"] == 0
