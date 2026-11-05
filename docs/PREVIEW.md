@@ -410,6 +410,58 @@ set medians hide:
 - Plans made at other targets and rescaled beyond the band (only 2× and ½×, about 0.08 log₂ from fresh).
 - Timings ran with `ab.py --jobs 3` on both sides.
 
+### 4.6 Low-poly input: fitted transfer (2026-11-05)
+
+Thread "Fix density bar on coarse meshes", after the third independent check (research note
+density-bar-disprover-2026-11-04): on CAD inputs the overlay was 1.7-3.4x too small, worse than a
+uniform guess, because each input vertex took the nearest vertex of T and a box's only vertices are
+its corners, where the run makes its smallest quads.
+
+**What changed** [C]: where an input triangle is wider than T's mean edge, `transferPlannedEdges()`
+samples the plan at the centres of k × k equal sub-triangles (k = longest side / T's mean edge, at
+most 32) and sets the vertices of such triangles to the least-squares fit of the overlay's linear
+interpolation to those samples (other vertices held at their nearest T vertex as before), clamped to
+the range of their samples, then scales the fitted vertices so the interpolation keeps the samples'
+quad count. A cone's fan keeps its gradient to the tip; a box face shows its average. Core only:
+`plan.bin`, the report and the add-on are unchanged. A first variant (area mean of 1/edge² per vertex)
+was rejected: it flattens the cone's gradient (open cone 0.05 → 0.41).
+
+**Measured** (ab.py Quality, `cad` also Fast; plans at T and runs at 0.8T / T / 1.2T, u0-u5 on both
+sides; median over cases of the per-case median |log₂ run / plan| of ~16-quad regions with the bias
+kept; metric B splits each input triangle so that sub-triangles are at most half a quad and reads the
+plan as the shader interpolates it, metric A is the third check's own code on input triangles)
+
+| | before | fitted | uniform size |
+|---|---|---|---|
+| cad + primitives + usage (40 meshes × targets × res = 80 cases), at T, B | 0.380 | 0.182 | 0.246 |
+| same, at 0.8T / 1.2T, B | 0.408 / 0.374 | 0.167 / 0.208 | 0.234 / 0.254 |
+| same, at T, A | 0.554 | 0.099 | 0.192 |
+| corpus + external + thin (44 meshes, u0, at T: an aggregate), B / A | 0.041 / 0.040 | 0.038 / 0.040 | 0.245 |
+| plan time (sequential, nemetona, cad_cylinder) | | +3-8 % | |
+
+Per mesh [M, B at T]: cad_box q4000 1.83 → 0.46 (uniform 0.46), wedge 1.88 → 0.47, cube q5000
+1.92 → 0.50, cone 1.06 → 0.34, cylinder 0.90 → 0.33, csg_bracket_rot 0.20 → 0.09 (corpus csg_bracket
+0.145 → 0.082), open cone 0.05 → 0.13 at 1k (the only case worse than before; 0.26 → 0.18 at 5k).
+Organic meshes: no case worse than before by more than 0.02.
+
+**Reading** [I]
+- The 2-3x error is gone and the overlay is no longer worse than uniform on CAD. On a box, wedge or
+  cube it equals uniform: the run's quads still shrink toward corners and rims by about 1.4x inside
+  each face (B 0.46 at 4k), and eight corner values cannot draw that. Showing it needs a finer display
+  mesh (the plan sampled inside big faces and drawn on a subdivided copy), which changes `plan.bin` and
+  the add-on; not built. The user guide says big faces show their average.
+- The ±20 % bar remains meaningful on organic meshes; on low-poly hard surface it is a guide to the
+  average per face only.
+
+**What would falsify this**
+- A low-poly mesh (not in cad, primitives, usage) where the fitted overlay is worse than uniform in B.
+- A separate metric (e.g. geodesic regions or per-quad sizes against the shader's per-pixel edge) giving
+  the fitted plan no gain over before on cad.
+
+**What I did not re-check**
+- Fast plans on primitives and usage; Follow Marks or Adaptivity ≠ default; the add-on in Blender
+  (unchanged code, same arrays).
+
 ## 5. Design critique (what may have been missed)
 
 - **The Decimate analogy breaks at the loops.** Decimate's preview *is* its result. Ours can only

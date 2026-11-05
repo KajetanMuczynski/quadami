@@ -719,7 +719,8 @@ class OBJECT_OT_density_preview(bpy.types.Operator):
     """Plan the remesh at Target Quads (about half the time of a Remesh) and draw the planned """ \
         """quad size over the mesh; drag Change (+-20 %) to try nearby counts without planning """ \
         """again. A region is usually within about 5 % of the result's size; small flat parts """ \
-        """and CAD parts can be 10-30 % off. Click again to hide it (Esc cancels)"""
+        """and CAD parts can be 10-30 % off; a big low-poly face shows its average. Click again """ \
+        """to hide it (Esc cancels)"""
     bl_idname = "object." + ID + "_density_preview"
     bl_label = "Preview Density"
 
