@@ -26,6 +26,7 @@
 #include <AutoRemesher/Vector3>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -173,6 +174,8 @@ private:
     size_t m_targetQuadCount = 0;
     QexOutcome m_qexOutcome;
     std::map<std::pair<size_t, size_t>, ConnectionInfo> m_connectionInfos;
+    struct TargetTree;
+    std::shared_ptr<TargetTree> m_targetTree;
     std::set<std::pair<size_t, size_t>> m_addedConnections;
     std::set<std::pair<size_t, size_t>> m_halfEdges;
 
@@ -219,8 +222,10 @@ private:
     // Vertices whose faces form more than one fan: two pieces of surface
     // touching at a point.
     static std::unordered_set<size_t> findPinchedVertices(const std::vector<std::vector<size_t>>& polygons);
+    // Moves every point, or those flagged in movableVertices (indexed by point)
     void smoothAndProject(size_t iterations,
-        const std::unordered_set<size_t>* movableVertices = nullptr);
+        const std::vector<char>* movableVertices = nullptr);
+    std::unordered_set<size_t> compactRemeshedVertices(const std::unordered_set<size_t>& tracked);
     void smoothAroundVertices(const std::unordered_set<size_t>& seedVertices,
         size_t rings, size_t iterations);
     void splitSixEdgeFaces();
