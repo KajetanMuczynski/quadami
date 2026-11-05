@@ -77,6 +77,13 @@ SeamWeldStats weldSeams(const std::vector<Vector3>& vertices,
 size_t splitPinchedVertices(std::vector<Vector3>& vertices,
     std::vector<std::vector<size_t>>& triangles);
 
+// Removes every triangle that uses one vertex for two of its corners (an
+// OBJ face such as "f 1 1 2", or a polygon whose fan triangulation repeats
+// a vertex).  Such a triangle has no area and no third edge, and OpenMesh's
+// add_face() corrupts the heap on it.  The others keep their order.
+// Returns how many were removed.
+size_t removeRepeatedCornerTriangles(std::vector<std::vector<size_t>>& triangles);
+
 // Removes every triangle whose three corners an earlier triangle already
 // has, in either winding: duplicated faces, and the second side of a
 // double-sided (zero-thickness) shell.  The first one is kept, in place.

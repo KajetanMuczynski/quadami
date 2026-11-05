@@ -378,6 +378,8 @@ public:
         size_t weldedEdges = 0;
         size_t weldedVertices = 0;
         size_t weldKeptParts = 0;
+        // Triangles of the input that use one vertex twice, removed first.
+        size_t repeatedCornerTriangles = 0;
         // Triangles removed because an earlier one has the same corners.
         size_t duplicateTriangles = 0;
         // Vertices added by splitPinchedVertices(): one per extra fan.
