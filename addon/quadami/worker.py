@@ -87,7 +87,7 @@ class Outcome:
     """
 
     def __init__(self, status, message="", report=None, positions=None,
-                 face_sizes=None, face_indices=None, log=""):
+                 face_sizes=None, face_indices=None, log="", plan=None):
         self.status = status
         self.message = message
         self.report = report
@@ -95,10 +95,63 @@ class Outcome:
         self.face_sizes = face_sizes      # uint32 (F,)
         self.face_indices = face_indices  # uint32 (sum of face_sizes,)
         self.log = log                    # last lines the worker printed
+        self.plan = plan                  # Plan, for a plan job only
 
     @property
     def ok(self):
         return self.status == "ok"
+
+
+class Plan:
+    """The core's plan of a run (--plan-only, RemeshPlan in remesh.h).
+
+    edge: float32 (V,) planned quad edge per input vertex, in its units,
+    0 on a left-out island; island: int64 (V,) index into the per-island
+    arrays share, floor and left_out; quads: the target it was planned at.
+    """
+
+    def __init__(self, edge, island, islands, quads, edge_scaling=1.0):
+        self.edge = edge
+        self.island = island
+        self.share = np.array([i["area_share"] for i in islands], dtype=np.float64)
+        self.floor = np.array([i["floor_quads"] for i in islands], dtype=np.float64)
+        self.left_out = np.array([bool(i["left_out"]) for i in islands], dtype=bool)
+        self.quads = int(quads)
+        self.edge_scaling = edge_scaling if edge_scaling > 0 else 1.0
+
+    def island_quads(self, quads):
+        """Planned quads of each island at Target Quads `quads`."""
+        q = np.maximum(quads * self.share, self.floor) / (self.edge_scaling ** 2)
+        return np.where(self.left_out, 0.0, q)
+
+    def planned_quads(self, quads):
+        return float(self.island_quads(quads).sum())
+
+    def edge_at(self, quads):
+        """The planned edge per vertex at another Target Quads: each island's
+        edges go with 1 / sqrt(its quads)."""
+        q0, q = self.island_quads(self.quads), self.island_quads(quads)
+        factor = np.ones(len(q0))
+        ok = (q0 > 0) & (q > 0)
+        factor[ok] = np.sqrt(q0[ok] / q[ok])
+        return self.edge * factor[self.island].astype(np.float32)
+
+
+def read_plan(path, report):
+    """The Plan in path (float32 edges, then uint32 islands, little-endian)
+    with the islands of report["plan"]."""
+    plan = report["plan"]
+    n = int(plan["vertices"])
+    raw = np.fromfile(path, dtype="<u4")
+    if raw.size != 2 * n:
+        raise ValueError("the plan has %d values, the report says 2 x %d" % (raw.size, n))
+    islands = plan["islands"]
+    island = raw[n:].astype(np.int64)
+    if n and (island.max() >= len(islands)):
+        raise ValueError("the plan names an island the report does not have")
+    parameters = report.get("parameters", {})
+    return Plan(raw[:n].view("<f4").copy(), island, islands, parameters.get("target_quads", 0),
+                parameters.get("edge_scaling", 1.0))
 
 
 def write_obj(path, positions, triangles, marked_edges=None):
@@ -235,8 +288,10 @@ class RemeshJob:
     then outcome(). cancel() may be called at any time.
     """
 
-    def __init__(self, executable, positions, triangles, parameters, marked_edges=None):
+    def __init__(self, executable, positions, triangles, parameters, marked_edges=None, plan=False):
         self.executable = executable
+        # Only plan the run (--plan-only): the outcome carries a Plan, no mesh.
+        self.plan = plan
         self.positions = positions
         self.triangles = triangles
         self.marked_edges = marked_edges
@@ -265,9 +320,9 @@ class RemeshJob:
         write_obj(self._path("input.obj"), self.positions, self.triangles, self.marked_edges)
         args = [self.executable,
                 "-i", self._path("input.obj"),
-                "-o", self._path("output.obj"),
+                "-o", self._path("plan.bin" if self.plan else "output.obj"),
                 "--report-json", self._path("report.json"),
-                "--stdin-control"]
+                "--stdin-control"] + (["--plan-only"] if self.plan else [])
         for name, value in self.parameters.items():
             if name == "target_quads":
                 value = int(value)
@@ -362,6 +417,12 @@ class RemeshJob:
         message = report.get("message", "")
         if status != "ok":
             return Outcome(status, message, report=report, log=log)
+        if self.plan:
+            try:
+                plan = read_plan(self._path("plan.bin"), report)
+            except (OSError, ValueError, KeyError) as error:
+                return Outcome("failed", "no plan: %s" % error, report=report, log=log)
+            return Outcome("ok", message, report, log=log, plan=plan)
         try:
             positions, face_sizes, face_indices = read_obj(self._path("output.obj"))
         except OSError as error:
@@ -387,12 +448,12 @@ class RemeshJob:
 
 
 def remesh(executable, positions, triangles, parameters, on_progress=None, interval=0.05,
-           marked_edges=None):
+           marked_edges=None, plan=False):
     """Blocking convenience wrapper: run a job to the end and return its Outcome.
 
     on_progress(fraction, step) may return True to request a cancel.
     """
-    job = RemeshJob(executable, positions, triangles, parameters, marked_edges)
+    job = RemeshJob(executable, positions, triangles, parameters, marked_edges, plan=plan)
     job.start()
     try:
         while not job.done:

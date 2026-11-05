@@ -91,3 +91,7 @@ add_test(NAME feature_edges COMMAND feature_edges_test)
 add_executable(marked_edges_test marked_edges_test.cpp)
 target_link_libraries(marked_edges_test PRIVATE autoremesher_core)
 add_test(NAME marked_edges COMMAND marked_edges_test)
+
+add_executable(plan_test plan_test.cpp)
+target_link_libraries(plan_test PRIVATE autoremesher_core)
+add_test(NAME plan COMMAND plan_test)
