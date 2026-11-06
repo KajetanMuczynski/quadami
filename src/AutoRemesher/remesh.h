@@ -243,10 +243,9 @@ struct QualityReport {
     double farthestInputQuadWidths = 0.0;
     size_t farInputVertexCount = 0;
     // Since 1.12.  Share of the input surface area farther than one h0
-    // (uncovered) and than LostPartQuadWidths h0 (far) from the output,
-    // estimated per input vertex with a third of the area of each triangle
-    // at it.  Vertex counts alone mislead on inputs whose tessellation is
-    // dense where the loss is (32-segment hole rims on a perforated plate).
+    // (uncovered) and than LostPartQuadWidths h0 (far) from the output, on
+    // area samples at most h0 / 2 apart (the far vertex count alone misleads
+    // where the tessellation is dense or coarse: hole rims, a cone's apex).
     double uncoveredAreaShare = 0.0;
     double farAreaShare = 0.0;
     // Since 1.10.  The far input vertices by cause: on a piece of the input

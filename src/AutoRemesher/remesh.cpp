@@ -556,14 +556,9 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
     };
     double area = 0.0;
     std::vector<char> used(positions.size() / 3, 0);
-    std::vector<double> vertexArea(positions.size() / 3, 0.0);
     for (size_t i = 0; i < triangles.size(); i += 3) {
-        const double triangleArea = 0.5 * Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]), point(triangles[i + 2]) - point(triangles[i])).length();
-        area += triangleArea;
-        for (size_t k = 0; k < 3; ++k) {
-            used[triangles[i + k]] = 1;
-            vertexArea[triangles[i + k]] += triangleArea / 3.0;
-        }
+        area += 0.5 * Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]), point(triangles[i + 2]) - point(triangles[i])).length();
+        used[triangles[i]] = used[triangles[i + 1]] = used[triangles[i + 2]] = 1;
     }
     if (nullptr != leftOut) {
         for (const size_t vertex : *leftOut) {
@@ -617,22 +612,69 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
         }
     });
     std::vector<size_t> far;
-    double usedArea = 0.0, uncoveredArea = 0.0, farArea = 0.0;
     for (size_t i = 0; i < distances.size(); ++i) {
         report->farthestInputQuadWidths = std::max(report->farthestInputQuadWidths, distances[i] / quadWidth);
-        const double weight = vertexArea[inputVertices[i]];
-        usedArea += weight;
-        if (distances[i] > quadWidth)
-            uncoveredArea += weight;
-        if (distances[i] > radius) {
+        if (distances[i] > radius)
             far.push_back(i);
-            farArea += weight;
-        }
     }
     report->farInputVertexCount = far.size();
-    if (usedArea > 0.0) {
-        report->uncoveredAreaShare = uncoveredArea / usedArea;
-        report->farAreaShare = farArea / usedArea;
+
+    // The share of the input area farther than one and than three h0, on
+    // samples spread by area: each triangle split into n x n parts no wider
+    // than h0 / 2, one sample at the centroid of each.  Vertices alone
+    // mislead both ways: a coarse cone's apex carries a third of its side
+    // (23 % "missing" for a cut tip), a plate's 32-segment hole rims carry
+    // most of its vertices.  Triangles at a left-out vertex are skipped.
+    {
+        const double step = 0.5 * quadWidth;
+        // Per triangle, summed in order afterwards so the report is the same
+        // on every run.
+        std::vector<std::array<double, 3>> shares(triangles.size() / 3, std::array<double, 3> { 0.0, 0.0, 0.0 });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, triangles.size() / 3), [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t t = range.begin(); t != range.end(); ++t) {
+                double& localSampled = shares[t][0];
+                double& localUncovered = shares[t][1];
+                double& localFar = shares[t][2];
+                const uint32_t* corners = &triangles[3 * t];
+                if (!used[corners[0]] || !used[corners[1]] || !used[corners[2]])
+                    continue;
+                const Vector3 a = point(corners[0]), b = point(corners[1]), c = point(corners[2]);
+                const double triangleArea = 0.5 * Vector3::crossProduct(b - a, c - a).length();
+                if (!(triangleArea > 0.0))
+                    continue;
+                const double longest = std::max({ (b - a).length(), (c - b).length(), (a - c).length() });
+                const size_t n = (size_t)std::min(64.0, std::max(1.0, std::ceil(longest / step)));
+                const double weight = triangleArea / (double)(n * n);
+                // Sub-triangle (i, j) of the n x n split, upright and inverted.
+                for (size_t i = 0; i < n; ++i) {
+                    for (size_t j = 0; i + j < n; ++j) {
+                        for (int inverted = 0; inverted < 2; ++inverted) {
+                            if (inverted && i + j + 1 >= n)
+                                continue;
+                            const double u = inverted ? (i + 2.0 / 3.0) / n : (i + 1.0 / 3.0) / n;
+                            const double v = inverted ? (j + 2.0 / 3.0) / n : (j + 1.0 / 3.0) / n;
+                            const Vector3 sample = a + (b - a) * u + (c - a) * v;
+                            const double distance = output.distance(sample, radius * (1.0 + 1e-9));
+                            localSampled += weight;
+                            if (distance > quadWidth)
+                                localUncovered += weight;
+                            if (distance > radius)
+                                localFar += weight;
+                        }
+                    }
+                }
+            }
+        });
+        double sampledArea = 0.0, uncoveredArea = 0.0, farArea = 0.0;
+        for (const auto& share : shares) {
+            sampledArea += share[0];
+            uncoveredArea += share[1];
+            farArea += share[2];
+        }
+        if (sampledArea > 0.0) {
+            report->uncoveredAreaShare = uncoveredArea / sampledArea;
+            report->farAreaShare = farArea / sampledArea;
+        }
     }
     if (far.empty())
         return;
