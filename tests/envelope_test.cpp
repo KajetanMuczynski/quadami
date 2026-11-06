@@ -22,7 +22,8 @@
 // over, one with a wide hole keeps it, an open sheet becomes a closed slab;
 // each envelope is closed, two-manifold, oriented outwards and lies about
 // `offset` from the input.  remesh() envelopes a plate with 64 small holes
-// asked for fewer quads than the holes need, and not when asked for enough.
+// asked for fewer quads than the holes need, keeps a full plate just above
+// that, and keeps the holes when they are several quads wide.
 
 #include <AutoRemesher/Envelope>
 #include <AutoRemesher/Remesh>
@@ -239,9 +240,17 @@ int main()
         for (const std::string& warning : few.report.warnings)
             warned = warned || std::string::npos != warning.find("closed shell");
         check(warned, "enveloped plate is warned about");
-        const AutoRemesher::RemeshResult enough = remeshPlate(400);
-        check(AutoRemesher::RemeshStatus::Ok == enough.status, "plate at 400 quads remeshes");
-        check(0 == enough.report.envelopedIslandCount, "plate at 400 quads is not enveloped");
+        // Above the bound the map can still break (holes 1.3 quads wide at
+        // 400): the result is checked, and the envelope's kept if it covers
+        // the input better.  It may or may not be enveloped, but it is never
+        // a handful of quads.
+        const AutoRemesher::RemeshResult above = remeshPlate(400);
+        check(AutoRemesher::RemeshStatus::Ok == above.status, "plate at 400 quads remeshes");
+        check(above.report.quadCount > 200, "plate at 400 quads is not a handful of quads");
+        // Holes 4 quads wide: the plate keeps them.
+        const AutoRemesher::RemeshResult enough = remeshPlate(4000);
+        check(AutoRemesher::RemeshStatus::Ok == enough.status, "plate at 4000 quads remeshes");
+        check(0 == enough.report.envelopedIslandCount, "plate at 4000 quads is not enveloped");
     }
     if (failures) {
         std::printf("%d check(s) failed\n", failures);

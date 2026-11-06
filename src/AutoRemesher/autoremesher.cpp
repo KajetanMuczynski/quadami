@@ -149,6 +149,27 @@ namespace {
     const double envelopeOffset = 0.25;
     const double envelopeCellSize = 0.25;
     const size_t maximumEnvelopeGridNodes = (size_t)1 << 22;
+    // On round strands (a net of rods) closing by one quad can leave necks
+    // thinner than a cell, and the envelope keeps most handles.  While it
+    // still has more than the bound allows, the closing radius grows by this
+    // factor, up to this many quad widths.
+    const double envelopeClosingGrowth = 1.5;
+    const double maximumEnvelopeClosingRadius = 2.25;
+    // The bound is necessary, not sufficient: above it the map of a
+    // perforated plate or a net still breaks, up to about 6|chi|, and its
+    // output can be a handful of quads (research/envelope-disprover-2026-11-05.md).
+    // So every other island with chi < 0 is checked after remeshing: the
+    // share of its input area farther than one quad from the output, plus
+    // the share of the output more than half a quad off the input.  If that
+    // passes maximumUnfaithfulShare, or the island has more than
+    // maximumUnfaithfulQuadRatio times its quads (spikes), it is remeshed on
+    // its envelope too, and the envelope's result replaces the first if its
+    // share is lower by envelopeShareMargin (a tie keeps the holes).  The
+    // choice follows the results, so no target makes the output jump to a
+    // broken one.
+    const double maximumUnfaithfulShare = 0.05;
+    const double maximumUnfaithfulQuadRatio = 2.0;
+    const double envelopeShareMargin = 0.01;
 
     // A sliver is a strip-shaped island (area below 1e-3 of its bounding
     // diagonal squared) whose mean width, area over diagonal, is under half
@@ -266,6 +287,44 @@ namespace {
                 && output.eulerCharacteristic == input.eulerCharacteristic;
         }
         return true;
+    }
+
+    // Share of the area of `faces` (triangles or polygons, fanned) farther
+    // than `distance` from the surface of `to`.  Sampled at the centroids of
+    // each triangle cut into n x n, n from its longest edge over `spacing`
+    // (at most 64), each sample weighing its share of the area.
+    double fartherAreaShare(const std::vector<Vector3>& vertices, const std::vector<std::vector<size_t>>& faces,
+        const SurfaceProjector& to, double distance, double spacing)
+    {
+        double total = 0.0, farther = 0.0;
+        const auto sample = [&](const Vector3& a, const Vector3& b, const Vector3& c) {
+            const double area = 0.5 * Vector3::crossProduct(b - a, c - a).length();
+            if (!(area > 0.0))
+                return;
+            const double longest = std::max({ (b - a).length(), (c - b).length(), (a - c).length() });
+            const size_t n = std::max<size_t>(1, std::min<size_t>(64, (size_t)std::ceil(longest / spacing)));
+            const double weight = area / (double)(n * n);
+            const Vector3 u = (b - a) * (1.0 / (double)n), v = (c - a) * (1.0 / (double)n);
+            for (size_t i = 0; i < n; ++i) {
+                for (size_t j = 0; i + j < n; ++j) {
+                    // The upright sub-triangle at (i, j), and the inverted one after it.
+                    for (int inverted = 0; inverted < 2; ++inverted) {
+                        if (inverted && i + j + 2 > n)
+                            break;
+                        const double k = inverted ? 2.0 / 3.0 : 1.0 / 3.0;
+                        const Vector3 p = a + u * ((double)i + k) + v * ((double)j + k);
+                        total += weight;
+                        if (!(to.distance(p, distance * 1.0001) < distance))
+                            farther += weight;
+                    }
+                }
+            }
+        };
+        for (const auto& face : faces) {
+            for (size_t k = 2; k < face.size(); ++k)
+                sample(vertices[face[0]], vertices[face[k - 1]], vertices[face[k]]);
+        }
+        return total > 0.0 ? farther / total : 0.0;
     }
 
     // Thrown from a cancellation point and caught in remesh().  Deliberately not
@@ -1219,7 +1278,13 @@ bool AutoRemesher::remeshIslands()
         std::vector<Vector3> envelopeVertices;
         std::vector<std::vector<size_t>> envelopeTriangles;
         double envelopeCellSize = 0.0;
+        // Closing radius used, in quad widths.
+        double envelopeRadius = 0.0;
         size_t envelopeDroppedTriangles = 0;
+        // Shares checked after remeshing (maximumUnfaithfulShare): of the
+        // first result, and of the envelope's if it was tried; -1 if not.
+        double firstUnfaithfulShare = -1.0;
+        double envelopeUnfaithfulShare = -1.0;
         double voxelSize;
         double area;
         // Of the island's bounding box.
@@ -1328,8 +1393,20 @@ bool AutoRemesher::remeshIslands()
     const auto applyEnvelope = [&](IslandContext& context) {
         const double quadWidth = std::sqrt(context.area / context.targetQuadCount);
         EnvelopeResult envelope;
-        if (!buildEnvelope(context.vertices, context.triangles, envelopeClosingRadius * quadWidth,
-                envelopeOffset * quadWidth, envelopeCellSize * quadWidth, maximumEnvelopeGridNodes, &envelope))
+        bool built = false;
+        for (double radius = envelopeClosingRadius; radius <= maximumEnvelopeClosingRadius * 1.0001; radius *= envelopeClosingGrowth) {
+            EnvelopeResult attempt;
+            if (!buildEnvelope(context.vertices, context.triangles, radius * quadWidth,
+                    envelopeOffset * quadWidth, envelopeCellSize * quadWidth, maximumEnvelopeGridNodes, &attempt))
+                break;
+            envelope = std::move(attempt);
+            built = true;
+            context.envelopeRadius = radius;
+            const long long euler = surfaceTopology(envelope.triangles, envelope.vertices.size()).eulerCharacteristic;
+            if (euler >= 0 || context.targetQuadCount >= minimumQuadsPerNegativeEuler * (double)(-euler))
+                break;
+        }
+        if (!built)
             return false;
         context.enveloped = true;
         context.envelopeCellSize = envelope.cellSize;
@@ -1670,6 +1747,20 @@ bool AutoRemesher::remeshIslands()
                 relaxRecord.set("kept_folding", (double)relaxation.keptFolding);
                 relaxRecord.set("seconds", std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - relaxStart).count());
                 run.diagnostics.push_back(std::move(relaxRecord));
+                if (ctx.enveloped) {
+                    // The envelope lies a quarter quad outside the input;
+                    // where the input faces the same way within reach (not
+                    // the back of a single-sided sheet's slab, not a closed
+                    // gap) the vertices go back onto it.
+                    const SurfaceProjector input(&m_vertices, &trianglesIslands[islandIndex]);
+                    const auto onInput = input.project(&run.remeshedVertices, run.remeshedQuads);
+                    DiagnosticRecord inputRecord("input_projection");
+                    inputRecord.set("projected", (double)onInput.projected);
+                    inputRecord.set("kept_unmatched", (double)onInput.keptUnmatched);
+                    inputRecord.set("kept_far", (double)onInput.keptFar);
+                    inputRecord.set("kept_folding", (double)onInput.keptFolding);
+                    run.diagnostics.push_back(std::move(inputRecord));
+                }
             }
         }
         updateProgress(islandIndex, 1.0f);
@@ -1771,6 +1862,69 @@ bool AutoRemesher::remeshIslands()
                         ++islandsRepaired;
                         break;
                     }
+                }
+            }
+        });
+
+    // Islands with holes or handles that came out unfaithful are tried on
+    // their envelope (maximumUnfaithfulShare).
+    const auto unfaithfulShare = [&](size_t i, const IslandContext& ctx, const IslandRun& run) {
+        if (run.remeshedQuads.empty())
+            return 1.0;
+        const double quadWidth = std::sqrt(ctx.area / ctx.targetQuadCount);
+        std::vector<std::vector<size_t>> outputTriangles;
+        outputTriangles.reserve(2 * run.remeshedQuads.size());
+        for (const auto& face : run.remeshedQuads) {
+            for (size_t k = 2; k < face.size(); ++k)
+                outputTriangles.push_back({ face[0], face[k - 1], face[k] });
+        }
+        const SurfaceProjector output(&run.remeshedVertices, &outputTriangles);
+        const SurfaceProjector input(&m_vertices, &trianglesIslands[i]);
+        return fartherAreaShare(m_vertices, trianglesIslands[i], output, quadWidth, 0.5 * quadWidth)
+            + fartherAreaShare(run.remeshedVertices, outputTriangles, input, 0.5 * quadWidth, 0.5 * quadWidth);
+    };
+    std::atomic<size_t> islandsEnvelopedAfterCheck(0);
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                IslandContext& first = islandContexes[i];
+                if (first.leftOut || first.enveloped || !(first.targetQuadCount > 0.0) || !(first.area > 0.0)
+                    || first.originalTopology.eulerCharacteristic >= 0)
+                    continue;
+                throwIfCancelled();
+                size_t quads = 0;
+                for (const auto& face : islandRuns[i].remeshedQuads)
+                    quads += 4 == face.size() ? 1 : 0;
+                first.firstUnfaithfulShare = unfaithfulShare(i, first, islandRuns[i]);
+                if (first.firstUnfaithfulShare <= maximumUnfaithfulShare
+                    && (double)quads <= maximumUnfaithfulQuadRatio * first.targetQuadCount)
+                    continue;
+                IslandContext ctx;
+                buildIslandContext(i, ctx);
+                ctx.voxelSize = first.voxelSize;
+                ctx.targetQuadCount = first.targetQuadCount;
+                if (!applyEnvelope(ctx))
+                    continue;
+                applyMarkedEdgeDensity(ctx);
+                IslandRun run;
+                resampleIsland(i, ctx, run, &retryDecimationStats);
+                parameterizeIsland(i, ctx, run);
+                ctx.firstUnfaithfulShare = first.firstUnfaithfulShare;
+                ctx.envelopeUnfaithfulShare = run.remeshedQuads.empty() ? 1.0 : unfaithfulShare(i, ctx, run);
+                first.envelopeUnfaithfulShare = ctx.envelopeUnfaithfulShare;
+                const bool replace = !run.remeshedQuads.empty()
+                    && ctx.envelopeUnfaithfulShare + envelopeShareMargin < first.firstUnfaithfulShare;
+                IslandRun& dropped = replace ? islandRuns[i] : run;
+                IslandRun& kept = replace ? run : islandRuns[i];
+                for (auto& record : dropped.diagnostics) {
+                    if (record.stage == "extractor")
+                        kept.diagnostics.push_back(std::move(record.label("superseded", "yes")));
+                }
+                if (replace) {
+                    ctx.inputMarkedEdgeCount = first.inputMarkedEdgeCount;
+                    islandContexes[i] = std::move(ctx);
+                    islandRuns[i] = std::move(run);
+                    ++islandsEnvelopedAfterCheck;
                 }
             }
         });
@@ -2175,6 +2329,7 @@ bool AutoRemesher::remeshIslands()
         }
         run.set("retried_islands", (double)islandsToRetry.size());
         run.set("enveloped_islands", (double)m_envelopedIslandCount);
+        run.set("enveloped_after_check_islands", (double)islandsEnvelopedAfterCheck.load());
         run.set("repaired_islands", (double)islandsRepaired.load());
         m_diagnostics.push_back(std::move(run));
 
@@ -2206,7 +2361,12 @@ bool AutoRemesher::remeshIslands()
             record.set("input_non_manifold_edges", (double)islandContexes[i].originalTopology.nonManifoldEdges);
             record.set("input_euler_characteristic", (double)islandContexes[i].originalTopology.eulerCharacteristic);
             record.set("enveloped", islandContexes[i].enveloped ? 1.0 : 0.0);
+            if (islandContexes[i].firstUnfaithfulShare >= 0.0)
+                record.set("unfaithful_share", islandContexes[i].firstUnfaithfulShare);
+            if (islandContexes[i].envelopeUnfaithfulShare >= 0.0)
+                record.set("envelope_unfaithful_share", islandContexes[i].envelopeUnfaithfulShare);
             if (islandContexes[i].enveloped) {
+                record.set("envelope_closing_radius", islandContexes[i].envelopeRadius);
                 record.set("envelope_cell_size", islandContexes[i].envelopeCellSize);
                 record.set("envelope_triangles", (double)islandContexes[i].envelopeTriangles.size());
                 record.set("envelope_dropped_triangles", (double)islandContexes[i].envelopeDroppedTriangles);
