@@ -628,7 +628,14 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
     {
         const double step = 0.5 * quadWidth;
         // Per triangle, summed in order afterwards so the report is the same
-        // on every run.
+        // on every run.  The distance to the output moves by at most the
+        // distance moved, so a triangle whose nearest corner lies closer than
+        // h0 minus its longest edge is covered all over, and one whose
+        // farthest corner lies beyond 3 h0 plus that is far all over: their
+        // samples are not searched (most triangles of a kept surface).
+        std::vector<double> cornerDistance(used.size(), 0.0);
+        for (size_t i = 0; i < inputVertices.size(); ++i)
+            cornerDistance[inputVertices[i]] = distances[i];
         std::vector<std::array<double, 3>> shares(triangles.size() / 3, std::array<double, 3> { 0.0, 0.0, 0.0 });
         tbb::parallel_for(tbb::blocked_range<size_t>(0, triangles.size() / 3), [&](const tbb::blocked_range<size_t>& range) {
             for (size_t t = range.begin(); t != range.end(); ++t) {
@@ -643,6 +650,17 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
                 if (!(triangleArea > 0.0))
                     continue;
                 const double longest = std::max({ (b - a).length(), (c - b).length(), (a - c).length() });
+                const double nearest = std::min({ cornerDistance[corners[0]], cornerDistance[corners[1]], cornerDistance[corners[2]] });
+                const double farthest = std::max({ cornerDistance[corners[0]], cornerDistance[corners[1]], cornerDistance[corners[2]] });
+                localSampled += triangleArea;
+                if (nearest + longest <= quadWidth)
+                    continue;
+                if (farthest - longest > radius) {
+                    localUncovered += triangleArea;
+                    localFar += triangleArea;
+                    continue;
+                }
+                localSampled -= triangleArea;
                 const size_t n = (size_t)std::min(64.0, std::max(1.0, std::ceil(longest / step)));
                 const double weight = triangleArea / (double)(n * n);
                 // Sub-triangle (i, j) of the n x n split, upright and inverted.
