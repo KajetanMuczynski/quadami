@@ -556,9 +556,14 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
     };
     double area = 0.0;
     std::vector<char> used(positions.size() / 3, 0);
+    std::vector<double> vertexArea(positions.size() / 3, 0.0);
     for (size_t i = 0; i < triangles.size(); i += 3) {
-        area += 0.5 * Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]), point(triangles[i + 2]) - point(triangles[i])).length();
-        used[triangles[i]] = used[triangles[i + 1]] = used[triangles[i + 2]] = 1;
+        const double triangleArea = 0.5 * Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]), point(triangles[i + 2]) - point(triangles[i])).length();
+        area += triangleArea;
+        for (size_t k = 0; k < 3; ++k) {
+            used[triangles[i + k]] = 1;
+            vertexArea[triangles[i + k]] += triangleArea / 3.0;
+        }
     }
     if (nullptr != leftOut) {
         for (const size_t vertex : *leftOut) {
@@ -612,12 +617,23 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
         }
     });
     std::vector<size_t> far;
+    double usedArea = 0.0, uncoveredArea = 0.0, farArea = 0.0;
     for (size_t i = 0; i < distances.size(); ++i) {
         report->farthestInputQuadWidths = std::max(report->farthestInputQuadWidths, distances[i] / quadWidth);
-        if (distances[i] > radius)
+        const double weight = vertexArea[inputVertices[i]];
+        usedArea += weight;
+        if (distances[i] > quadWidth)
+            uncoveredArea += weight;
+        if (distances[i] > radius) {
             far.push_back(i);
+            farArea += weight;
+        }
     }
     report->farInputVertexCount = far.size();
+    if (usedArea > 0.0) {
+        report->uncoveredAreaShare = uncoveredArea / usedArea;
+        report->farAreaShare = farArea / usedArea;
+    }
     if (far.empty())
         return;
 
@@ -997,6 +1013,16 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
 
     if (0 == report.faceCount)
         return finish(RemeshStatus::Failed, "remeshing produced no faces");
+    if (report.uncoveredAreaShare >= LargeSurfaceLossShare) {
+        // First, since it says how much of the result is unusable.  Said apart
+        // from the causes the far-vertex warning gives: on a perforated plate at a few
+        // quads per hole the output collapses to a fraction of the input
+        // (48-98 % of the surface farther than a quad), while the far-vertex
+        // warning alone read like a thin part going missing.
+        report.warnings.push_back("About " + std::to_string((long long)std::lround(100.0 * report.uncoveredAreaShare))
+            + " % of the input surface is missing from the result (farther than one quad width from it). "
+              "Check the result before using it.");
+    }
     if (report.islandsWithoutOutput > 0) {
         report.warnings.push_back(std::to_string(report.islandsWithoutOutput) + " of "
             + std::to_string(report.islandCount) + " islands produced no faces");
@@ -1198,6 +1224,8 @@ std::string toJson(const RemeshResult& result)
     out << "  \"lost_parts\": {"
         << "\"farthest_input_quad_widths\": " << jsonNumber(report.farthestInputQuadWidths)
         << ", \"far_input_vertices\": " << jsonCount(report.farInputVertexCount)
+        << ", \"uncovered_area_share\": " << jsonNumber(report.uncoveredAreaShare)
+        << ", \"far_area_share\": " << jsonNumber(report.farAreaShare)
         << ", \"threshold_quad_widths\": " << jsonNumber(LostPartQuadWidths)
         << ", \"piece_vertices\": " << jsonCount(report.pieceLostVertexCount)
         << ", \"pieces\": " << jsonCount(report.lostPieceCount)

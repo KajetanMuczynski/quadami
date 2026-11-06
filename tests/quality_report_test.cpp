@@ -197,18 +197,20 @@ int lostPartFailures()
     const bool ok = 8 == report.farInputVertexCount && std::fabs(report.farthestInputQuadWidths - 10.0) < 1e-9
         && 1 == report.collapsedIslandCount && 2 == report.smallestCollapsedIslandFaces
         && 6 == report.smallestCollapsedIslandTargetQuads && 1 == report.lostPieceCount
-        && 8 == report.pieceLostVertexCount && 0 == report.thinLostVertexCount && 0 == report.otherLostVertexCount;
+        && 8 == report.pieceLostVertexCount && 0 == report.thinLostVertexCount && 0 == report.otherLostVertexCount
+        && std::fabs(report.uncoveredAreaShare - 0.5) < 1e-12 && std::fabs(report.farAreaShare - 0.5) < 1e-12;
     AutoRemesher::QualityReport whole;
     AutoRemesher::measureLostParts(positions, std::vector<uint32_t>(triangles.begin(), triangles.begin() + 36), 12,
         mesh, {}, &whole);
-    const bool wholeOk = 0 == whole.farInputVertexCount && whole.farthestInputQuadWidths < 1e-9;
+    const bool wholeOk = 0 == whole.farInputVertexCount && whole.farthestInputQuadWidths < 1e-9
+        && 0.0 == whole.uncoveredAreaShare && 0.0 == whole.farAreaShare;
     printf("far vertices %zu (want 8), farthest %.3f quad widths (want 10), collapsed %zu (want 1), "
-           "smallest %zu of %zu (want 2 of 6), lost pieces %zu with %zu vertices (want 1 with 8); "
-           "kept cube: far %zu (want 0)%s\n\n",
+           "smallest %zu of %zu (want 2 of 6), lost pieces %zu with %zu vertices (want 1 with 8), "
+           "area uncovered %.3f far %.3f (want 0.5 0.5); kept cube: far %zu, area %.3f (want 0 0)%s\n\n",
         report.farInputVertexCount, report.farthestInputQuadWidths, report.collapsedIslandCount,
         report.smallestCollapsedIslandFaces, report.smallestCollapsedIslandTargetQuads,
-        report.lostPieceCount, report.pieceLostVertexCount,
-        whole.farInputVertexCount, ok && wholeOk ? "" : "  FAIL");
+        report.lostPieceCount, report.pieceLostVertexCount, report.uncoveredAreaShare, report.farAreaShare,
+        whole.farInputVertexCount, whole.uncoveredAreaShare, ok && wholeOk ? "" : "  FAIL");
     return ok && wholeOk ? 0 : 1;
 }
 
