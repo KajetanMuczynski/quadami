@@ -1950,8 +1950,8 @@ bool AutoRemesher::remeshIslands()
                 // the envelope only if it is off by more than
                 // maximumWholeUnfaithfulShare: a CAD part whose creases came
                 // out round is off a little, and its envelope is rounder.
-                // The closing grows only while the envelope's own result is
-                // broken (it kept handles its quads cannot hold).
+                // The closing grows while the envelope's own result fails the
+                // same test (it kept handles its quads cannot hold).
                 // An island enveloped by the bound tries larger closings only.
                 double radius = islandContexes[i].enveloped
                     ? islandContexes[i].envelopeRadius * envelopeClosingGrowth
@@ -1989,7 +1989,8 @@ bool AutoRemesher::remeshIslands()
                         islandRuns[i] = std::move(run);
                         best = lastEnvelopeShare;
                     }
-                    tryNext = envelopeBroken && best > maximumUnfaithfulShare;
+                    tryNext = best > maximumUnfaithfulShare
+                        && lastEnvelopeShare > (envelopeBroken ? maximumUnfaithfulShare : maximumWholeUnfaithfulShare);
                 }
                 islandContexes[i].envelopeUnfaithfulShare = lastEnvelopeShare;
                 envelopeCheckUs += std::chrono::duration_cast<std::chrono::microseconds>(
