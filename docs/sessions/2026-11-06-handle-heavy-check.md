@@ -11,4 +11,10 @@
   also takes collapsed or torn islands on ext_corset, ext_watch, ext_scifihelmet, ext_plant,
   usage_gltf_* and one CAD bracket (its master output had a 188-edge hole; enveloped it keeps χ −4).
 - Measured: numbers in research/handle-heavy-envelope-2026-11-05.md (addendum 2026-11-06).
-- Next: a fresh disprover on the new head; the check's 5 % share and 2× quads are set by hand.
+- Second disprover (research/handle-heavy-check-disprover-2026-11-06.md): a lattice of bars still had a
+  cliff just above 3|χ| (the envelope at one quad kept its handles), torn results passed the check, the
+  check cost +35-50 % on a dense plate that needed none, and the CAD bracket claim was wrong (master has
+  a hole in all 6 replicates). Fixed: the closing grows while the envelope's result fails the check;
+  torn, spiky or empty results count as broken; a closed island that came out closed with its own χ is
+  not measured; a whole result is only enveloped above 10 %.
+- Next: a third disprover on 98f51d3; the 5 %, 10 % and 2× thresholds are set by hand.
