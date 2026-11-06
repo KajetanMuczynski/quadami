@@ -75,6 +75,12 @@ namespace {
             if (index >= vertexCount)
                 return "a feature edge refers to a vertex index past the end of positions";
         }
+        if (0 != request.guideEdges.size() % 2)
+            return "guide edges must hold two vertex indices each";
+        for (const uint32_t index : request.guideEdges) {
+            if (index >= vertexCount)
+                return "a guide edge refers to a vertex index past the end of positions";
+        }
         const RemeshParameters& parameters = request.parameters;
         if (0 == parameters.targetQuadCount)
             return "target quad count must be greater than zero";
@@ -872,7 +878,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     QualityReport& report = result.report;
     report.inputVertexCount = request.positions.size() / 3;
     report.inputTriangleCount = request.triangles.size() / 3;
-    report.inputFeatureEdgeCount = request.featureEdges.size() / 2;
+    report.inputFeatureEdgeCount = (request.featureEdges.size() + request.guideEdges.size()) / 2;
     const auto finish = [&](RemeshStatus status, const std::string& message) {
         result.status = status;
         result.message = message;
@@ -909,6 +915,13 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
         for (size_t i = 0; i + 1 < request.featureEdges.size(); i += 2)
             marked.emplace_back(request.featureEdges[i], request.featureEdges[i + 1]);
         engine.setMarkedEdges(std::move(marked));
+    }
+    if (!request.guideEdges.empty()) {
+        std::vector<std::pair<size_t, size_t>> guides;
+        guides.reserve(request.guideEdges.size() / 2);
+        for (size_t i = 0; i + 1 < request.guideEdges.size(); i += 2)
+            guides.emplace_back(request.guideEdges[i], request.guideEdges[i + 1]);
+        engine.setGuideEdges(std::move(guides));
     }
     engine.setSmoothNormalDegrees(parameters.smoothNormalDegrees);
     engine.setUseQex(Extractor::Qex == parameters.extractor);

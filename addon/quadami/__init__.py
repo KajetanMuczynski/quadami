@@ -273,10 +273,10 @@ def _mark_line(obj, kinds):
 def _mesh_arrays(context, obj, follow_marks=()):
     """Vertex positions and triangles of the evaluated mesh, in object space,
     whether most of its faces are smooth shaded, the vertex pairs of the
-    edges carrying the marks in follow_marks or a guide (guide_tool.py;
-    guides are always sent and never count as a flood), the marks left
-    out because they flood the mesh (_flooded_marks), and how many of the
-    sent edges are guides (none when the object's guides were lost to
+    edges carrying the marks in follow_marks, the marks left out because
+    they flood the mesh (_flooded_marks), and the vertex pairs of the guide
+    edges (guide_tool.py; always sent, never a flood, and kept by the core
+    where it drops marks; none when the object's guides were lost to
     modifiers that change its edges)."""
     depsgraph = context.evaluated_depsgraph_get()
     evaluated = obj.evaluated_get(depsgraph)
@@ -303,14 +303,16 @@ def _mesh_arrays(context, obj, follow_marks=()):
         if follow_marks:
             flooded = _flooded_marks(source, _mark_counts(source), follow_marks)
             marked = _marked_pairs(source, [kind for kind in follow_marks if kind not in flooded])
-        guide_edges = guide_tool.guide_pairs(source)
-        if len(guide_edges):
-            both = np.sort(np.concatenate([marked, guide_edges]).astype(np.int32), axis=1)
-            marked = np.unique(both, axis=0)
+        guide_edges = np.sort(np.asarray(guide_tool.guide_pairs(source), dtype=np.int32).reshape(-1, 2), axis=1)
+        if len(guide_edges) and len(marked):
+            # A marked guide edge is sent once, as a guide.
+            marked = np.sort(np.asarray(marked, dtype=np.int32).reshape(-1, 2), axis=1)
+            guide_keys = set(map(tuple, guide_edges.tolist()))
+            marked = marked[[tuple(pair) not in guide_keys for pair in marked.tolist()]].reshape(-1, 2)
     finally:
         evaluated.to_mesh_clear()
     smooth = bool(smooth_faces.size) and 2 * np.count_nonzero(smooth_faces) >= smooth_faces.size
-    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth, marked, flooded, len(guide_edges)
+    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth, marked, flooded, guide_edges
 
 
 def _source(obj):
@@ -481,8 +483,9 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             self.report({"ERROR"}, "The original object is gone; select it and remesh again")
             return {"CANCELLED"}
         settings = _settings(context)
-        positions, triangles, self._smooth, marked, flooded, self._guide_edges = _mesh_arrays(
+        positions, triangles, self._smooth, marked, flooded, guide_edges = _mesh_arrays(
             context, obj, settings.follow_marks)
+        self._guide_edges = len(guide_edges)
         if len(triangles) == 0:
             self.report({"ERROR"}, "The mesh has no faces")
             return {"CANCELLED"}
@@ -494,7 +497,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             parameters["repair_folds"] = True
             if self.flatten_spikes:
                 parameters["flatten_spikes"] = True
-        job = worker.RemeshJob(executable, positions, triangles, parameters, marked)
+        job = worker.RemeshJob(executable, positions, triangles, parameters, marked, guide_edges)
         try:
             job.start()
         except (OSError, ValueError) as error:

@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -1099,13 +1100,21 @@ bool AutoRemesher::remeshIslands()
     // last, once no merge can make new ones.
     // The marked edges follow the weld and the split; a copy of the
     // triangles is kept only when there are marks.
+    // The guides follow them the same way.
+    const bool anyMarks = !m_markedEdges.empty() || !m_guideEdges.empty();
+    const auto followMarks = [&](const std::vector<std::vector<size_t>>& before) {
+        if (!m_markedEdges.empty())
+            followCornerChanges(before, m_triangles, &m_markedEdges);
+        if (!m_guideEdges.empty())
+            followCornerChanges(before, m_triangles, &m_guideEdges);
+    };
     std::vector<std::vector<size_t>> trianglesBefore;
-    if (!m_markedEdges.empty())
+    if (anyMarks)
         trianglesBefore = m_triangles;
     const SeamWeldStats seams = weldSeams(m_vertices, m_triangles,
         seamWeldRelativeTolerance * usedBoundingDiagonal(m_vertices, m_triangles));
-    if (!m_markedEdges.empty() && 0 != seams.weldedVertices)
-        followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
+    if (anyMarks && 0 != seams.weldedVertices)
+        followMarks(trianglesBefore);
     InputCleanupStats cleanup = cleanInput(m_vertices, m_triangles, inputCleanupTolerance(m_vertices));
     cleanup.weldedEdges = seams.weldedEdges;
     cleanup.weldedVertices = seams.weldedVertices;
@@ -1114,16 +1123,24 @@ bool AutoRemesher::remeshIslands()
     // such an edge skips the sort.
     if (0 != seams.nonManifoldEdges)
         cleanup.duplicateTriangles = removeDuplicateTriangles(m_triangles);
-    if (!m_markedEdges.empty())
+    if (anyMarks)
         trianglesBefore = m_triangles;
     cleanup.splitVertices = splitPinchedVertices(m_vertices, m_triangles);
-    if (!m_markedEdges.empty() && 0 != cleanup.splitVertices)
-        followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
+    if (anyMarks && 0 != cleanup.splitVertices)
+        followMarks(trianglesBefore);
     trianglesBefore = std::vector<std::vector<size_t>>();
     orientInput(m_vertices, m_triangles, &cleanup);
     // A marked edge between two vertices the cleanup merged is gone with it.
-    const size_t markedEdgesGiven = m_markedEdges.size();
+    const size_t markedEdgesGiven = m_markedEdges.size() + m_guideEdges.size();
     m_ignoredMarkedEdgeCount = m_markedEdges.empty() ? 0 : keepMarkedMeshEdges(m_triangles, &m_markedEdges);
+    m_ignoredMarkedEdgeCount += m_guideEdges.empty() ? 0 : keepMarkedMeshEdges(m_triangles, &m_guideEdges);
+    // A pair in both lists is a guide (both are sorted now).
+    if (!m_markedEdges.empty() && !m_guideEdges.empty()) {
+        std::vector<std::pair<size_t, size_t>> marksOnly;
+        std::set_difference(m_markedEdges.begin(), m_markedEdges.end(), m_guideEdges.begin(), m_guideEdges.end(),
+            std::back_inserter(marksOnly));
+        m_markedEdges = std::move(marksOnly);
+    }
     if (m_triangles.empty()) {
         std::cerr << "Input mesh has only degenerate triangles" << std::endl;
         if (nullptr != m_progressHandler)
@@ -1207,7 +1224,11 @@ bool AutoRemesher::remeshIslands()
         // (they join featureEdges as hard edges, islandFeatureEdges), and
         // how many hard edges T has.
         std::vector<std::pair<size_t, size_t>> markedEdges;
+        // The guides, numbered the same way.  Unlike markedEdges, neither
+        // the density rule nor the marked-edge fallback clears them.
+        std::vector<std::pair<size_t, size_t>> guideEdges;
         size_t inputMarkedEdgeCount = 0;
+        size_t inputGuideEdgeCount = 0;
         size_t isotropicMarkedEdgeCount = 0;
         // Cleared for the run without marks (marked-edge fallback below).
         bool followMarks = true;
@@ -1248,6 +1269,8 @@ bool AutoRemesher::remeshIslands()
         context.inputBoundary = QuadExtractor::findBoundary(context.vertices, context.triangles);
         context.markedEdges = islandMarkedEdges(island, oldToNewVertexMap, m_markedEdges);
         context.inputMarkedEdgeCount = context.markedEdges.size();
+        context.guideEdges = islandMarkedEdges(island, oldToNewVertexMap, m_guideEdges);
+        context.inputGuideEdgeCount = context.guideEdges.size();
 
         context.scaling = m_scaling;
         context.voxelSize = m_voxelSize;
@@ -1277,14 +1300,22 @@ bool AutoRemesher::remeshIslands()
     };
 
     // The island's sharp edges with its followed marks as hard edges
-    // (FeatureEdgeSet::Hard), in its input vertex numbering.
+    // (FeatureEdgeSet::Hard) and its guides as hard guide edges (Hard |
+    // Guide), in its input vertex numbering.
     const auto islandFeatureEdges = [](const IslandContext& context) {
         FeatureEdgeSet set = context.featureEdges;
-        if (!context.followMarks || context.markedEdges.empty())
+        const bool marks = context.followMarks && !context.markedEdges.empty();
+        if (!marks && context.guideEdges.empty())
             return set;
-        for (const auto& edge : context.markedEdges) {
+        if (marks) {
+            for (const auto& edge : context.markedEdges) {
+                set.edges.push_back(edge);
+                set.flags.push_back(FeatureEdgeSet::Hard);
+            }
+        }
+        for (const auto& edge : context.guideEdges) {
             set.edges.push_back(edge);
-            set.flags.push_back(FeatureEdgeSet::Hard);
+            set.flags.push_back(FeatureEdgeSet::Hard | FeatureEdgeSet::Guide);
         }
         set.normalize();
         return set;
@@ -1336,6 +1367,7 @@ bool AutoRemesher::remeshIslands()
         context.triangles.clear();
         context.targetQuadCount = 0.0;
         context.markedEdges.clear();
+        context.guideEdges.clear();
         context.followMarks = false;
         ++sliverIslands;
     }
@@ -2049,6 +2081,8 @@ bool AutoRemesher::remeshIslands()
             run.set("input_marked_edges", (double)markedEdgesGiven);
             run.set("input_marked_edges_ignored", (double)m_ignoredMarkedEdgeCount);
         }
+        if (!m_guideEdges.empty())
+            run.set("input_guide_edges", (double)m_guideEdges.size());
         {
             run.set("input_fold_repair", m_repairInputFolds ? 1.0 : 0.0);
             run.set("input_folded_triangles", (double)folds.foldedTriangles);
@@ -2142,6 +2176,8 @@ bool AutoRemesher::remeshIslands()
             record.set("output_quads", (double)quads);
             record.set("thin_area_share", thinParts[i].area > 0.0 ? thinParts[i].thinArea / thinParts[i].area : 0.0);
             record.set("thin_spots", (double)thinParts[i].spots);
+            if (!m_guideEdges.empty())
+                record.set("guide_edges", (double)islandContexes[i].inputGuideEdgeCount);
             if (!m_markedEdges.empty()) {
                 record.set("marked_edges", (double)islandContexes[i].inputMarkedEdgeCount);
                 record.set("isotropic_marked_edges", (double)islandContexes[i].isotropicMarkedEdgeCount);

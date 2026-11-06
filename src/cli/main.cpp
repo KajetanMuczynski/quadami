@@ -45,7 +45,9 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "\n"
                           "Options:\n"
                           "  -i, --input <file.obj>      mesh to remesh (required); its line elements\n"
-                          "                              (l a b ...) are marked edges, kept as creases\n"
+                          "                              (l a b ...) are marked edges, kept as creases;\n"
+                          "                              those in group quadami_guides are guides, kept\n"
+                          "                              even where following them folds quads\n"
                           "  -o, --output <file.obj>     where to write the quad mesh (required)\n"
                           "  --report-json <file.json>   status and quality report, also written when\n"
                           "                              the run fails (schema autoremesher.remesh-result)\n"
@@ -258,7 +260,7 @@ int run(const std::vector<std::string>& arguments)
     RemeshRequest request;
     request.parameters = options.parameters;
     std::string error;
-    if (Cli::readObj(options.inputPath, &request.positions, &request.triangles, &request.featureEdges, &error)) {
+    if (Cli::readObj(options.inputPath, &request.positions, &request.triangles, &request.featureEdges, &request.guideEdges, &error)) {
         RemeshCallbacks callbacks;
         callbacks.progress = printProgress;
         if (options.stdinControl)

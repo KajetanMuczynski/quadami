@@ -28,6 +28,8 @@
 namespace AutoRemesher {
 namespace Cli {
 
+    const char* const kGuideGroupName = "quadami_guides";
+
     namespace {
 
         // UTF-8 -> the platform's path type (UTF-16 on Windows).  C++17:
@@ -40,7 +42,8 @@ namespace Cli {
     }
 
     bool readObj(const std::string& path, std::vector<double>* positions,
-        std::vector<uint32_t>* triangles, std::vector<uint32_t>* featureEdges, std::string* error)
+        std::vector<uint32_t>* triangles, std::vector<uint32_t>* featureEdges,
+        std::vector<uint32_t>* guideEdges, std::string* error)
     {
         std::ifstream stream(toPath(path), std::ios::in | std::ios::binary);
         if (!stream) {
@@ -60,14 +63,16 @@ namespace Cli {
         positions->assign(attributes.vertices.begin(), attributes.vertices.end());
         triangles->clear();
         featureEdges->clear();
+        guideEdges->clear();
         for (const auto& shape : shapes) {
             for (const auto& corner : shape.mesh.indices)
                 triangles->push_back((uint32_t)corner.vertex_index);
+            std::vector<uint32_t>* edges = shape.name == kGuideGroupName ? guideEdges : featureEdges;
             size_t offset = 0;
             for (const int count : shape.lines.num_line_vertices) {
                 for (int i = 1; i < count; ++i) {
-                    featureEdges->push_back((uint32_t)shape.lines.indices[offset + i - 1].vertex_index);
-                    featureEdges->push_back((uint32_t)shape.lines.indices[offset + i].vertex_index);
+                    edges->push_back((uint32_t)shape.lines.indices[offset + i - 1].vertex_index);
+                    edges->push_back((uint32_t)shape.lines.indices[offset + i].vertex_index);
                 }
                 offset += (size_t)count;
             }

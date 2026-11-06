@@ -92,6 +92,16 @@ class ObjTest(unittest.TestCase):
         self.assertEqual(lines, ["l 2 3", "l 3 4"])
         self.assertEqual(len(sizes), len(triangles))
 
+    def test_guide_edges_follow_the_guide_group(self):
+        positions, triangles = uv_sphere(4, 8)
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "mesh.obj")
+            worker.write_obj(path, positions, triangles, np.array([[1, 2]]), np.array([[2, 3], [3, 4]]))
+            with open(path) as f:
+                lines = [line.strip() for line in f if line[:2] in ("l ", "g ")]
+        # The CLI (interface 1.12) reads the lines after the group as guides.
+        self.assertEqual(lines, ["l 2 3", "g " + worker.GUIDE_GROUP, "l 3 4", "l 4 5"])
+
 
 class NamesTest(unittest.TestCase):
     @unittest.skipIf(sys.version_info < (3, 11), "needs tomllib")

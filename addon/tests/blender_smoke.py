@@ -305,7 +305,7 @@ try:
     assert guide_tool.guide_counts(sphere.data) == (1, 0), guide_tool.guide_counts(sphere.data)
     # Remesh sends the guide whatever Follow Marks says.
     sent = addon._mesh_arrays(bpy.context, sphere, set())
-    assert len(sent[3]) == len(guide_tool.guide_pairs(sphere.data)) == sent[5] > 0
+    assert len(sent[3]) == 0 and len(sent[5]) == len(guide_tool.guide_pairs(sphere.data)) > 0, sent[5]
     labels = panel_labels()
     assert "Guides: 1 loop" in labels, labels
     # Edit Mode: Clear Guide on every selected edge removes it, Mark Guide adds them back.

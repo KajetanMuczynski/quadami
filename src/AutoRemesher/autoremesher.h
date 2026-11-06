@@ -120,7 +120,14 @@ public:
         m_markedEdges = std::move(edges);
     }
 
-    // Marked pairs that are not an edge of the cleaned input, so ignored.
+    // As RemeshRequest::guideEdges: followed like the marked edges, but
+    // never dropped by the fallback or the density rule.
+    void setGuideEdges(std::vector<std::pair<size_t, size_t>> edges)
+    {
+        m_guideEdges = std::move(edges);
+    }
+
+    // Marked and guide pairs that are not an edge of the cleaned input, so ignored.
     size_t ignoredMarkedEdgeCount() const
     {
         return m_ignoredMarkedEdgeCount;
@@ -485,6 +492,7 @@ private:
     double m_sharpEdgeDegrees = m_defaultSharpEdgeDegrees;
     // Sorted, low index first, no duplicates once remesh() has checked them.
     std::vector<std::pair<size_t, size_t>> m_markedEdges;
+    std::vector<std::pair<size_t, size_t>> m_guideEdges;
     size_t m_ignoredMarkedEdgeCount = 0;
     size_t m_markedEdgesDroppedIslandCount = 0;
     size_t m_markedEdgesTooDenseIslandCount = 0;

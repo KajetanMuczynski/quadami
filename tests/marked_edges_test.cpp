@@ -21,7 +21,9 @@
 // marks reach the core as vertex pairs.  Malformed lists are rejected, pairs
 // that are not an edge of the mesh are ignored and counted, a marked line on
 // a smooth surface gets a row of output edges, marks on an open seam follow
-// the seam weld, and marks on nearly every edge are not used.
+// the seam weld, and marks on nearly every edge are not used.  Guides
+// (RemeshRequest::guideEdges) are followed the same way and kept where the
+// marks are dropped.
 
 #include <AutoRemesher/Remesh>
 #include <algorithm>
@@ -219,6 +221,32 @@ int main()
     flood.parameters.targetQuadCount = 1500;
     result = AutoRemesher::remesh(flood, {});
     ok &= check("every edge marked", AutoRemesher::RemeshStatus::Ok == result.status && hasWarning(result, "too dense"), result);
+
+    // Guides (RemeshRequest::guideEdges, interface 1.12): checked like the
+    // marks, followed like them, and kept where the marks are dropped.
+    AutoRemesher::RemeshRequest oddGuides = cube();
+    oddGuides.guideEdges = { 0, 1, 2 };
+    result = AutoRemesher::remesh(oddGuides, {});
+    ok &= check("odd guide length", AutoRemesher::RemeshStatus::InvalidInput == result.status, result);
+
+    AutoRemesher::RemeshRequest guided = sphere(16, 32);
+    guided.parameters.targetQuadCount = 1500;
+    guided.guideEdges = guided.featureEdges;
+    guided.featureEdges.clear();
+    result = AutoRemesher::remesh(guided, {});
+    const double asGuide = AutoRemesher::RemeshStatus::Ok == result.status ? followedShare(equator, result.mesh) : 0.0;
+    ok &= check("equator guide followed", asGuide >= 0.8 && result.report.inputFeatureEdgeCount == equator.featureEdges.size() / 2,
+        result);
+    printf("  followed as a guide %.2f\n", asGuide);
+
+    // Every edge marked and the equator a guide: the marks are dropped as too
+    // dense, the guide is still followed.
+    AutoRemesher::RemeshRequest floodGuide = flood;
+    floodGuide.guideEdges = equator.featureEdges;
+    result = AutoRemesher::remesh(floodGuide, {});
+    const double guideInFlood = AutoRemesher::RemeshStatus::Ok == result.status ? followedShare(equator, result.mesh) : 0.0;
+    ok &= check("guide kept when the marks are too dense", hasWarning(result, "too dense") && guideInFlood >= 0.8, result);
+    printf("  followed %.2f\n", guideInFlood);
 
     return ok ? 0 : 1;
 }

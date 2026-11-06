@@ -50,6 +50,8 @@ constexpr double kSharpEdgeToleranceDegrees = 0.1;
 struct FeatureEdgeSet {
     // Bit of `flags` reserved for hard (user-marked) edges, TODO 5.4.
     static constexpr unsigned char Hard = 0x1;
+    // Set together with Hard on guide edges (the add-on's Draw Guide, TODO 5.7).
+    static constexpr unsigned char Guide = 0x2;
 
     // Undirected edges (first < second) in the vertex numbering of the mesh
     // the set belongs to, sorted; `flags` is parallel to it.

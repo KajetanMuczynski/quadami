@@ -26,6 +26,7 @@
 namespace AutoRemesher {
 
 constexpr unsigned char FeatureEdgeSet::Hard;
+constexpr unsigned char FeatureEdgeSet::Guide;
 
 namespace {
 

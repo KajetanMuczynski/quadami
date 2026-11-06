@@ -220,6 +220,8 @@ def write(path, vertices, faces, edges, guide_edges):
             fo.write("v %.9g %.9g %.9g\n" % tuple(float(x) for x in p))
         for a, b, c in faces:
             fo.write("f %d %d %d\n" % (a + 1, b + 1, c + 1))
+        # The group the add-on's worker writes guides in (CLI interface 1.12).
+        fo.write("g quadami_guides\n")
         for e in guide_edges:
             fo.write("l %d %d\n" % (edges[e][0] + 1, edges[e][1] + 1))
 

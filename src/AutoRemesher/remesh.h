@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 11;
+const int InterfaceVersionMinor = 12;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -118,8 +118,13 @@ struct RemeshRequest {
     // of the triangles is ignored and counted (report warning).  Empty: only
     // the dihedral test of sharpEdgeDegrees finds creases, as before.
     std::vector<uint32_t> featureEdges;
+    // Since 1.12.  Guide edges (the add-on's Draw Guide), as featureEdges:
+    // followed like marked edges, but never dropped by the marked-edge
+    // fallback or the too-dense rule, which drop only featureEdges.  A pair
+    // in both lists is a guide.  Ignored pairs are counted with featureEdges'.
+    std::vector<uint32_t> guideEdges;
     // Planned optional inputs, each empty by default so that leaving it out
-    // keeps today's behaviour: vertexDensity, faceGroups, guideCurves,
+    // keeps today's behaviour: vertexDensity, faceGroups,
     // symmetry (see INTERFACE.md in the project docs).
 };
 
@@ -180,8 +185,9 @@ const double ThinLostPartQuadWidths = 2.0;
 struct QualityReport {
     size_t inputVertexCount = 0;
     size_t inputTriangleCount = 0;
-    // Since 1.10.  Pairs in RemeshRequest::featureEdges, and how many of
-    // them were ignored because they are not an edge of the cleaned input.
+    // Since 1.10.  Pairs in RemeshRequest::featureEdges (since 1.12 plus
+    // guideEdges), and how many of them were ignored because they are not
+    // an edge of the cleaned input.
     size_t inputFeatureEdgeCount = 0;
     size_t ignoredFeatureEdgeCount = 0;
     size_t vertexCount = 0;

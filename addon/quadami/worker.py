@@ -101,10 +101,15 @@ class Outcome:
         return self.status == "ok"
 
 
-def write_obj(path, positions, triangles, marked_edges=None):
-    """positions (V, 3) float, triangles (F, 3) int, marked_edges (E, 2) int
-    vertex pairs, all 0-based. Marked edges go out as `l a b` lines, which
-    the CLI keeps as creases."""
+GUIDE_GROUP = "quadami_guides"
+
+
+def write_obj(path, positions, triangles, marked_edges=None, guide_edges=None):
+    """positions (V, 3) float, triangles (F, 3) int, marked_edges and
+    guide_edges (E, 2) int vertex pairs, all 0-based. Both go out as `l a b`
+    lines, which the CLI keeps as creases; the guides' come after a
+    `g quadami_guides` line, so the CLI (interface 1.12) keeps them even
+    where it drops the marks."""
     positions = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
     triangles = np.asarray(triangles, dtype=np.int64).reshape(-1, 3)
     with open(path, "w", encoding="ascii", newline="\n") as f:
@@ -113,6 +118,9 @@ def write_obj(path, positions, triangles, marked_edges=None):
         np.savetxt(f, triangles + 1, fmt="f %d %d %d")
         if marked_edges is not None and len(marked_edges):
             np.savetxt(f, np.asarray(marked_edges, dtype=np.int64).reshape(-1, 2) + 1, fmt="l %d %d")
+        if guide_edges is not None and len(guide_edges):
+            f.write("g %s\n" % GUIDE_GROUP)
+            np.savetxt(f, np.asarray(guide_edges, dtype=np.int64).reshape(-1, 2) + 1, fmt="l %d %d")
 
 
 def read_obj(path):
@@ -235,11 +243,12 @@ class RemeshJob:
     then outcome(). cancel() may be called at any time.
     """
 
-    def __init__(self, executable, positions, triangles, parameters, marked_edges=None):
+    def __init__(self, executable, positions, triangles, parameters, marked_edges=None, guide_edges=None):
         self.executable = executable
         self.positions = positions
         self.triangles = triangles
         self.marked_edges = marked_edges
+        self.guide_edges = guide_edges
         self.parameters = dict(parameters)
         self.fraction = 0.0
         self.step = ""
@@ -262,7 +271,7 @@ class RemeshJob:
         if unknown:
             raise ValueError("unknown parameters: " + ", ".join(sorted(unknown)))
         self._workdir = tempfile.mkdtemp(prefix="quadami-")
-        write_obj(self._path("input.obj"), self.positions, self.triangles, self.marked_edges)
+        write_obj(self._path("input.obj"), self.positions, self.triangles, self.marked_edges, self.guide_edges)
         args = [self.executable,
                 "-i", self._path("input.obj"),
                 "-o", self._path("output.obj"),
@@ -387,12 +396,12 @@ class RemeshJob:
 
 
 def remesh(executable, positions, triangles, parameters, on_progress=None, interval=0.05,
-           marked_edges=None):
+           marked_edges=None, guide_edges=None):
     """Blocking convenience wrapper: run a job to the end and return its Outcome.
 
     on_progress(fraction, step) may return True to request a cancel.
     """
-    job = RemeshJob(executable, positions, triangles, parameters, marked_edges)
+    job = RemeshJob(executable, positions, triangles, parameters, marked_edges, guide_edges)
     job.start()
     try:
         while not job.done:
