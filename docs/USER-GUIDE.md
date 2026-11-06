@@ -30,7 +30,7 @@ Contents: [1 Words used here](#1-words-used-here) · [2 Install and update](#2-i
 | **Non-quad** | Any face that is not a quad: a triangle (3 corners), a pentagon (5), and so on. A few are normal; the goal is zero. |
 | **Edge loop** | A row of edges that runs around the model, like a line of latitude on a globe. |
 | **Pole** | A vertex where more or fewer than 4 edges meet. Unavoidable on round shapes; good remeshes put few of them in sensible places. |
-| **Folded face** | A face that is bent over itself: one of its corners points inwards, or it is twisted like a bow tie. It shades badly and breaks loops. |
+| **Folded face** | A face that is bent over itself: one of its corners points inwards, or it is twisted so far that it folds along both of its diagonals (a bow tie, or a sharply bent saddle). It shades badly and breaks loops. |
 | **Island** | One separate piece of the mesh that does not touch the others, such as an eyeball next to a head, or each part of an object made with **Ctrl+J** (Join). |
 | **Closed** | A mesh with no holes in its surface, like a ball. *Open*: it has borders, like a sheet or a cup. |
 | **Hole** | A gap in a surface that was closed before remeshing. |
@@ -283,7 +283,7 @@ another result object shows that object's own report.
 | **Non-manifold edges** | Edges with three or more faces. | 0. |
 | **Non-manifold vertices** | Points where surfaces only touch. | 0. |
 | **Winding flips** | Neighbouring faces facing opposite ways. | 0. |
-| **Folded faces** | Quads bent over or twisted ([§1](#1-words-used-here)). | 0. A few on sculpts is a known weakness. |
+| **Folded faces** | Faces bent over or twisted ([§1](#1-words-used-here)); `N (T twisted)` says how many of the N are twisted quads. | 0. Up to about 2 per 1,000 quads is a known weakness, mostly where several poles sit close together; Adaptivity 0 gives fewer. |
 | **Input cleanup** | Only shown when the remesher fixed your *input* before starting: open seams welded (pieces that only touched, as after an import without merging or an Edge Split modifier), duplicate faces removed, pinched points (two parts of the surface sharing one vertex) split, paper-thin sliver pieces with no area left out, tiny broken triangles removed, triangles turned to face the same way as their neighbours. Your object itself is never changed. | Information, not a problem. |
 | **Empty islands** | `E of N`: separate pieces of your model that got no quads at all. | 0 of N. |
 | **Missing parts** | How far the farthest point of your model is from the result, counted in quad widths (the planned quad size). Red above 3: a part such as a vine, a limb or a spike did not come out; the warning under the rows says why ([§6](#6-warnings-and-what-to-do)). | none. |

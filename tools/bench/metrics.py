@@ -94,12 +94,15 @@ def read_obj(path):
 
 
 def read_obj_lines(path):
-    """Vertex pairs (E, 2, 0-based) of an OBJ's line elements: marked edges, as the CLI reads them."""
-    pairs = []
+    """Vertex pairs (E, 2, 0-based) of an OBJ's line elements: marked edges, as the CLI reads them.
+    Negative indices count back from the last vertex read, as in read_obj."""
+    pairs, nv = [], 0
     with open(path) as f:
         for l in f:
-            if l.startswith("l "):
-                idx = [int(t.split("/")[0]) - 1 for t in l.split()[1:]]
+            if l.startswith("v "):
+                nv += 1
+            elif l.startswith("l "):
+                idx = [i - 1 if i > 0 else nv + i for i in (int(t.split("/")[0]) for t in l.split()[1:])]
                 pairs.extend(zip(idx[:-1], idx[1:]))
     return np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
 
@@ -380,21 +383,67 @@ def island_topology(nv, first_vertex, E, bnd, used, vlab, nlab):
     return chi.astype(np.int64), nb
 
 
-def folded_faces(V, faces, sizes):
-    """Faces with a corner turning against the face's area vector (scaled Jacobian <= 0), degenerate
-    faces left out: the core's `folded_faces` (measureMesh in remesh.cpp), for every face size, so
-    a pleated pentagon counts too (V2 tests quads only)."""
+def folded_mask(V, faces):
+    """Per face: (folded, twisted), degenerate faces False in both, as the core's measureMesh
+    (remesh.cpp). Folded: a corner turns against the face's area vector (scaled Jacobian <= 0), any
+    face size. Twisted: a quad folded under both diagonals (each split into two triangles has them
+    facing apart), which a saddle-shaped quad can be with every corner positive."""
     fid, v, nx, pv = corners(faces)
     N = np.zeros((len(faces), 3))
     np.add.at(N, fid, np.cross(V[v], V[nx]))  # twice the area vector
     e1, e2 = V[nx] - V[v], V[pv] - V[v]
     longest = np.zeros(len(faces))
     np.maximum.at(longest, fid, np.sum(e1 * e1, 1))
-    repeated = np.array([len(set(f)) != len(f) for f in faces])
+    repeated = np.array([len(set(f)) != len(f) for f in faces], dtype=bool)
     degenerate = repeated | (0.5 * np.linalg.norm(N, axis=1) <= 1e-12 * longest)
     bad = np.zeros(len(faces), bool)
     np.logical_or.at(bad, fid, np.einsum("ij,ij->i", np.cross(e1, e2), N[fid]) <= 0)
-    return int(np.sum(bad & ~degenerate))
+    twisted = np.zeros(len(faces), bool)
+    qi = np.array([i for i, f in enumerate(faces) if len(f) == 4], dtype=np.int64)
+    if len(qi):
+        Q = np.array([faces[i] for i in qi], dtype=np.int64)
+        a, b, c, d = (V[Q[:, i]] for i in range(4))
+        dot = lambda x, y: np.einsum("ij,ij->i", x, y)
+        twisted[qi] = ((dot(np.cross(b - a, c - a), np.cross(c - a, d - a)) < 0)
+                       & (dot(np.cross(c - b, d - b), np.cross(d - b, a - b)) < 0))
+    return bad & ~degenerate, twisted & ~degenerate
+
+
+def crease_diagonal_mask(Vin, creases, V, faces, twisted):
+    """Twisted quads bent along an input crease, as discountCreaseDiagonalQuads (remesh.cpp): a diagonal
+    with both ends within 1e-6 of its length of a crease edge of 90 degrees or more (`creases`, input
+    vertex pairs) and its midpoint within 0.05 of its length of one."""
+    out = np.zeros(len(faces), bool)
+    idx = np.where(twisted)[0]
+    if not len(idx) or not len(creases):
+        return out
+    A, B = Vin[creases[:, 0]], Vin[creases[:, 1]]
+    tree = cKDTree(0.5 * (A + B))
+    half = 0.5 * float(np.linalg.norm(B - A, axis=1).max())
+
+    def near(p, tol):
+        cand = tree.query_ball_point(p, half + tol)
+        if not cand:
+            return False
+        a, ab = A[cand], B[cand] - A[cand]
+        t = np.clip(np.einsum("ij,ij->i", p - a, ab) / np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-300), 0, 1)
+        return bool(np.min(np.linalg.norm(a + t[:, None] * ab - p, axis=1)) <= tol)
+
+    for i in idx:
+        q = faces[i]
+        for p0, p1 in ((q[0], q[2]), (q[1], q[3])):
+            L = float(np.linalg.norm(V[p1] - V[p0]))
+            if near(V[p0], 1e-6 * L) and near(V[p1], 1e-6 * L) and near(0.5 * (V[p0] + V[p1]), 0.05 * L):
+                out[i] = True
+                break
+    return out
+
+
+def folded_faces(V, faces, sizes):
+    """Faces with a corner turning against the face's area vector (scaled Jacobian <= 0), degenerate
+    faces left out: the core's `folded_faces` (measureMesh in remesh.cpp), for every face size, so
+    a pleated pentagon counts too (V2 tests quads only)."""
+    return int(folded_mask(V, faces)[0].sum())
 
 
 def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, reversed_out, h, in_tri, d, out_face, Ftri):
@@ -459,8 +508,12 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
     # Twice the genus: 2 * components - chi - boundary loops (odd only for a non-orientable surface).
     g2_in = 2 - in_chi - in_loops
     g2_out = 2 * k - chi_sum - loops_sum
+    folded, twisted = folded_mask(V, faces)
+    along_crease = crease_diagonal_mask(Vin, inp["creases_90_raw"], V, faces, twisted)
+    twisted &= ~along_crease
     res = {"non_manifold_vertices": nonmanifold_vertices(faces, len(V)),
-           "folded_faces": folded_faces(V, faces, sizes),
+           "folded_faces": int(folded.sum()), "twisted_quads": int(twisted.sum()),
+           "folded_or_twisted_faces": int((folded | twisted).sum()), "crease_diagonal_quads": int(along_crease.sum()),
            "islands_input": int(nin), "islands_input_non_manifold": int((~manifold_in).sum()),
            "islands_output": int(nout), "islands_dropped": int(dropped.sum()),
            "islands_split": int(np.sum((k > 1) & manifold_in)), "islands_merged": merged,
@@ -487,8 +540,81 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+def weld_seams(Vin, Fin, diag, same_side_cos=np.cos(np.radians(5.0))):
+    """The input as the core sees it after its seam weld (TODO 2.7, inputsanitizer.cpp weldSeams; written
+    from that rule, not ported): two boundary edges whose ends lie within min(1e-5 diag, 0.1 x the shorter
+    edge) of each other, each the other's only such partner, with their triangles on opposite sides of the
+    edge (a double-sided sheet stays two sheets), share their vertices. A part (connected piece after
+    welding) that would get a degenerate triangle or more non-manifold edges is left unwelded.
+    Exports split at UV or normal seams (glTF, Blender's importer) otherwise read as open, with holes the
+    output correctly closes. Returns the triangles on representative vertices and the welded count."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    n = len(Vin)
+    he = np.concatenate([Fin[:, [0, 1]], Fin[:, [1, 2]], Fin[:, [2, 0]]])
+    opp = np.concatenate([Fin[:, 2], Fin[:, 0], Fin[:, 1]])
+    key = he.min(1) * n + he.max(1)
+    _, inv, cnt = np.unique(key, return_inverse=True, return_counts=True)
+    b = np.flatnonzero(cnt[inv.ravel()] == 1)
+    if len(b) < 2:
+        return Fin, 0
+    a, c, o = he[b, 0], he[b, 1], opp[b]
+    A, C = Vin[a], Vin[c]
+    L = np.linalg.norm(C - A, axis=1)
+    tol = 1e-5 * diag
+    pairs = cKDTree(0.5 * (A + C)).query_pairs(tol, output_type="ndarray")
+    if not len(pairs):
+        return Fin, 0
+    i, j = pairs[:, 0], pairs[:, 1]
+    lim2 = np.minimum(tol, 0.1 * np.minimum(L[i], L[j])) ** 2
+    d2 = lambda P, Q: np.sum((P - Q) ** 2, 1)  # noqa: E731
+    rev = (d2(A[i], C[j]) <= lim2) & (d2(C[i], A[j]) <= lim2)
+    fwd = ~rev & (d2(A[i], A[j]) <= lim2) & (d2(C[i], C[j]) <= lim2)
+
+    def across(k, t):  # unit direction from edge k into its triangle, across the tangent t
+        d = Vin[o[k]] - A[k]
+        d = d - t * np.sum(d * t, 1, keepdims=True)
+        return d / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-300)
+    t = (C[i] - A[i]) / np.maximum(L[i, None], 1e-300)
+    ok = (rev | fwd) & (np.sum(across(i, t) * across(j, t), 1) <= same_side_cos)
+    i, j, rev = i[ok], j[ok], rev[ok]
+    deg = np.bincount(np.concatenate([i, j]), minlength=len(b))
+    unique = (deg[i] == 1) & (deg[j] == 1)
+    i, j, rev = i[unique], j[unique], rev[unique]
+    if not len(i):
+        return Fin, 0
+    u = np.concatenate([a[i], c[i]])
+    w = np.concatenate([np.where(rev, c[j], a[j]), np.where(rev, a[j], c[j])])
+    _, lab = connected_components(coo_matrix((np.ones(len(u)), (u, w)), shape=(n, n)), directed=False)
+    first = np.full(n, n, np.int64)
+    np.minimum.at(first, lab, np.arange(n))
+    remap = first[lab]
+    # Undo parts that the weld would break.
+    W = remap[Fin]
+    ew = np.concatenate([W[:, [0, 1]], W[:, [1, 2]], W[:, [2, 0]]])
+    _, part = connected_components(coo_matrix((np.ones(len(ew)), (ew[:, 0], ew[:, 1])), shape=(n, n)), directed=False)
+    tri_part = part[W[:, 0]]
+    bad = np.zeros(part.max() + 1, bool)
+    degenerate = (W[:, 0] == W[:, 1]) | (W[:, 1] == W[:, 2]) | (W[:, 2] == W[:, 0])
+    was = (Fin[:, 0] == Fin[:, 1]) | (Fin[:, 1] == Fin[:, 2]) | (Fin[:, 2] == Fin[:, 0])
+    bad[tri_part[degenerate & ~was]] = True
+    growth = np.zeros(len(bad), np.int64)
+    for edges, sign in ((he, -1), (ew, 1)):
+        keep = edges[:, 0] != edges[:, 1]
+        k = edges[keep].min(1) * n + edges[keep].max(1)
+        _, first_he, kc = np.unique(k, return_index=True, return_counts=True)
+        np.add.at(growth, tri_part[np.tile(np.arange(len(Fin)), 3)[keep][first_he[kc > 2]]], sign)
+    bad |= growth > 0
+    undo = bad[part[remap]] & (remap != np.arange(n))
+    remap[undo] = np.arange(n)[undo]
+    return remap[Fin], int(np.sum(remap != np.arange(n)))
+
+
 def sharp_edges(Vin, Fin, sharp_deg=40.0):
-    """Input edges with two faces whose normals differ by more than sharp_deg (TARGETS A1)."""
+    """Input edges with two faces whose normals differ by more than sharp_deg (TARGETS A1). Faces whose
+    normal is zero (the core's test: cross product of length <= DBL_EPSILON) make no crease, as in
+    featureedges.cpp; their normal would read as 90 degrees against any neighbour."""
     he = np.concatenate([Fin[:, [0, 1]], Fin[:, [1, 2]], Fin[:, [2, 0]]])
     fid = np.tile(np.arange(len(Fin)), 3)
     key = he.min(1) * len(Vin) + he.max(1)
@@ -498,9 +624,11 @@ def sharp_edges(Vin, Fin, sharp_deg=40.0):
     man = cnt == 2
     f1, f2 = fid[start[man]], fid[start[man] + 1]
     n = np.cross(Vin[Fin[:, 1]] - Vin[Fin[:, 0]], Vin[Fin[:, 2]] - Vin[Fin[:, 0]])
-    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-300)
+    nl = np.linalg.norm(n, axis=1)
+    n /= np.maximum(nl[:, None], 1e-300)
     ang = np.degrees(np.arccos(np.clip(np.sum(n[f1] * n[f2], 1), -1, 1)))
-    return he[start[man]][ang > sharp_deg].reshape(-1, 2)
+    real = (nl[f1] > np.finfo(float).eps) & (nl[f2] > np.finfo(float).eps)
+    return he[start[man]][(ang > sharp_deg) & real].reshape(-1, 2)
 
 
 def crease_samples(Vin, sharp, V, E_out, h, dist_tol=0.1, ang_tol=10.0):
@@ -577,10 +705,13 @@ def narrow_strip_samples(P, T, idx, h):
     return narrow
 
 
+SHARP_TOLERANCE_DEG = 0.1  # featureedges.h kSharpEdgeToleranceDegrees
+
+
 def crease_report(Vin, sharp, angles, V, faces, E_out, h, sharp_degrees=90.0, bend_deg=30.0):
     """A1 split for crease preservation (research/crease-preservation-2026-10-26.md):
-    coverage_theta_all  coverage of the creases at or above the run's sharp-edge angle (minus 1 deg, so a
-                       right angle counts on every rotation), the creases the pipeline is asked to keep;
+    coverage_theta_all  coverage of the creases at or above the run's sharp-edge angle minus 0.1 deg (the
+                       core's test, kSharpEdgeToleranceDegrees), the creases the pipeline is asked to keep;
     resolvable_share   share of that length not in a strip narrower than h/2 (narrow_strip_samples);
     coverage_theta     A1theta: coverage of the resolvable part, the number a crease fix must move;
     bent_quads_per_1k  quads folded across a crease: the smaller fold over the two diagonals above
@@ -588,7 +719,8 @@ def crease_report(Vin, sharp, angles, V, faces, E_out, h, sharp_degrees=90.0, be
     out = {"sharp_degrees": float(sharp_degrees), "coverage_theta_all": None, "resolvable_share": None,
            "coverage_theta": None, "bent_quads_per_1k": None}
     quads = np.array([f for f in faces if len(f) == 4], dtype=np.int64).reshape(-1, 4)
-    if len(quads) and len(sharp):
+    s40 = sharp[angles > 40.0]  # the set may hold lower creases for a run's low sharp-edge angle
+    if len(quads) and len(s40):
         def fold(a, b, c, d):
             n1 = np.cross(V[b] - V[a], V[c] - V[a])
             n2 = np.cross(V[c] - V[a], V[d] - V[a])
@@ -597,14 +729,14 @@ def crease_report(Vin, sharp, angles, V, faces, E_out, h, sharp_degrees=90.0, be
             return np.degrees(np.arccos(np.clip(np.sum(n1 * n2, 1), -1, 1)))
         bend = np.minimum(fold(quads[:, 0], quads[:, 1], quads[:, 2], quads[:, 3]),
                           fold(quads[:, 1], quads[:, 2], quads[:, 3], quads[:, 0]))
-        A, B = Vin[sharp[:, 0]], Vin[sharp[:, 1]]
+        A, B = Vin[s40[:, 0]], Vin[s40[:, 1]]
         L = np.linalg.norm(B - A, axis=1)
         ns = np.maximum(1, np.ceil(L / (h / 4)).astype(int))
-        idx = np.repeat(np.arange(len(sharp)), ns)
+        idx = np.repeat(np.arange(len(s40)), ns)
         t = (np.concatenate([np.arange(k) for k in ns]) + 0.5) / ns[idx]
         dist, _ = cKDTree(A[idx] + t[:, None] * (B - A)[idx]).query(V[quads].mean(1))
         out["bent_quads_per_1k"] = float(1000.0 * np.sum((bend > bend_deg) & (dist < h / 2)) / len(quads))
-    keep = angles >= sharp_degrees - 1.0
+    keep = angles >= sharp_degrees - SHARP_TOLERANCE_DEG
     if not np.any(keep) or len(E_out) == 0 or sharp_degrees >= 180.0 or sharp_degrees <= 0.0:
         return out
     P, T, idx, w, covered = crease_samples(Vin, sharp[keep], V, E_out, h)
@@ -630,6 +762,11 @@ def input_side(input_path, cache_dir=None):
                 return {k: z[k] for k in z.files}
     Vin, fin = read_obj(input_path)
     Fin = triangulate(fin)
+    # Edges of 90 degrees and more of the input as the CLI hands it to the core (no weld, the file's
+    # winding): the creases discountCreaseDiagonalQuads (remesh.cpp) checks twisted quads against.
+    creases_90_raw = sharp_edges(Vin, Fin, np.nextafter(90.0 - SHARP_TOLERANCE_DEG, -np.inf))
+    used_raw = np.unique(Fin)
+    Fin, welded = weld_seams(Vin, Fin, np.linalg.norm(Vin[used_raw].max(0) - Vin[used_raw].min(0)) if len(used_raw) else 0.0)
     used_in = np.unique(Fin)
     ein = np.unique(np.sort(np.concatenate([Fin[:, [0, 1]], Fin[:, [1, 2]], Fin[:, [2, 0]]]), axis=1), axis=0)
     ein_all = np.sort(np.concatenate([Fin[:, [0, 1]], Fin[:, [1, 2]], Fin[:, [2, 0]]]), axis=1)
@@ -649,14 +786,16 @@ def input_side(input_path, cache_dir=None):
     bad_v[ein_u[ein_c > 2].ravel()] = True
     island_nm = np.zeros(nisl, bool)
     island_nm[vlab[bad_v]] = True
-    sharp = sharp_edges(Vin, Fin)
-    d = {"Vin": Vin, "Fin": Fin, "used_in": used_in,
+    # Creases on the oriented input, as the core classifies them after orientInput: a seam where the
+    # file's winding turns is not a 180-degree crease.
+    sharp = sharp_edges(Vin, Fin_oriented)
+    d = {"Vin": Vin, "Fin": Fin, "used_in": used_in, "input_welded_vertices": np.int64(welded),
          "diag": np.float64(np.linalg.norm(Vin[used_in].max(0) - Vin[used_in].min(0))),
          "euler_input": np.int64(len(used_in) - len(ein) + len(Fin)),
          "components_input": np.int64(len(np.unique(comps(len(Vin), ein)[used_in]))),
          "boundary_loops_input": np.int64(loops(len(Vin), ein_u[ein_c == 1])),
-         "sharp_edges": sharp, "sharp_angles": sharp_edge_angles(Vin, Fin, sharp),
-         "marked_edges": read_obj_lines(input_path),
+         "sharp_edges": sharp, "sharp_angles": sharp_edge_angles(Vin, Fin_oriented, sharp),
+         "marked_edges": read_obj_lines(input_path), "creases_90_raw": creases_90_raw,
          "tri_island": vlab[Fin[:, 0]], "island_euler": island_euler, "island_loops": island_loops,
          "island_non_manifold": island_nm, "island_area": np.bincount(vlab[Fin[:, 0]], weights=tri_area, minlength=nisl),
          "Fin_oriented": Fin_oriented, "input_reoriented": np.int64(reoriented),
@@ -694,10 +833,12 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
 
     # Edges and orientation.
     he = np.array([(f[i], f[(i + 1) % len(f)]) for f in faces for i in range(len(f))], dtype=np.int64)
-    lo, hi = he.min(1), he.max(1)
-    key = lo * len(V) + hi
+    # A repeated vertex (a b c c) gives a half-edge from c to c: no edge (else a boundary edge, a "hole").
+    # Such a face still counts as degenerate below.
+    he_e = he[he[:, 0] != he[:, 1]]
+    key = he_e.min(1) * len(V) + he_e.max(1)
     uniq, inv, counts = np.unique(key, return_inverse=True, return_counts=True)
-    fwd = (he[:, 0] < he[:, 1]).astype(np.int64)
+    fwd = (he_e[:, 0] < he_e[:, 1]).astype(np.int64)
     fwd_count = np.bincount(inv, weights=fwd, minlength=len(uniq))
     manifold = counts == 2
     inconsistent = int(np.sum(manifold & (fwd_count != 1)))
@@ -712,6 +853,7 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
     out["topology"]["components"] = int(len(np.unique(lab[used])))
     out["topology"]["euler_output"] = int(len(used) - len(uniq) + len(faces))
     out["topology"]["euler_input"] = int(inp["euler_input"])
+    out["topology"]["input_welded_vertices"] = int(inp["input_welded_vertices"])
     out["topology"]["components_input"] = int(inp["components_input"])
     t = out["topology"]
     t["boundary_loops"] = loops(len(V), bnd)
@@ -776,8 +918,11 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
                         "sj_hist": np.histogram(sjmin, bins=10, range=(-1, 1))[0].tolist()}
 
     out["creases"] = crease_coverage(Vin, inp["sharp_edges"], V, E, mean_edge)
-    out["creases"].update(crease_report(Vin, inp["sharp_edges"], inp["sharp_angles"], V, faces, E, mean_edge,
-                                        sharp_degrees))
+    sharp_t, angles_t = inp["sharp_edges"], inp["sharp_angles"]
+    if sharp_degrees - SHARP_TOLERANCE_DEG <= 40.0:  # creases the run keeps that the 40-degree set misses
+        sharp_t = sharp_edges(Vin, inp["Fin_oriented"], np.nextafter(sharp_degrees - SHARP_TOLERANCE_DEG, -np.inf))
+        angles_t = sharp_edge_angles(Vin, inp["Fin_oriented"], sharp_t)
+    out["creases"].update(crease_report(Vin, sharp_t, angles_t, V, faces, E, mean_edge, sharp_degrees))
     if len(inp["marked_edges"]):
         # Marked edges (TODO 5.4): followed by an output edge (A1 on the marked set), and how far
         # the output surface lies from them (rounding), median and p90 in output mean edges.
@@ -803,13 +948,14 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
     def flips_against(Fref):
         nin = np.cross(Vin[Fref[cf, 1]] - Vin[Fref[cf, 0]], Vin[Fref[cf, 2]] - Vin[Fref[cf, 0]])
         dots = np.sum(nin * normals, axis=1)
-        return nin, dots, int(np.sum(dots < 0))
+        return nin, dots, int(np.sum(dots < 0)), int(np.sum(dots > 0))
 
-    nin, dots, neg = flips_against(Fo)
-    raw_neg = neg if Fo is Fin or int(inp["input_reoriented"]) == 0 else flips_against(Fin)[2]
-    reversed_out = neg > len(faces) - neg
-    out["flipped"] = {"faces_vs_input": min(neg, len(faces) - neg), "output_reversed": bool(reversed_out),
-                      "faces_vs_raw_input": min(raw_neg, len(faces) - raw_neg),
+    # A face with a zero normal (dot 0) faces neither way: flipped in neither orientation of the output.
+    nin, dots, neg, pos = flips_against(Fo)
+    raw_neg, raw_pos = (neg, pos) if Fo is Fin or int(inp["input_reoriented"]) == 0 else flips_against(Fin)[2:]
+    reversed_out = neg > pos
+    out["flipped"] = {"faces_vs_input": min(neg, pos), "output_reversed": bool(reversed_out),
+                      "faces_vs_raw_input": min(raw_neg, raw_pos),
                       "input_reoriented_triangles": int(inp["input_reoriented"]),
                       "input_nonorientable_pieces": int(inp["input_nonorientable_pieces"])}
     # Flips over folded input (TARGETS V3, 2026-10-23): a flipped face within 1.5 output edges of a folded
@@ -817,7 +963,7 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
     # sculptor's fold, not ours; on the real sculpts 96-100 % of the defects sat there. Counted apart so
     # V3 gates only the rest. Clusters are cut at the 1.5-edge balls, so a turned edge outside them
     # is missed (counted off-fold, the safe side).
-    flip_idx = np.flatnonzero(dots >= 0 if reversed_out else dots < 0)  # sums to faces_vs_input
+    flip_idx = np.flatnonzero(dots > 0 if reversed_out else dots < 0)  # sums to faces_vs_input
     on_fold = np.zeros(len(flip_idx), bool)
     if len(flip_idx):
         Cin = Vin[Fo].mean(1)
