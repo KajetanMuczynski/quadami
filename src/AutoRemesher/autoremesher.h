@@ -440,6 +440,8 @@ public:
         // (reclassifyFeatureEdges).
         size_t carried = 0;
         size_t classified = 0;
+        // Detected edges of T dropped where they meet a guide (dropCreasesAtGuides).
+        size_t droppedAtGuides = 0;
     };
 
     struct DecimationStats {

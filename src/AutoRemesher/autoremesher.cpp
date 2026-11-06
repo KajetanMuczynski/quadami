@@ -780,8 +780,8 @@ bool AutoRemesher::decimateIfTooDense(std::vector<Vector3>& vertices,
     (void)resultError;
 #endif
 
-    featureEdges = remapFeatureEdges(featureEdges, outputIndexOfInput,
-        decimatedVertices, decimatedTriangles, sharpEdgeDegrees, droppedFeatureEdges);
+    featureEdges = dropCreasesAtGuides(remapFeatureEdges(featureEdges, outputIndexOfInput,
+        decimatedVertices, decimatedTriangles, sharpEdgeDegrees, droppedFeatureEdges), decimatedVertices);
     vertices = std::move(decimatedVertices);
     triangles = std::move(decimatedTriangles);
     return true;
@@ -963,9 +963,12 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     triangles = isotropicRemesher.remeshedTriangles();
     featureEdges = reclassifyFeatureEdges(isotropicRemesher.featureEdges(), vertices, triangles,
         sharpEdgeDegrees, nullptr != sharpEdgeStats ? &sharpEdgeStats->classified : nullptr);
+    size_t creasesDroppedAtGuides = 0;
+    featureEdges = dropCreasesAtGuides(featureEdges, vertices, &creasesDroppedAtGuides);
     if (nullptr != sharpEdgeStats) {
         sharpEdgeStats->carried = isotropicRemesher.featureEdges().size();
         sharpEdgeStats->flipped = isotropicRemesher.clearedFeatureEdges();
+        sharpEdgeStats->droppedAtGuides = creasesDroppedAtGuides;
     }
 #if AUTO_REMESHER_DEBUG
     std::cerr << "Island[" << islandIndex << "]: Uniformly remesh done, vertex count: " << vertices.size() << " triangle count: " << triangles.size() << std::endl;
@@ -1318,7 +1321,11 @@ bool AutoRemesher::remeshIslands()
             set.flags.push_back(FeatureEdgeSet::Hard | FeatureEdgeSet::Guide);
         }
         set.normalize();
-        return set;
+        // Each stage that finds creases drops those at the guides: the
+        // input's, the decimated mesh's (decimateIfTooDense) and T's.  A
+        // crease vertex is fixed in the remesh, so a crossing left in the
+        // input also keeps the guide from straightening there.
+        return context.guideEdges.empty() ? set : dropCreasesAtGuides(set, context.vertices);
     };
 
     if (nullptr != m_progressHandler)
@@ -1474,6 +1481,7 @@ bool AutoRemesher::remeshIslands()
         run.features.set("set_flipped", (double)sharpEdgeStats.flipped);
         run.features.set("set_t_carried", (double)sharpEdgeStats.carried);
         run.features.set("set_t_classified", (double)sharpEdgeStats.classified);
+        run.features.set("set_t_dropped_at_guides", (double)sharpEdgeStats.droppedAtGuides);
         run.features.set("set_t_edges", (double)run.isotropicFeatureEdges.size());
         run.features.set("set_t_length_rel_h", featureEdgeLength(run.isotropicFeatureEdges, ctx.vertices) / h);
         ctx.isotropicMarkedEdgeCount = (size_t)std::count_if(run.isotropicFeatureEdges.flags.begin(),

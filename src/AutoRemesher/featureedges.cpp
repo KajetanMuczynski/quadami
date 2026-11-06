@@ -193,6 +193,57 @@ FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
     return result;
 }
 
+FeatureEdgeSet dropCreasesAtGuides(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices,
+    size_t* dropped)
+{
+    if (nullptr != dropped)
+        *dropped = 0;
+    // The guide edges at each guide vertex, as unit directions away from it.
+    std::unordered_map<size_t, std::vector<Vector3>> guideDirections;
+    for (size_t i = 0; i < set.edges.size(); ++i) {
+        if (0 == (set.flags[i] & FeatureEdgeSet::Guide))
+            continue;
+        const size_t a = set.edges[i].first, b = set.edges[i].second;
+        const Vector3 ab = vertices[b] - vertices[a];
+        if (!(ab.length() > 0.0))
+            continue;
+        guideDirections[a].push_back(ab.normalized());
+        guideDirections[b].push_back(-ab.normalized());
+    }
+    if (guideDirections.empty())
+        return set;
+    const double maximumCosine = std::sin(kGuideCrossingToleranceDegrees * M_PI / 180.0);
+    // A crease edge from a guide vertex is kept when the guide goes straight
+    // through it (two edges) and the crease is near its normal plane.
+    const auto keptAt = [&](size_t vertex, size_t other) {
+        const auto found = guideDirections.find(vertex);
+        if (found == guideDirections.end())
+            return true;
+        if (2 != found->second.size())
+            return false;
+        const Vector3 tangent = found->second[0] - found->second[1];
+        const Vector3 crease = vertices[other] - vertices[vertex];
+        if (!(tangent.length() > 0.0) || !(crease.length() > 0.0))
+            return false;
+        return std::fabs(Vector3::dotProduct(tangent.normalized(), crease.normalized())) <= maximumCosine;
+    };
+    FeatureEdgeSet result;
+    result.edges.reserve(set.edges.size());
+    result.flags.reserve(set.flags.size());
+    for (size_t i = 0; i < set.edges.size(); ++i) {
+        const auto& edge = set.edges[i];
+        if (0 == (set.flags[i] & FeatureEdgeSet::Hard)
+            && (!keptAt(edge.first, edge.second) || !keptAt(edge.second, edge.first))) {
+            if (nullptr != dropped)
+                ++*dropped;
+            continue;
+        }
+        result.edges.push_back(edge);
+        result.flags.push_back(set.flags[i]);
+    }
+    return result;
+}
+
 std::vector<char> featureCornerFlags(const SurfaceMesh& mesh, const FeatureEdgeSet& set,
     unsigned char requiredFlags)
 {

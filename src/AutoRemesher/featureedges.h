@@ -91,6 +91,17 @@ FeatureEdgeSet reclassifyFeatureEdges(const FeatureEdgeSet& carried,
     const std::vector<std::vector<size_t>>& triangles,
     double sharpEdgeDegrees, size_t* classified = nullptr);
 
+// The set without its detected (not hard) edges that touch a guide vertex
+// (FeatureEdgeSet::Guide), except those crossing a guide that passes
+// straight through the vertex within kGuideCrossingToleranceDegrees of a
+// right angle.  A detected crease meeting a guide at another angle rounds to
+// a quarter turn there, which puts a cone on the guide and breaks its edge
+// loop (TODO 5.7: sculpt noise creases, head with guides).  `dropped` counts
+// the removed edges.
+constexpr double kGuideCrossingToleranceDegrees = 20.0;
+FeatureEdgeSet dropCreasesAtGuides(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices,
+    size_t* dropped = nullptr);
+
 // Carries a set through a decimation that kept a subset of the vertices
 // (`outputIndexOfInput`, SIZE_MAX for a removed vertex) and rebuilt the
 // faces: the set's edges that are still edges (the decimation moves no
