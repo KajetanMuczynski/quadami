@@ -24,6 +24,7 @@
 #define AUTO_REMESHER_CONSTRAINED_LEAST_SQUARES_H
 
 #include <AutoRemesher/Diagnostics>
+#include <AutoRemesher/Vector3>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -54,6 +55,13 @@ public:
     // at consistent values; solve() fails otherwise.
     void fixVariables(const std::vector<std::pair<size_t, double>>& values);
 
+    // Where the unknowns sit: variable i at locations[i / variablesPerLocation]
+    // (a mesh face's centroid, for unknowns per face). Optional. A large
+    // system with locations is ordered by nested dissection, which fills
+    // its factor less than the default minimum degree ordering; the solution
+    // is the same up to roundoff.
+    void setVariableLocations(const std::vector<Vector3>& locations, size_t variablesPerLocation);
+
     bool solve(std::vector<double>* solution);
 
     // What the last solve() did and cost, for the diagnostics report.  Only
@@ -79,6 +87,10 @@ public:
         // The constraints did not reduce to substitutions, so the dense
         // Lagrange (KKT) system was solved with SparseLU instead.
         bool lagrangeFallback = false;
+        // The factorisation used the nested dissection ordering, which took
+        // orderingSeconds of factorizeSeconds.
+        bool nestedDissection = false;
+        double orderingSeconds = 0.0;
         bool succeeded = false;
         size_t nonFiniteValues = 0;
         double buildSeconds = 0.0;
@@ -112,6 +124,7 @@ private:
     bool buildSubstitutions();
     bool buildReducedSystem();
     bool mapFixedVariables();
+    void mapLocations();
     bool factorizeReducedSystem();
     bool solveReduced(std::vector<double>* solution);
     bool solveWithLagrangeMultipliers(std::vector<double>* solution);
@@ -122,6 +135,7 @@ private:
     }
 
     size_t m_variableCount;
+    size_t m_variablesPerLocation = 0;
     // Energy rows in one flat array, not a vector per row (a few hundred
     // thousand to millions of short rows): row i's coefficients are
     // m_energyCoefficients[m_energyStart[i], m_energyStart[i + 1]).

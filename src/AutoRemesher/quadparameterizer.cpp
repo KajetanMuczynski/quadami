@@ -416,6 +416,16 @@ namespace {
         };
 
         ConstrainedLeastSquares system(3 * faceCount);
+        {
+            // Three unknowns per face; large systems are ordered by where
+            // the faces are (nested dissection).
+            std::vector<Vector3> centroids(faceCount);
+            for (size_t f = 0; f < faceCount; ++f)
+                centroids[f] = (mesh.position(mesh.cornerVertex(3 * f)) + mesh.position(mesh.cornerVertex(3 * f + 1))
+                                   + mesh.position(mesh.cornerVertex(3 * f + 2)))
+                    / 3.0;
+            system.setVariableLocations(centroids, 3);
+        }
         size_t edgeCount = 0;
         for (size_t c = 0; c < mesh.cornerCount(); ++c) {
             const size_t oc = mesh.oppositeCorner(c);

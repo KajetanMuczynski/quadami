@@ -70,6 +70,7 @@ add_library(autoremesher_core STATIC
     src/AutoRemesher/mapcheck.cpp
     src/AutoRemesher/meshseparator.cpp
     src/AutoRemesher/mixedintegerleastsquares.cpp
+    src/AutoRemesher/nesteddissection.cpp
     src/AutoRemesher/parameterizer.cpp
     src/AutoRemesher/positionkey.cpp
     src/AutoRemesher/predicates.cpp
