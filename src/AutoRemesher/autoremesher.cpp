@@ -1843,6 +1843,11 @@ bool AutoRemesher::remeshIslands()
     // even at the minimum size above. Such an island is run again at a
     // slightly higher count, a few times; it is small, so this costs little.
     auto t_retryStart = std::chrono::high_resolution_clock::now();
+    // The check below measures at the quad width the island was planned
+    // with, not at the finer one a retry grew it to.
+    std::vector<double> plannedQuadCounts(islandContexes.size());
+    for (size_t i = 0; i < islandContexes.size(); ++i)
+        plannedQuadCounts[i] = islandContexes[i].targetQuadCount;
     std::vector<size_t> islandsToRetry;
     for (size_t i = 0; i < islandContexes.size(); ++i) {
         const auto& ctx = islandContexes[i];
@@ -1914,7 +1919,7 @@ bool AutoRemesher::remeshIslands()
         if (run.remeshedQuads.empty())
             return 1.0;
         *broken = false;
-        const double quadWidth = std::sqrt(ctx.area / ctx.targetQuadCount);
+        const double quadWidth = std::sqrt(ctx.area / std::min(ctx.targetQuadCount, plannedQuadCounts[i]));
         std::vector<std::vector<size_t>> outputTriangles;
         outputTriangles.reserve(2 * run.remeshedQuads.size());
         size_t quads = 0;
@@ -1977,11 +1982,16 @@ bool AutoRemesher::remeshIslands()
                 // strands thinner than a quad), so every radius is tried
                 // except one whose envelope has the topology of the last one
                 // tried.  On an open input an envelope that closes nothing
-                // is a slab over the sheet (twice its Euler characteristic)
-                // and breaks as the input did, so only radii that close more
-                // than the last one tried are run.  Closing grows with the
-                // radius: if the largest closes nothing on an open input, no
-                // radius is tried.  An island the bound enveloped is tried
+                // is a slab over the sheet (twice its Euler characteristic),
+                // a net of tunnels thinner than a quad that breaks as the
+                // input did and costs many times the input's run (an open
+                // tube with 128 holes: 45-60 s against 1-3 s,
+                // research/handle-heavy-check-disprover-4-2026-11-07.md).
+                // So only radii whose envelope closes more than half the
+                // slab's handles (Euler characteristic above the input's),
+                // and more than the last one tried, are run.  Closing grows
+                // with the radius: if the largest does not, no radius is
+                // tried.  An island the bound enveloped is tried
                 // other ways only if its result is broken: the bound already
                 // says its own quads cannot hold its handles.
                 if (first > maximumUnfaithfulShare && (!islandContexes[i].enveloped || broken)) {
@@ -1997,7 +2007,7 @@ bool AutoRemesher::remeshIslands()
                         radii.push_back(radius);
                     EnvelopeResult largest;
                     const bool haveLargest = envelopeAt(base, radii.back(), &largest);
-                    long long lastRunEuler = closedInput ? std::numeric_limits<long long>::min() : 2 * original.eulerCharacteristic;
+                    long long lastRunEuler = closedInput ? std::numeric_limits<long long>::min() : original.eulerCharacteristic;
                     double best = first;
                     // Runs one way (radius 0: the island itself) and keeps
                     // it if it is more faithful by envelopeShareMargin.
