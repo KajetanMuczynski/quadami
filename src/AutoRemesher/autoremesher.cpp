@@ -1982,22 +1982,21 @@ bool AutoRemesher::remeshIslands()
                 // strands thinner than a quad), so every radius is tried
                 // except one whose envelope has the topology of the last one
                 // tried.  On an open input an envelope that closes nothing
-                // is a slab over the sheet (twice its Euler characteristic),
-                // a net of tunnels thinner than a quad that breaks as the
-                // input did and costs many times the input's run (an open
-                // tube with 128 holes: 45-60 s against 1-3 s,
-                // research/handle-heavy-check-disprover-4-2026-11-07.md).
-                // So only radii whose envelope closes more than half of the
-                // tunnels a slab adds (Euler characteristic above 1.5 times
-                // the input's), and more than the last one tried, are run.
-                // An island that is a solid with a few open edges has an
-                // envelope near its own Euler characteristic and is tried
-                // (a sword blade's part: folded faces 47-52 -> 3-7).  Closing
-                // grows with the radius: if the largest does not close
-                // enough, no radius is tried.  An island the bound enveloped is tried
-                // other ways only if its result is broken: the bound already
-                // says its own quads cannot hold its handles.
-                if (first > maximumUnfaithfulShare && (!islandContexes[i].enveloped || broken)) {
+                // is a slab over the sheet (twice its Euler characteristic)
+                // and breaks as the input did, so only radii that close more
+                // than the last one tried are run.  Closing grows with the
+                // radius: if the largest closes nothing on an open input, no
+                // radius is tried.  An open input whose result is whole and
+                // under twice maximumUnfaithfulShare is not tried at all: a
+                // slab's run there can cost 20-30 times the input's for a
+                // few percent at most (an open tube with 128 holes: 45-60 s
+                // against 1-3 s; research/handle-heavy-check-disprover-4-2026-11-07.md).
+                // An island the bound enveloped is tried other ways only if
+                // its result is broken: the bound already says its own quads
+                // cannot hold its handles.
+                const bool openInput = 0 != original.boundaryEdges || 0 != original.nonManifoldEdges;
+                if (first > maximumUnfaithfulShare && (!islandContexes[i].enveloped || broken)
+                    && !(openInput && !broken && first < 2.0 * maximumUnfaithfulShare)) {
                     const bool closedInput = 0 == original.boundaryEdges && 0 == original.nonManifoldEdges;
                     const bool boundEnveloped = islandContexes[i].enveloped;
                     const double boundRadius = boundEnveloped ? islandContexes[i].envelopeRadius : 0.0;
@@ -2010,7 +2009,7 @@ bool AutoRemesher::remeshIslands()
                         radii.push_back(radius);
                     EnvelopeResult largest;
                     const bool haveLargest = envelopeAt(base, radii.back(), &largest);
-                    long long lastRunEuler = closedInput ? std::numeric_limits<long long>::min() : (3 * original.eulerCharacteristic) / 2;
+                    long long lastRunEuler = closedInput ? std::numeric_limits<long long>::min() : 2 * original.eulerCharacteristic;
                     double best = first;
                     // Runs one way (radius 0: the island itself) and keeps
                     // it if it is more faithful by envelopeShareMargin.
