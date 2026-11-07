@@ -32,8 +32,10 @@ namespace AutoRemesher {
 // vertex cover and refined), order both halves recursively and the separator
 // last. Small parts and separators are ordered with minimum degree.
 //
-// On the solver's large surface systems this fills the Cholesky factor
-// 10-30 % less than minimum degree alone; it needs no outside code.
+// On the solver's large curl systems this fills the Cholesky factor 10-30 %
+// less than minimum degree alone, but not on every surface system and not
+// on degenerate positions (all on a line, say), so a caller compares both
+// with estimateFactor below. Non-finite positions give no order.
 //
 // columnStart/rows: compressed columns of the matrix pattern, both triangles
 // (the diagonal may be present). groupOfColumn: the group of each column,
@@ -43,6 +45,16 @@ namespace AutoRemesher {
 // number of threads.
 std::vector<int> nestedDissectionOrder(int columns, const int* columnStart, const int* rows,
     const std::vector<int>& groupOfColumn, const std::vector<Vector3>& groupPositions);
+
+// What factorising a matrix in `order` (as above) would cost, from its
+// pattern alone: the non-zeros of L below the diagonal and the
+// multiply-adds of the factorisation (the sum of each column's count
+// squared). Takes about as long as walking L once.
+struct FactorEstimate {
+    double nonZeros = 0.0;
+    double work = 0.0;
+};
+FactorEstimate estimateFactor(int columns, const int* columnStart, const int* rows, const std::vector<int>& order);
 
 }
 

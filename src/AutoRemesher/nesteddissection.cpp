@@ -648,6 +648,10 @@ std::vector<int> nestedDissectionOrder(int columns, const int* columnStart, cons
     for (int g : groupOfColumn)
         if (g < 0 || g >= inputGroups)
             return std::vector<int>();
+    // A non-finite position would leave the cut keys unordered.
+    for (const Vector3& position : groupPositions)
+        if (!std::isfinite(position[0]) || !std::isfinite(position[1]) || !std::isfinite(position[2]))
+            return std::vector<int>();
     for (int p = 0; p < columnStart[columns]; ++p)
         if (rows[p] < 0 || rows[p] >= columns)
             return std::vector<int>();
@@ -729,6 +733,52 @@ std::vector<int> nestedDissectionOrder(int columns, const int* columnStart, cons
     system.order = &order;
     dissect(system, root, 0, 0);
     return order;
+}
+
+FactorEstimate estimateFactor(int columns, const int* columnStart, const int* rows, const std::vector<int>& order)
+{
+    FactorEstimate estimate;
+    if ((int)order.size() != columns)
+        return estimate;
+    std::vector<int> position(columns);
+    for (int k = 0; k < columns; ++k)
+        position[order[k]] = k;
+    // Row k of the permuted matrix's strict lower triangle.
+    std::vector<int> rowStart(columns + 1, 0);
+    for (int c = 0; c < columns; ++c)
+        for (int p = columnStart[c]; p < columnStart[c + 1]; ++p)
+            if (position[rows[p]] < position[c])
+                ++rowStart[position[c] + 1];
+    for (int k = 0; k < columns; ++k)
+        rowStart[k + 1] += rowStart[k];
+    std::vector<int> rowEntries(rowStart[columns]);
+    {
+        std::vector<int> fill(rowStart.begin(), rowStart.end() - 1);
+        for (int c = 0; c < columns; ++c)
+            for (int p = columnStart[c]; p < columnStart[c + 1]; ++p)
+                if (position[rows[p]] < position[c])
+                    rowEntries[fill[position[c]]++] = position[rows[p]];
+    }
+    // Row k of L is the union of the elimination-tree paths from the
+    // entries of row k up to k (Liu); each step is one entry of L.
+    std::vector<int> parent(columns, -1), visited(columns, -1);
+    std::vector<double> columnCount(columns, 0.0);
+    for (int k = 0; k < columns; ++k) {
+        visited[k] = k;
+        for (int p = rowStart[k]; p < rowStart[k + 1]; ++p) {
+            for (int i = rowEntries[p]; visited[i] != k; i = parent[i]) {
+                if (parent[i] < 0)
+                    parent[i] = k;
+                columnCount[i] += 1.0;
+                visited[i] = k;
+            }
+        }
+    }
+    for (double count : columnCount) {
+        estimate.nonZeros += count;
+        estimate.work += count * count;
+    }
+    return estimate;
 }
 
 }

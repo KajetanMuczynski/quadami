@@ -180,6 +180,9 @@ void testFillAndDeterminism()
     std::printf("surface: nnz(L) nested dissection %ld, minimum degree %ld (%.3f), residual %.1e\n", dissected,
         minimumDegree, (double)dissected / minimumDegree, residual);
     check(dissected > 0 && dissected < minimumDegree, "surface: less fill than minimum degree");
+    const AutoRemesher::FactorEstimate estimate
+        = AutoRemesher::estimateFactor((int)matrix.cols(), matrix.outerIndexPtr(), matrix.innerIndexPtr(), first);
+    check((long)estimate.nonZeros == dissected, "surface: the estimate counts the factor's non-zeros exactly");
     check(residual < 1e-10, "surface: the factor solves the system");
 }
 
@@ -212,14 +215,17 @@ void testInvalidInput()
               groups, surface.centroids)
               .empty(),
         "invalid group: no order");
+    std::vector<Vector3> positions = surface.centroids;
+    positions[3] = Vector3(0.0, std::nan(""), 0.0);
+    check(order(matrix, positions).empty(), "non-finite position: no order");
 }
 
 // The solver orders a large system with locations by nested dissection and
 // gets the same solution as without them.
 void testSolver()
 {
-    // 2 x 1000 x 90 faces = 540k unknowns, above the solver's threshold.
-    const Surface surface = makeSurface(1000, 90, 0);
+    // 2 x 2000 x 90 faces = 1.08M unknowns, above the solver's threshold.
+    const Surface surface = makeSurface(2000, 90, 0);
     const size_t faces = surface.centroids.size();
     std::vector<double> solutions[2];
     for (int located = 0; located < 2; ++located) {
@@ -237,8 +243,11 @@ void testSolver()
         }
         system.addConstraint({ { 0, 1.0 }, { 4, -1.0 } });
         check(system.solve(&solutions[located]), "solver: solves");
-        check(system.lastSolveStats().nestedDissection == (1 == located),
-            "solver: nested dissection exactly when locations are given");
+        // With locations the solver compares both orderings (either may win
+        // on this narrow strip); without them it does not try.
+        check((system.lastSolveStats().orderingSeconds > 0.0) == (1 == located),
+            "solver: orderings compared exactly when locations are given");
+        check(located || !system.lastSolveStats().nestedDissection, "solver: no nested dissection without locations");
     }
     double difference = 0.0, size = 0.0;
     if (solutions[0].size() == solutions[1].size())

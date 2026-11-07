@@ -59,12 +59,11 @@ namespace {
     const size_t maximumNormalNonZeros = (size_t)std::numeric_limits<int>::max() / 2;
 
     // Systems with at least this many unknowns whose unknowns have
-    // locations (setVariableLocations) are ordered by nested dissection
-    // instead of Eigen's minimum degree. Below it minimum degree is about as
-    // good and cheaper to compute (METIS, the reference, was 1.2 s slower on
-    // the head at 10k quads); the curl system of a 30-50k quad target is
-    // about this size.
-    const Eigen::Index nestedDissectionMinimumUnknowns = 500000;
+    // locations (setVariableLocations) are also ordered by nested
+    // dissection, and the solver factorises in whichever of that and Eigen's
+    // minimum degree predicts less work. Below it the ordering's own cost
+    // was never won back (curl systems of 44k-567k unknowns, 2026-11-07).
+    const Eigen::Index nestedDissectionMinimumUnknowns = 1000000;
 
     typedef std::chrono::steady_clock Clock;
 
@@ -108,13 +107,15 @@ struct ConstrainedLeastSquares::Cache {
     std::vector<size_t> fixedColumns;
     Eigen::SparseMatrix<double> fixedMatrix;
     Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
-    // Large systems with located unknowns: the matrix is permuted by nested
-    // dissection here and factorised in that order. Upper with the natural
-    // ordering lets Eigen read the permuted matrix without another copy.
-    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>, Eigen::Upper, Eigen::NaturalOrdering<int>> dissectedSolver;
-    Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic, int> dissection;
-    Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic, int> dissectionInverse;
-    bool useDissection = false;
+    // Large systems with located unknowns: the matrix is permuted here, by
+    // the cheaper of nested dissection and minimum degree, and factorised in
+    // that order. Upper with the natural ordering lets Eigen read the
+    // permuted matrix without another copy.
+    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>, Eigen::Upper, Eigen::NaturalOrdering<int>> permutedSolver;
+    Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic, int> permutation;
+    Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic, int> permutationInverse;
+    bool usePermutation = false;
+    bool nestedDissection = false;
     double orderingSeconds = 0.0;
     // Location of each column of the reduced system, set before the pattern
     // is analysed; empty when the caller gave none.
@@ -175,16 +176,16 @@ struct ConstrainedLeastSquares::Cache {
 #endif
         if (!patternAnalyzed)
             chooseOrdering(matrix);
-        if (useDissection) {
+        if (usePermutation) {
             Eigen::SparseMatrix<double> permuted(matrix.rows(), matrix.cols());
-            permuted.selfadjointView<Eigen::Upper>() = matrix.selfadjointView<Eigen::Lower>().twistedBy(dissection);
+            permuted.selfadjointView<Eigen::Upper>() = matrix.selfadjointView<Eigen::Lower>().twistedBy(permutation);
             if (!patternAnalyzed)
-                dissectedSolver.analyzePattern(permuted);
-            dissectedSolver.factorize(permuted);
-            if (dissectedSolver.info() != Eigen::Success)
+                permutedSolver.analyzePattern(permuted);
+            permutedSolver.factorize(permuted);
+            if (permutedSolver.info() != Eigen::Success)
                 return false;
             patternAnalyzed = true;
-            factorNonZeros = (size_t)dissectedSolver.matrixL().nestedExpression().nonZeros();
+            factorNonZeros = (size_t)permutedSolver.matrixL().nestedExpression().nonZeros();
             return true;
         }
         if (!patternAnalyzed)
@@ -199,22 +200,42 @@ struct ConstrainedLeastSquares::Cache {
 
     void chooseOrdering(const Eigen::SparseMatrix<double>& matrix)
     {
-        useDissection = false;
+        usePermutation = false;
+        nestedDissection = false;
         orderingSeconds = 0.0;
         if (matrix.cols() < nestedDissectionMinimumUnknowns || !matrix.isCompressed()
             || (Eigen::Index)locationOfColumn.size() != matrix.cols())
             return;
         const Clock::time_point start = Clock::now();
+        const int columns = (int)matrix.cols();
         // order[k] is the column eliminated k-th: Eigen's inverse permutation.
-        const std::vector<int> order = nestedDissectionOrder((int)matrix.cols(), matrix.outerIndexPtr(),
+        const std::vector<int> dissected = nestedDissectionOrder(columns, matrix.outerIndexPtr(),
             matrix.innerIndexPtr(), locationOfColumn, locations);
-        orderingSeconds = secondsSince(start);
-        if (order.size() != (size_t)matrix.cols())
+        if (dissected.size() != (size_t)columns) {
+            orderingSeconds = secondsSince(start);
             return;
-        dissectionInverse.resize(matrix.cols());
-        std::copy(order.begin(), order.end(), dissectionInverse.indices().data());
-        dissection = dissectionInverse.inverse();
-        useDissection = true;
+        }
+        // Minimum degree on the same pattern SimplicialLDLT would order.
+        std::vector<int> minimumDegree(columns);
+        {
+            Eigen::SparseMatrix<double> symmetric;
+            symmetric = matrix.selfadjointView<Eigen::Lower>();
+            Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic, int> order;
+            Eigen::AMDOrdering<int> ordering;
+            ordering(symmetric, order);
+            std::copy(order.indices().data(), order.indices().data() + columns, minimumDegree.begin());
+        }
+        const FactorEstimate dissectedCost
+            = estimateFactor(columns, matrix.outerIndexPtr(), matrix.innerIndexPtr(), dissected);
+        const FactorEstimate minimumDegreeCost
+            = estimateFactor(columns, matrix.outerIndexPtr(), matrix.innerIndexPtr(), minimumDegree);
+        nestedDissection = dissectedCost.work < minimumDegreeCost.work;
+        const std::vector<int>& chosen = nestedDissection ? dissected : minimumDegree;
+        permutationInverse.resize(columns);
+        std::copy(chosen.begin(), chosen.end(), permutationInverse.indices().data());
+        permutation = permutationInverse.inverse();
+        usePermutation = true;
+        orderingSeconds = secondsSince(start);
     }
 
     Eigen::VectorXd solve(const Eigen::VectorXd& rightHandSide, bool* succeeded)
@@ -227,11 +248,11 @@ struct ConstrainedLeastSquares::Cache {
             return solution;
         }
 #endif
-        if (useDissection) {
-            const Eigen::VectorXd permutedRightHandSide = dissection * rightHandSide;
-            const Eigen::VectorXd solution = dissectionInverse * dissectedSolver.solve(permutedRightHandSide);
+        if (usePermutation) {
+            const Eigen::VectorXd permutedRightHandSide = permutation * rightHandSide;
+            const Eigen::VectorXd solution = permutationInverse * permutedSolver.solve(permutedRightHandSide);
             nonFiniteValues = countNonFinite(solution);
-            *succeeded = dissectedSolver.info() == Eigen::Success && 0 == nonFiniteValues;
+            *succeeded = permutedSolver.info() == Eigen::Success && 0 == nonFiniteValues;
             return solution;
         }
         const Eigen::VectorXd solution = solver.solve(rightHandSide);
@@ -562,7 +583,7 @@ bool ConstrainedLeastSquares::factorizeReducedSystem()
     const bool factorized = cache.factorize(cache.systemMatrix());
     m_lastSolveStats.factorizeSeconds = secondsSince(factorizeStart);
     m_lastSolveStats.factorNonZeros = cache.factorNonZeros;
-    m_lastSolveStats.nestedDissection = cache.useDissection;
+    m_lastSolveStats.nestedDissection = cache.usePermutation && cache.nestedDissection;
     m_lastSolveStats.orderingSeconds = cache.orderingSeconds;
     cache.factorized = factorized;
     return factorized;

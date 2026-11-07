@@ -57,9 +57,11 @@ public:
 
     // Where the unknowns sit: variable i at locations[i / variablesPerLocation]
     // (a mesh face's centroid, for unknowns per face). Optional. A large
-    // system with locations is ordered by nested dissection, which fills
-    // its factor less than the default minimum degree ordering; the solution
-    // is the same up to roundoff.
+    // system with locations is also ordered by nested dissection, and
+    // factorised in that order when it predicts less work than the default
+    // minimum degree; the solution is the same up to roundoff. The curl
+    // system uses it; the frame field does not, since its one factorisation
+    // never won back the ordering time (2026-11-07).
     void setVariableLocations(const std::vector<Vector3>& locations, size_t variablesPerLocation);
 
     bool solve(std::vector<double>* solution);
@@ -87,8 +89,9 @@ public:
         // The constraints did not reduce to substitutions, so the dense
         // Lagrange (KKT) system was solved with SparseLU instead.
         bool lagrangeFallback = false;
-        // The factorisation used the nested dissection ordering, which took
-        // orderingSeconds of factorizeSeconds.
+        // The factorisation used the nested dissection ordering. Choosing
+        // between it and minimum degree took orderingSeconds of
+        // factorizeSeconds (0 when the system is too small to try).
         bool nestedDissection = false;
         double orderingSeconds = 0.0;
         bool succeeded = false;
