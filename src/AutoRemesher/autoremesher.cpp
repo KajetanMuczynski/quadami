@@ -1987,11 +1987,14 @@ bool AutoRemesher::remeshIslands()
                 // input did and costs many times the input's run (an open
                 // tube with 128 holes: 45-60 s against 1-3 s,
                 // research/handle-heavy-check-disprover-4-2026-11-07.md).
-                // So only radii whose envelope closes more than half the
-                // slab's handles (Euler characteristic above the input's),
-                // and more than the last one tried, are run.  Closing grows
-                // with the radius: if the largest does not, no radius is
-                // tried.  An island the bound enveloped is tried
+                // So only radii whose envelope closes more than half of the
+                // tunnels a slab adds (Euler characteristic above 1.5 times
+                // the input's), and more than the last one tried, are run.
+                // An island that is a solid with a few open edges has an
+                // envelope near its own Euler characteristic and is tried
+                // (a sword blade's part: folded faces 47-52 -> 3-7).  Closing
+                // grows with the radius: if the largest does not close
+                // enough, no radius is tried.  An island the bound enveloped is tried
                 // other ways only if its result is broken: the bound already
                 // says its own quads cannot hold its handles.
                 if (first > maximumUnfaithfulShare && (!islandContexes[i].enveloped || broken)) {
@@ -2007,7 +2010,7 @@ bool AutoRemesher::remeshIslands()
                         radii.push_back(radius);
                     EnvelopeResult largest;
                     const bool haveLargest = envelopeAt(base, radii.back(), &largest);
-                    long long lastRunEuler = closedInput ? std::numeric_limits<long long>::min() : original.eulerCharacteristic;
+                    long long lastRunEuler = closedInput ? std::numeric_limits<long long>::min() : (3 * original.eulerCharacteristic) / 2;
                     double best = first;
                     // Runs one way (radius 0: the island itself) and keeps
                     // it if it is more faithful by envelopeShareMargin.
