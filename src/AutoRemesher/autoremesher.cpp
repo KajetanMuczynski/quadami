@@ -162,10 +162,12 @@ namespace {
     // So every other island with chi < 0 is checked after remeshing: the
     // share of its input area farther than one quad from the output, plus
     // the share of the output more than half a quad off the input.  If that
-    // passes maximumUnfaithfulShare, it is remeshed on its envelope, and the
-    // envelope's result replaces the first if its share is lower by
-    // envelopeShareMargin (a tie keeps the holes); larger closings follow
-    // while the kept result is still above the share (see the check).  A
+    // passes maximumUnfaithfulShare, it is remeshed on its envelope at each
+    // closing radius in turn, and a result replaces the kept one if its
+    // share is lower by envelopeShareMargin (a tie keeps the holes), until
+    // the kept one is below the share (the check says which radii run).  An
+    // island the bound enveloped is checked too, and tried without the
+    // envelope and at the other radii if its result is broken.  A
     // torn result (several pieces, non-manifold edges, a boundary on a
     // closed input), one with more than maximumUnfaithfulQuadRatio times
     // its quads (spikes) or one with fewer than minimumFaithfulQuadRatio
@@ -1979,8 +1981,10 @@ bool AutoRemesher::remeshIslands()
                 // and breaks as the input did, so only radii that close more
                 // than the last one tried are run.  Closing grows with the
                 // radius: if the largest closes nothing on an open input, no
-                // radius is tried.
-                if (first > maximumUnfaithfulShare) {
+                // radius is tried.  An island the bound enveloped is tried
+                // other ways only if its result is broken: the bound already
+                // says its own quads cannot hold its handles.
+                if (first > maximumUnfaithfulShare && (!islandContexes[i].enveloped || broken)) {
                     const bool closedInput = 0 == original.boundaryEdges && 0 == original.nonManifoldEdges;
                     const bool boundEnveloped = islandContexes[i].enveloped;
                     const double boundRadius = boundEnveloped ? islandContexes[i].envelopeRadius : 0.0;
