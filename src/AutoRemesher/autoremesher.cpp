@@ -1914,8 +1914,9 @@ bool AutoRemesher::remeshIslands()
     // boundary on a closed input) or one with more than
     // maximumUnfaithfulQuadRatio or fewer than minimumFaithfulQuadRatio times
     // its quads counts brokenUnfaithfulShare more, and an empty one counts 1.
-    const auto unfaithfulShare = [&](size_t i, const IslandContext& ctx, const IslandRun& run, bool* broken) {
+    const auto unfaithfulShare = [&](size_t i, const IslandContext& ctx, const IslandRun& run, bool* broken, double* lost) {
         *broken = true;
+        *lost = 1.0;
         if (run.remeshedQuads.empty())
             return 1.0;
         *broken = false;
@@ -1932,7 +1933,8 @@ bool AutoRemesher::remeshIslands()
             (size_t)(unfaithfulSamplesPerQuad * ctx.targetQuadCount));
         const SurfaceProjector output(&run.remeshedVertices, &outputTriangles);
         const SurfaceProjector input(&m_vertices, &trianglesIslands[i]);
-        double share = fartherAreaShare(m_vertices, trianglesIslands[i], output, quadWidth, 0.5 * quadWidth, maximumSamples)
+        *lost = fartherAreaShare(m_vertices, trianglesIslands[i], output, quadWidth, 0.5 * quadWidth, maximumSamples);
+        double share = *lost
             + fartherAreaShare(run.remeshedVertices, outputTriangles, input, 0.5 * quadWidth, 0.5 * quadWidth, maximumSamples);
         const SurfaceTopology topology = surfaceTopology(run.remeshedQuads, run.remeshedVertices.size());
         const bool closedInput = 0 == ctx.originalTopology.boundaryEdges && 0 == ctx.originalTopology.nonManifoldEdges;
@@ -1971,7 +1973,8 @@ bool AutoRemesher::remeshIslands()
                         continue;
                 }
                 bool broken = false;
-                const double first = unfaithfulShare(i, islandContexes[i], islandRuns[i], &broken);
+                double firstLost = 0.0;
+                const double first = unfaithfulShare(i, islandContexes[i], islandRuns[i], &broken, &firstLost);
                 islandContexes[i].firstUnfaithfulShare = first;
                 double lastEnvelopeShare = -1.0;
                 // Other ways to remesh the island are tried while the kept
@@ -1987,16 +1990,18 @@ bool AutoRemesher::remeshIslands()
                 // than the last one tried are run.  Closing grows with the
                 // radius: if the largest closes nothing on an open input, no
                 // radius is tried.  An open input whose result is whole and
-                // under twice maximumUnfaithfulShare is not tried at all: a
-                // slab's run there can cost 20-30 times the input's for a
-                // few percent at most (an open tube with 128 holes: 45-60 s
-                // against 1-3 s; research/handle-heavy-check-disprover-4-2026-11-07.md).
+                // loses at most maximumUnfaithfulShare of the input (its
+                // share is mostly output off the input) is not tried at all:
+                // a slab's run there can cost 20-30 times the input's and
+                // only moves output around (an open tube with 128 holes:
+                // 45-60 s against 1-3 s, 0.2-0.8 % lost either way;
+                // research/handle-heavy-check-disprover-4-2026-11-07.md).
                 // An island the bound enveloped is tried other ways only if
                 // its result is broken: the bound already says its own quads
                 // cannot hold its handles.
                 const bool openInput = 0 != original.boundaryEdges || 0 != original.nonManifoldEdges;
                 if (first > maximumUnfaithfulShare && (!islandContexes[i].enveloped || broken)
-                    && !(openInput && !broken && first < 2.0 * maximumUnfaithfulShare)) {
+                    && !(openInput && !broken && firstLost <= maximumUnfaithfulShare)) {
                     const bool closedInput = 0 == original.boundaryEdges && 0 == original.nonManifoldEdges;
                     const bool boundEnveloped = islandContexes[i].enveloped;
                     const double boundRadius = boundEnveloped ? islandContexes[i].envelopeRadius : 0.0;
@@ -2020,7 +2025,8 @@ bool AutoRemesher::remeshIslands()
                         parameterizeIsland(i, ctx, run);
                         ++envelopeCheckRuns;
                         bool runBroken = false;
-                        const double share = unfaithfulShare(i, ctx, run, &runBroken);
+                        double runLost = 0.0;
+                        const double share = unfaithfulShare(i, ctx, run, &runBroken, &runLost);
                         if (ctx.enveloped)
                             lastEnvelopeShare = share;
                         const bool replace = share + envelopeShareMargin < best;
