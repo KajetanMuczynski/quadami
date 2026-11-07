@@ -149,10 +149,11 @@ namespace {
     const double envelopeOffset = 0.25;
     const double envelopeCellSize = 0.25;
     const size_t maximumEnvelopeGridNodes = (size_t)1 << 22;
-    // On round strands (a net of rods) closing by one quad can leave necks
-    // thinner than a cell, and the envelope keeps most handles.  While it
-    // still has more than the bound allows, the closing radius grows by this
-    // factor, up to this many quad widths.
+    // On round strands (a net of rods, a lattice of bars) closing by one
+    // quad can leave necks thinner than a cell, and the envelope keeps most
+    // handles.  The closing radius grows by this factor, up to this many
+    // quad widths: for the bound until its envelope's handles fit the
+    // island's quads, for the check below while results stay unfaithful.
     const double envelopeClosingGrowth = 1.5;
     const double maximumEnvelopeClosingRadius = 2.25;
     // The bound is necessary, not sufficient: above it the map of a
@@ -161,26 +162,26 @@ namespace {
     // So every other island with chi < 0 is checked after remeshing: the
     // share of its input area farther than one quad from the output, plus
     // the share of the output more than half a quad off the input.  If that
-    // passes maximumUnfaithfulShare (maximumWholeUnfaithfulShare if the
-    // result is in one closed or bordered piece as its input), or the island has more than
-    // maximumUnfaithfulQuadRatio times its quads (spikes), it is remeshed on
-    // its envelope too, and the envelope's result replaces the first if its
-    // share is lower by envelopeShareMargin (a tie keeps the holes).  While
-    // the kept result is still above the share, the closing grows to the
-    // next radius and the island is run again (a lattice of bars keeps its
-    // handles at one quad and breaks the same way; research/handle-heavy-check-disprover-2026-11-06.md).
-    // The choice follows the results, so no target makes the output jump to
-    // a broken one when a larger closing would hold.  The share is measured
-    // for every island with chi < 0 except a closed one that came out closed
-    // with its own Euler characteristic, at most maximumUnfaithfulSamples
-    // triangles a side.
+    // passes maximumUnfaithfulShare, it is remeshed on its envelope, and the
+    // envelope's result replaces the first if its share is lower by
+    // envelopeShareMargin (a tie keeps the holes); larger closings follow
+    // while the kept result is still above the share (see the check).  A
+    // torn result (several pieces, non-manifold edges, a boundary on a
+    // closed input), one with more than maximumUnfaithfulQuadRatio times
+    // its quads (spikes) or one with fewer than minimumFaithfulQuadRatio
+    // times them (collapsed) counts brokenUnfaithfulShare more.  The choice
+    // follows the results, so no target makes the output jump to a broken
+    // one where an envelope would hold.  The share is measured for every
+    // island with chi < 0 except a closed one that came out closed with its
+    // own Euler characteristic.
     // The check samples at most this many input or output triangles, or
     // this many per target quad if more (a strided subset of a dense input).
     const size_t maximumUnfaithfulSamples = 20000;
     const double unfaithfulSamplesPerQuad = 8.0;
     const double maximumUnfaithfulShare = 0.05;
-    const double maximumWholeUnfaithfulShare = 0.10;
+    const double brokenUnfaithfulShare = 0.25;
     const double maximumUnfaithfulQuadRatio = 2.0;
+    const double minimumFaithfulQuadRatio = 0.5;
     const double envelopeShareMargin = 0.01;
 
     // A sliver is a strip-shaped island (area below 1e-3 of its bounding
@@ -1405,25 +1406,18 @@ bool AutoRemesher::remeshIslands()
     // creases) and no marks (they lie on the input), and the report still
     // compares the output with the input.  Left as it was if no envelope
     // comes out.
-    const auto applyEnvelope = [&](IslandContext& context, double startRadius) {
+    // The island's envelope at a closing radius of `radius` quad widths;
+    // false if the grid cannot hold it (a grid capped at
+    // maximumEnvelopeGridNodes may be too coarse for one radius and fine for
+    // a larger one).
+    const auto envelopeAt = [&](const IslandContext& context, double radius, EnvelopeResult* envelope) {
         const double quadWidth = std::sqrt(context.area / context.targetQuadCount);
-        EnvelopeResult envelope;
-        bool built = false;
-        for (double radius = startRadius; radius <= maximumEnvelopeClosingRadius * 1.0001; radius *= envelopeClosingGrowth) {
-            EnvelopeResult attempt;
-            if (!buildEnvelope(context.vertices, context.triangles, radius * quadWidth,
-                    envelopeOffset * quadWidth, envelopeCellSize * quadWidth, maximumEnvelopeGridNodes, &attempt))
-                break;
-            envelope = std::move(attempt);
-            built = true;
-            context.envelopeRadius = radius;
-            const long long euler = surfaceTopology(envelope.triangles, envelope.vertices.size()).eulerCharacteristic;
-            if (euler >= 0 || context.targetQuadCount >= minimumQuadsPerNegativeEuler * (double)(-euler))
-                break;
-        }
-        if (!built)
-            return false;
+        return buildEnvelope(context.vertices, context.triangles, radius * quadWidth,
+            envelopeOffset * quadWidth, envelopeCellSize * quadWidth, maximumEnvelopeGridNodes, envelope);
+    };
+    const auto useEnvelope = [&](IslandContext& context, EnvelopeResult&& envelope, double radius) {
         context.enveloped = true;
+        context.envelopeRadius = radius;
         context.envelopeCellSize = envelope.cellSize;
         context.envelopeDroppedTriangles = envelope.droppedTriangles;
         context.vertices = envelope.vertices;
@@ -1439,6 +1433,28 @@ bool AutoRemesher::remeshIslands()
         context.featureEdges = FeatureEdgeSet();
         context.markedEdges.clear();
         context.followMarks = false;
+    };
+    const auto envelopeEuler = [&](const EnvelopeResult& envelope) {
+        return surfaceTopology(envelope.triangles, envelope.vertices.size()).eulerCharacteristic;
+    };
+    // The bound's envelope: the smallest closing radius whose envelope the
+    // island's quads can hold, else the largest that builds.
+    const auto applyEnvelope = [&](IslandContext& context) {
+        EnvelopeResult envelope;
+        double used = 0.0;
+        for (double radius = envelopeClosingRadius; radius <= maximumEnvelopeClosingRadius * 1.0001; radius *= envelopeClosingGrowth) {
+            EnvelopeResult attempt;
+            if (!envelopeAt(context, radius, &attempt))
+                continue;
+            envelope = std::move(attempt);
+            used = radius;
+            const long long euler = envelopeEuler(envelope);
+            if (euler >= 0 || context.targetQuadCount >= minimumQuadsPerNegativeEuler * (double)(-euler))
+                break;
+        }
+        if (!(used > 0.0))
+            return false;
+        useEnvelope(context, std::move(envelope), used);
         return true;
     };
 
@@ -1509,7 +1525,7 @@ bool AutoRemesher::remeshIslands()
         [&](const tbb::blocked_range<size_t>& range) {
             for (size_t i = range.begin(); i != range.end(); ++i) {
                 if (needsEnvelope(islandContexes[i]))
-                    applyEnvelope(islandContexes[i], envelopeClosingRadius);
+                    applyEnvelope(islandContexes[i]);
             }
         });
     for (auto& context : islandContexes)
@@ -1852,8 +1868,11 @@ bool AutoRemesher::remeshIslands()
                     buildIslandContext(i, ctx);
                     ctx.voxelSize = voxelSize;
                     ctx.targetQuadCount = targetQuadCount;
-                    if (islandContexes[i].enveloped)
-                        applyEnvelope(ctx, islandContexes[i].envelopeRadius);
+                    if (islandContexes[i].enveloped) {
+                        EnvelopeResult envelope;
+                        if (envelopeAt(ctx, islandContexes[i].envelopeRadius, &envelope))
+                            useEnvelope(ctx, std::move(envelope), islandContexes[i].envelopeRadius);
+                    }
                     applyMarkedEdgeDensity(ctx);
                     IslandRun run;
                     resampleIsland(i, ctx, run, &retryDecimationStats);
@@ -1886,8 +1905,8 @@ bool AutoRemesher::remeshIslands()
     // input farther than a quad from it plus its area more than half a quad
     // off the input; a torn result (several pieces, non-manifold edges, a
     // boundary on a closed input) or one with more than
-    // maximumUnfaithfulQuadRatio times its quads counts maximumUnfaithfulShare
-    // more, and an empty one counts 1.
+    // maximumUnfaithfulQuadRatio or fewer than minimumFaithfulQuadRatio times
+    // its quads counts brokenUnfaithfulShare more, and an empty one counts 1.
     const auto unfaithfulShare = [&](size_t i, const IslandContext& ctx, const IslandRun& run, bool* broken) {
         *broken = true;
         if (run.remeshedQuads.empty())
@@ -1911,11 +1930,12 @@ bool AutoRemesher::remeshIslands()
         const SurfaceTopology topology = surfaceTopology(run.remeshedQuads, run.remeshedVertices.size());
         const bool closedInput = 0 == ctx.originalTopology.boundaryEdges && 0 == ctx.originalTopology.nonManifoldEdges;
         if (1 != topology.components || 0 != topology.nonManifoldEdges || (closedInput && 0 != topology.boundaryEdges)) {
-            share += maximumUnfaithfulShare;
+            share += brokenUnfaithfulShare;
             *broken = true;
         }
-        if ((double)quads > maximumUnfaithfulQuadRatio * ctx.targetQuadCount) {
-            share += maximumUnfaithfulShare;
+        if ((double)quads > maximumUnfaithfulQuadRatio * ctx.targetQuadCount
+            || (double)quads < minimumFaithfulQuadRatio * ctx.targetQuadCount) {
+            share += brokenUnfaithfulShare;
             *broken = true;
         }
         return share;
@@ -1934,7 +1954,7 @@ bool AutoRemesher::remeshIslands()
                 // A closed input whose result is one closed piece of the same
                 // Euler characteristic, at no more than twice its quads, kept
                 // its holes and handles; measuring it would only cost time.
-                const SurfaceTopology& original = islandContexes[i].originalTopology;
+                const SurfaceTopology original = islandContexes[i].originalTopology;
                 if (!islandContexes[i].enveloped && 0 == original.boundaryEdges && 0 == original.nonManifoldEdges
                     && isHealthyIslandResult(original, islandRuns[i].remeshedVertices, islandRuns[i].remeshedQuads)) {
                     size_t quads = 0;
@@ -1944,53 +1964,97 @@ bool AutoRemesher::remeshIslands()
                         continue;
                 }
                 bool broken = false;
-                double best = unfaithfulShare(i, islandContexes[i], islandRuns[i], &broken);
-                islandContexes[i].firstUnfaithfulShare = best;
-                // A whole result (one piece, no tear, no spikes) is tried on
-                // the envelope only if it is off by more than
-                // maximumWholeUnfaithfulShare: a CAD part whose creases came
-                // out round is off a little, and its envelope is rounder.
-                // The closing grows while the envelope's own result fails the
-                // same test (it kept handles its quads cannot hold).
-                // An island enveloped by the bound tries larger closings only.
-                double radius = islandContexes[i].enveloped
-                    ? islandContexes[i].envelopeRadius * envelopeClosingGrowth
-                    : envelopeClosingRadius;
+                const double first = unfaithfulShare(i, islandContexes[i], islandRuns[i], &broken);
+                islandContexes[i].firstUnfaithfulShare = first;
                 double lastEnvelopeShare = -1.0;
-                bool tryNext = best > (broken ? maximumUnfaithfulShare : maximumWholeUnfaithfulShare);
-                while (tryNext && radius <= maximumEnvelopeClosingRadius * 1.0001) {
-                    IslandContext ctx;
-                    buildIslandContext(i, ctx);
-                    ctx.voxelSize = islandContexes[i].voxelSize;
-                    ctx.targetQuadCount = islandContexes[i].targetQuadCount;
-                    if (!applyEnvelope(ctx, radius))
-                        break;
-                    radius = ctx.envelopeRadius * envelopeClosingGrowth;
-                    applyMarkedEdgeDensity(ctx);
-                    IslandRun run;
-                    resampleIsland(i, ctx, run, &retryDecimationStats);
-                    parameterizeIsland(i, ctx, run);
-                    ++envelopeCheckRuns;
-                    bool envelopeBroken = false;
-                    lastEnvelopeShare = unfaithfulShare(i, ctx, run, &envelopeBroken);
-                    const bool replace = lastEnvelopeShare + envelopeShareMargin < best;
-                    IslandRun& dropped = replace ? islandRuns[i] : run;
-                    IslandRun& kept = replace ? run : islandRuns[i];
-                    for (auto& record : dropped.diagnostics) {
-                        if (record.stage == "extractor")
-                            kept.diagnostics.push_back(std::move(record.label("superseded", "yes")));
-                    }
-                    if (replace) {
-                        if (!islandContexes[i].enveloped)
+                // Other ways to remesh the island are tried while the kept
+                // result is unfaithful, and the most faithful one is kept:
+                // its envelope at each closing radius and, for an island the
+                // bound enveloped, the island itself.  On a closed input an
+                // envelope that closes nothing still helps (it thickens
+                // strands thinner than a quad), so every radius is tried
+                // except one whose envelope has the topology of the last one
+                // tried.  On an open input an envelope that closes nothing
+                // is a slab over the sheet (twice its Euler characteristic)
+                // and breaks as the input did, so only radii that close more
+                // than the last one tried are run.  Closing grows with the
+                // radius: if the largest closes nothing on an open input, no
+                // radius is tried.
+                if (first > maximumUnfaithfulShare) {
+                    const bool closedInput = 0 == original.boundaryEdges && 0 == original.nonManifoldEdges;
+                    const bool boundEnveloped = islandContexes[i].enveloped;
+                    const double boundRadius = boundEnveloped ? islandContexes[i].envelopeRadius : 0.0;
+                    IslandContext base;
+                    buildIslandContext(i, base);
+                    base.voxelSize = islandContexes[i].voxelSize;
+                    base.targetQuadCount = islandContexes[i].targetQuadCount;
+                    std::vector<double> radii;
+                    for (double radius = envelopeClosingRadius; radius <= maximumEnvelopeClosingRadius * 1.0001; radius *= envelopeClosingGrowth)
+                        radii.push_back(radius);
+                    EnvelopeResult largest;
+                    const bool haveLargest = envelopeAt(base, radii.back(), &largest);
+                    long long lastRunEuler = closedInput ? std::numeric_limits<long long>::min() : 2 * original.eulerCharacteristic;
+                    double best = first;
+                    // Runs one way (radius 0: the island itself) and keeps
+                    // it if it is more faithful by envelopeShareMargin.
+                    const auto tryRun = [&](IslandContext&& ctx) {
+                        applyMarkedEdgeDensity(ctx);
+                        IslandRun run;
+                        resampleIsland(i, ctx, run, &retryDecimationStats);
+                        parameterizeIsland(i, ctx, run);
+                        ++envelopeCheckRuns;
+                        bool runBroken = false;
+                        const double share = unfaithfulShare(i, ctx, run, &runBroken);
+                        if (ctx.enveloped)
+                            lastEnvelopeShare = share;
+                        const bool replace = share + envelopeShareMargin < best;
+                        IslandRun& dropped = replace ? islandRuns[i] : run;
+                        IslandRun& kept = replace ? run : islandRuns[i];
+                        for (auto& record : dropped.diagnostics) {
+                            if (record.stage == "extractor")
+                                kept.diagnostics.push_back(std::move(record.label("superseded", "yes")));
+                        }
+                        if (!replace)
+                            return;
+                        if (ctx.enveloped && !islandContexes[i].enveloped)
                             ++islandsEnvelopedAfterCheck;
                         ctx.inputMarkedEdgeCount = islandContexes[i].inputMarkedEdgeCount;
-                        ctx.firstUnfaithfulShare = islandContexes[i].firstUnfaithfulShare;
+                        ctx.firstUnfaithfulShare = first;
                         islandContexes[i] = std::move(ctx);
                         islandRuns[i] = std::move(run);
-                        best = lastEnvelopeShare;
+                        best = share;
+                    };
+                    if (boundEnveloped) {
+                        IslandContext ctx;
+                        buildIslandContext(i, ctx);
+                        ctx.voxelSize = base.voxelSize;
+                        ctx.targetQuadCount = base.targetQuadCount;
+                        tryRun(std::move(ctx));
                     }
-                    tryNext = best > maximumUnfaithfulShare
-                        && lastEnvelopeShare > (envelopeBroken ? maximumUnfaithfulShare : maximumWholeUnfaithfulShare);
+                    const bool anyClosed = closedInput || (haveLargest && envelopeEuler(largest) > lastRunEuler);
+                    for (size_t k = 0; k < radii.size() && anyClosed && best > maximumUnfaithfulShare; ++k) {
+                        EnvelopeResult envelope;
+                        if (k + 1 == radii.size()) {
+                            if (!haveLargest)
+                                break;
+                            envelope = std::move(largest);
+                        } else if (!envelopeAt(base, radii[k], &envelope)) {
+                            continue;
+                        }
+                        const long long euler = envelopeEuler(envelope);
+                        const bool alreadyRun = boundEnveloped && std::abs(radii[k] - boundRadius) < 1e-6 * boundRadius;
+                        if (alreadyRun || !(euler > lastRunEuler)) {
+                            lastRunEuler = std::max(lastRunEuler, euler);
+                            continue;
+                        }
+                        lastRunEuler = euler;
+                        IslandContext ctx;
+                        buildIslandContext(i, ctx);
+                        ctx.voxelSize = base.voxelSize;
+                        ctx.targetQuadCount = base.targetQuadCount;
+                        useEnvelope(ctx, std::move(envelope), radii[k]);
+                        tryRun(std::move(ctx));
+                    }
                 }
                 islandContexes[i].envelopeUnfaithfulShare = lastEnvelopeShare;
                 envelopeCheckUs += std::chrono::duration_cast<std::chrono::microseconds>(
