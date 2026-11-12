@@ -908,6 +908,10 @@ bool IsotropicHalfedgeMesh::collapseEdgeTo(Halfedge *halfedge, const Vector3 &co
     if (bottomVertex->featured)
         return false;
 
+    if ((topVertex->pinned && vertexValence(topVertex) <= pinnedMinimumValence) ||
+            (bottomVertex->pinned && vertexValence(bottomVertex) <= pinnedMinimumValence))
+        return false;
+
     if (!joinFeatures && testCollapseWouldJoinFeatureEdges(halfedge))
         return false;
     

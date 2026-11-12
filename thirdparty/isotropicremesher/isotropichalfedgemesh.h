@@ -50,6 +50,8 @@ public:
         size_t outputIndex = 0;
         // Frozen: a boundary vertex, or one whose faces don't close a fan.
         bool featured = false;
+        // A conical tip of the input (Quadami): never moved, never collapsed.
+        bool pinned = false;
         // An end of a feature edge that the remesh never moves or removes:
         // feature degree other than 2, or a turn of more than 45 degrees
         // between its two feature edges (featureCorners).  The other
@@ -107,6 +109,9 @@ public:
     // A chain vertex: on exactly two feature edges, not frozen, no corner.
     bool isChainVertex(Vertex *vertex);
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);
+    // Flips and collapses keep at least this many edges at a pinned vertex
+    // (Quadami), so that its fan does not turn into a pyramid with creases.
+    static const size_t pinnedMinimumValence = 8;
     Face *moveToNextFace(Face *face);
     Vertex *moveToNextVertex(Vertex *vertex);
     void updateVertexValences();

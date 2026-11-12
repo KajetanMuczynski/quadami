@@ -35,6 +35,13 @@ namespace AutoRemesher {
 namespace {
     constexpr double kSymmetry = 4.0;
 
+    // Radius, in mean edges of the mesh, around a conical tip within which
+    // curvature does not guide the field. Without it, quads fold next to the
+    // tip of open cones; 2, 4 and 16 keep the tip as well. The radius moves
+    // singularities far from the tip, which changes folds elsewhere either
+    // way: 8 had the fewest over all bench sets (2 had 2 % more).
+    constexpr double kTipUnguidedEdges = 8.0;
+
     struct FacetTangentBasis {
         Vector3 tangent;
         Vector3 perpendicularTangent;
@@ -85,7 +92,8 @@ namespace {
 }
 
 bool FrameField::create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdges,
-    std::vector<Vector3>* field, std::vector<DiagnosticRecord>* diagnostics)
+    std::vector<Vector3>* field, std::vector<DiagnosticRecord>* diagnostics,
+    const std::vector<size_t>* tipVertices)
 {
     if (nullptr == field || mesh.faceCount() == 0)
         return false;
@@ -158,6 +166,38 @@ bool FrameField::create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdge
         for (double& certaintyValue : certainty)
             certaintyValue /= maximumCertainty;
 
+    // Around a conical tip the principal directions run radially and around
+    // the apex, a field of index 1: four quarter turns where the tip asks for
+    // round(deficit / 90 degrees), two at a cone. Guided there, the field
+    // keeps the two quarter turns the tip does not take right next to it, and
+    // the quads between them fold. Without guidance near the tip the smooth
+    // field moves them away.
+    size_t unguidedFaces = 0;
+    if (nullptr != tipVertices && !tipVertices->empty()) {
+        const double radius = kTipUnguidedEdges * mesh.averageEdgeLength();
+        std::vector<size_t> stamp(mesh.vertexCount(), SurfaceMesh::npos);
+        std::vector<size_t> ball;
+        for (const size_t tip : *tipVertices) {
+            if (tip >= mesh.vertexCount())
+                continue;
+            ball.assign(1, tip);
+            stamp[tip] = tip;
+            for (size_t i = 0; i < ball.size(); ++i)
+                for (const size_t c : mesh.cornersAroundVertex(ball[i])) {
+                    const size_t f = mesh.cornerFace(c);
+                    if (!locked[f] && certainty[f] > 0.0) {
+                        certainty[f] = 0.0;
+                        ++unguidedFaces;
+                    }
+                    const size_t u = mesh.cornerVertex(mesh.nextCorner(c));
+                    if (stamp[u] == tip || (mesh.position(u) - mesh.position(tip)).length() > radius)
+                        continue;
+                    stamp[u] = tip;
+                    ball.push_back(u);
+                }
+        }
+    }
+
     const auto normalizePeriodic = [&]() {
         tbb::parallel_for(tbb::blocked_range<size_t>(0, faces), [&](const tbb::blocked_range<size_t>& range) {
             for (size_t faceIndex = range.begin(); faceIndex != range.end(); ++faceIndex) {
@@ -204,7 +244,7 @@ bool FrameField::create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdge
     for (size_t f = 0; f < faces; ++f)
         if (locked[f])
             ++lockedFaces;
-    record.set("faces", (double)faces).set("locked_faces", (double)lockedFaces);
+    record.set("faces", (double)faces).set("locked_faces", (double)lockedFaces).set("tip_unguided_faces", (double)unguidedFaces);
     // Faces whose solved periodic vector was (near) zero, so the
     // normalisation had to leave it as is: an undefined direction.
     size_t zeroPeriodic = 0;
