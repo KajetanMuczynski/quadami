@@ -34,6 +34,10 @@
 class IsotropicRemesher
 {
 public:
+    size_t flippedChainEars() const
+    {
+        return m_flippedChainEars;
+    }
     IsotropicRemesher(const std::vector<Vector3> *vertices,
             const std::vector<std::vector<size_t>> *triangles);
     ~IsotropicRemesher();
@@ -76,6 +80,7 @@ private:
     double m_targetEdgeLength = 0;
     double m_initialAverageEdgeLength = 0;
     size_t m_targetTriangleCount = 0;
+    size_t m_flippedChainEars = 0;
     const std::vector<double> *m_vertexTargetEdgeLengths = nullptr;
     double m_smoothNormalDegrees = 0.0;
     std::vector<Vector3> m_smoothVertexNormals; // Per-vertex smooth normals (input)
@@ -98,6 +103,7 @@ private:
     void splitLongEdges(double maxEdgeLength);
     void collapseShortEdges(double minEdgeLengthSquared, double maxEdgeLengthSquared);
     void flipEdges();
+    size_t flipChainEars();
     void shiftVertices();
     void relaxSmoothHardChains();
     void projectVertices();

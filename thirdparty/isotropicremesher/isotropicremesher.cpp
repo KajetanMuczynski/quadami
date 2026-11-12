@@ -465,8 +465,42 @@ void IsotropicRemesher::collapseShortEdges(double minEdgeLengthSquared, double m
     }
 }
 
+size_t IsotropicRemesher::flipChainEars()
+{
+    // A triangle with two hard sides (an ear) is a bend of a hard line that
+    // took two edges of one input triangle: a guide or mark drawn along a
+    // zigzag of input edges.  Hard edges never flip, and once the line is
+    // straightened (relaxSmoothHardChains) the ear lies flat along it, with
+    // all three corners on one isoline of the cover: a degenerate map
+    // triangle at every such bend (head with guides: 26-38 per run).
+    // Flipping its third side removes it.
+    size_t flipped = 0;
+    for (IsotropicHalfedgeMesh::Face *face = m_halfedgeMesh->moveToNextFace(nullptr);
+            nullptr != face;
+            face = m_halfedgeMesh->moveToNextFace(face)) {
+        if (face->removed)
+            continue;
+        IsotropicHalfedgeMesh::Halfedge *halfedge = face->halfedge;
+        do {
+            // halfedge is the third side when the other two are hard.
+            if (!halfedge->hard() && nullptr != halfedge->oppositeHalfedge
+                    && halfedge->nextHalfedge->hard() && halfedge->previousHalfedge->hard()) {
+                if (m_halfedgeMesh->flipEdge(halfedge, true))
+                    ++flipped;
+                break;
+            }
+            halfedge = halfedge->nextHalfedge;
+        } while (halfedge != face->halfedge);
+    }
+    m_flippedChainEars += flipped;
+    return flipped;
+}
+
 void IsotropicRemesher::flipEdges()
 {
+#ifndef AR_NO_CHAIN_EARS // EXPERIMENT switch for the A/B
+    flipChainEars();
+#endif
     for (IsotropicHalfedgeMesh::Face *face = m_halfedgeMesh->moveToNextFace(nullptr); 
             nullptr != face; 
             ) {

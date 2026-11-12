@@ -112,7 +112,8 @@ public:
     // not close (TODO 5.7). Sets the two neighbours on the line when given.
     bool isSmoothHardChainVertex(Vertex *vertex, double minNormalDot,
         Vertex **first=nullptr, Vertex **second=nullptr);
-    bool flipEdge(Halfedge *halfedge);
+    // `ear`: flip whatever the valences, for flipChainEars (IsotropicRemesher).
+    bool flipEdge(Halfedge *halfedge, bool ear = false);
     void relaxVertex(Vertex *vertex);
     bool testMoveWouldDegenerate(Vertex *vertex, const Vector3 &target);
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);
