@@ -1874,35 +1874,41 @@ bool AutoRemesher::remeshIslands()
             }
         });
 
+    // A run is faithful if it is healthy, keeps the island's Euler
+    // characteristic (no hole closed or cut) and has at least half the
+    // planned quads (a collapsed island leaves a 2-quad pillow).
+    const auto isFaithful = [](const IslandRun& run, const IslandContext& ctx) {
+        const size_t quads = (size_t)std::count_if(run.remeshedQuads.begin(), run.remeshedQuads.end(),
+            [](const std::vector<size_t>& face) { return 4 == face.size(); });
+        return isHealthyIslandResult(ctx.inputTopology, run.remeshedVertices, run.remeshedQuads)
+            && surfaceTopology(run.remeshedQuads, run.remeshedVertices.size()).eulerCharacteristic == ctx.inputTopology.eulerCharacteristic
+            && (double)quads >= 0.5 * ctx.targetQuadCount;
+    };
+    const auto badFaces = [&isFaithful](const IslandRun& run, bool* faithful, const IslandContext& ctx) {
+        RemeshMesh mesh;
+        for (const auto& v : run.remeshedVertices) {
+            mesh.positions.push_back(v.x());
+            mesh.positions.push_back(v.y());
+            mesh.positions.push_back(v.z());
+        }
+        for (const auto& face : run.remeshedQuads) {
+            mesh.faceSizes.push_back((uint32_t)face.size());
+            for (size_t v : face)
+                mesh.faceIndices.push_back((uint32_t)v);
+        }
+        QualityReport report;
+        measureMesh(mesh, &report);
+        *faithful = isFaithful(run, ctx);
+        return report.foldedFaceCount + report.nonQuadCount + report.degenerateFaceCount;
+    };
     // Marked edges the quads cannot follow (a mark across the field that
     // creases set, many short lines that cross; TODO 5.2) fold the result.
-    // Such an island is run again without its marks.  A run is faithful if
-    // it is healthy, keeps the island's Euler characteristic (no hole closed
-    // or cut) and has at least half the planned quads.  A faithful run beats
+    // Such an island is run again without its marks.  A faithful run beats
     // one that is not; between two alike the one with fewer folded faces and
     // non-quads is kept, and a tie, or 2 faces more, keeps the marks.  Only
     // islands with marks and such a defect pay for the second run.
     std::vector<char> markedEdgesDropped(islandContexes.size(), 0);
     if (!m_markedEdges.empty()) {
-        const auto badFaces = [](const IslandRun& run, bool* faithful, const IslandContext& ctx) {
-            RemeshMesh mesh;
-            for (const auto& v : run.remeshedVertices) {
-                mesh.positions.push_back(v.x());
-                mesh.positions.push_back(v.y());
-                mesh.positions.push_back(v.z());
-            }
-            for (const auto& face : run.remeshedQuads) {
-                mesh.faceSizes.push_back((uint32_t)face.size());
-                for (size_t v : face)
-                    mesh.faceIndices.push_back((uint32_t)v);
-            }
-            QualityReport report;
-            measureMesh(mesh, &report);
-            *faithful = isHealthyIslandResult(ctx.inputTopology, run.remeshedVertices, run.remeshedQuads)
-                && surfaceTopology(run.remeshedQuads, run.remeshedVertices.size()).eulerCharacteristic == ctx.inputTopology.eulerCharacteristic
-                && (double)report.quadCount >= 0.5 * ctx.targetQuadCount;
-            return report.foldedFaceCount + report.nonQuadCount + report.degenerateFaceCount;
-        };
         tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
             [&](const tbb::blocked_range<size_t>& range) {
                 for (size_t i = range.begin(); i != range.end(); ++i) {
@@ -1940,6 +1946,67 @@ bool AutoRemesher::remeshIslands()
             });
     }
     m_markedEdgesDroppedIslandCount = (size_t)std::count(markedEdgesDropped.begin(), markedEdgesDropped.end(), 1);
+
+    // Sharp edges classified on T lock the cross field to their direction.
+    // Where T bevels a crease into a zigzag, the locked directions disagree a
+    // little with each other, every disagreement is a cone pair, and on a
+    // coarse island the map can collapse a handle or the whole island
+    // (csg_bracket at 1k quads: handles lost in 7 of 10 runs, none without
+    // the locks; research/why-behind-2026-10-31.md section 3).  An island
+    // whose run is not faithful (as for marks above) is run again without
+    // its sharp edges; its marks, if still followed, stay hard edges.  The
+    // run without them is kept only if it is faithful, so a guard that
+    // does not help changes nothing.  Islands without sharp edges on T, or
+    // with a faithful run, pay nothing; nor do islands with a non-manifold
+    // input (below).
+    std::vector<char> sharpEdgesDropped(islandContexes.size(), 0);
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                // On a non-manifold input the Euler characteristic says nothing
+                // about the output's holes or handles (isHealthyIslandResult
+                // skips it too), so the test would trade creases for nothing
+                // (sculpt_dirty: crease coverage 0.58 -> 0.06, no topology gain).
+                if (islandContexes[i].leftOut || !sharpEdgesEnabled(islandContexes[i].sharpEdgeDegrees)
+                    || 0 != islandContexes[i].inputTopology.nonManifoldEdges)
+                    continue;
+                const auto& flags = islandRuns[i].isotropicFeatureEdges.flags;
+                if (std::none_of(flags.begin(), flags.end(),
+                        [](unsigned char f) { return 0 == (f & FeatureEdgeSet::Hard); }))
+                    continue;
+                if (isFaithful(islandRuns[i], islandContexes[i]))
+                    continue;
+                IslandContext ctx;
+                buildIslandContext(i, ctx);
+                ctx.voxelSize = islandContexes[i].voxelSize;
+                ctx.targetQuadCount = islandContexes[i].targetQuadCount;
+                ctx.markedEdges = islandContexes[i].markedEdges;
+                ctx.followMarks = islandContexes[i].followMarks;
+                ctx.markedEdgeDensity = islandContexes[i].markedEdgeDensity;
+                ctx.markedEdgesTooDense = islandContexes[i].markedEdgesTooDense;
+                ctx.sharpEdgeDegrees = 180.0;
+                ctx.featureEdges = FeatureEdgeSet();
+                IslandRun run;
+                resampleIsland(i, ctx, run, &retryDecimationStats);
+                parameterizeIsland(i, ctx, run);
+                const bool drop = isFaithful(run, ctx);
+                IslandRun& dropped = drop ? islandRuns[i] : run;
+                IslandRun& kept = drop ? run : islandRuns[i];
+                for (auto& record : dropped.diagnostics) {
+                    if (record.stage == "extractor")
+                        kept.diagnostics.push_back(std::move(record.label("superseded", "yes")));
+                }
+                if (drop) {
+                    ctx.inputMarkedEdgeCount = islandContexes[i].inputMarkedEdgeCount;
+                    islandContexes[i] = std::move(ctx);
+                    islandRuns[i] = std::move(run);
+                    sharpEdgesDropped[i] = 1;
+                } else {
+                    sharpEdgesDropped[i] = 2;
+                }
+            }
+        });
+    m_sharpEdgesDroppedIslandCount = (size_t)std::count(sharpEdgesDropped.begin(), sharpEdgesDropped.end(), 1);
     m_markedEdgesTooDenseIslandCount = 0;
     for (const auto& ctx : islandContexes)
         m_markedEdgesTooDenseIslandCount += ctx.markedEdgesTooDense ? 1 : 0;
@@ -2316,6 +2383,8 @@ bool AutoRemesher::remeshIslands()
             record.set("output_quads", (double)quads);
             record.set("thin_area_share", thinParts[i].area > 0.0 ? thinParts[i].thinArea / thinParts[i].area : 0.0);
             record.set("thin_spots", (double)thinParts[i].spots);
+            // 0: not tried, 1: run without sharp edges kept, 2: tried, not faithful either.
+            record.set("sharp_edges_dropped", (double)sharpEdgesDropped[i]);
             if (!m_markedEdges.empty()) {
                 record.set("marked_edges", (double)islandContexes[i].inputMarkedEdgeCount);
                 record.set("isotropic_marked_edges", (double)islandContexes[i].isotropicMarkedEdgeCount);
