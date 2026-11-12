@@ -279,6 +279,46 @@ int lostPartCauseFailures()
     return thinOk && otherOk && openOk ? 0 : 1;
 }
 
+// The reference width: the slab of lostPartCauseFailures, whose far end is
+// 10 from the output, measured again at the quad width of a smaller target.
+// At target 4 (width about 2.36, far beyond 7.1) the end is still lost and
+// thin; at target 1 (width about 4.71, far beyond 14.1) it is not.  The
+// run's own counts do not change.
+int lostPartReferenceFailures()
+{
+    std::vector<double> corners = cubeCorners(0.0);
+    for (size_t i = 0; i < corners.size(); i += 3) {
+        corners[i] *= 10.0;
+        corners[i + 2] *= 0.1;
+    }
+    std::vector<uint32_t> triangles;
+    for (const auto& face : cubeFaces(0))
+        triangles.insert(triangles.end(), { face[0], face[1], face[2], face[0], face[2], face[3] });
+    AutoRemesher::RemeshMesh end;
+    end.positions = { 0, 0, 0, 0, 1, 0, 0, 1, 0.1, 0, 0, 0.1 };
+    end.faceSizes = { 4 };
+    end.faceIndices = { 0, 1, 2, 3 };
+    AutoRemesher::QualityReport plain, lost, back;
+    AutoRemesher::measureLostParts(corners, triangles, 22, end, {}, &plain);
+    AutoRemesher::measureLostParts(corners, triangles, 22, end, {}, &lost, nullptr, 4);
+    AutoRemesher::measureLostParts(corners, triangles, 22, end, {}, &back, nullptr, 1);
+    const auto same = [&](const AutoRemesher::QualityReport& report) {
+        return report.farInputVertexCount == plain.farInputVertexCount
+            && report.thinLostVertexCount == plain.thinLostVertexCount
+            && report.farthestInputQuadWidths == plain.farthestInputQuadWidths
+            && report.diagnostics == plain.diagnostics;
+    };
+    const AutoRemesher::LostPartCounts& atFour = lost.referenceLostParts;
+    const bool ok = 0 == plain.lostPartsReferenceTarget && 4 == lost.lostPartsReferenceTarget
+        && 1 == back.lostPartsReferenceTarget && same(lost) && same(back)
+        && 4 == atFour.farInputVertexCount && 4 == atFour.thinLostVertexCount && 0 == atFour.otherLostVertexCount
+        && 0 == atFour.lostPieceCount && 0 == back.referenceLostParts.farInputVertexCount;
+    printf("reference 4: far %zu, thin %zu (want 4, 4); reference 1: far %zu (want 0); own counts kept: %s%s\n\n",
+        atFour.farInputVertexCount, atFour.thinLostVertexCount, back.referenceLostParts.farInputVertexCount,
+        same(lost) && same(back) ? "yes" : "no", ok ? "" : "  FAIL");
+    return ok ? 0 : 1;
+}
+
 // A quad sheared across an input crease, its diagonal on the crease: twisted
 // by the two-diagonal test, but bent along the crease, so it is counted
 // apart when the crease is 90 degrees or more (here 100) and stays twisted
@@ -395,6 +435,7 @@ int main()
     failures += handleFailures();
     failures += lostPartFailures();
     failures += lostPartCauseFailures();
+    failures += lostPartReferenceFailures();
     failures += creaseDiagonalFailures();
     printf("%-24s %13s %17s %11s %13s\n", "case", "folded", "degenerate", "flips", "twisted");
     for (const auto& c : cases) {
