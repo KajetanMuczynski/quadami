@@ -32,10 +32,6 @@
 class IsotropicHalfedgeMesh
 {
 public:
-    // Bit of Halfedge::featureFlags for a hard (user-marked) edge; the same
-    // bit as AutoRemesher::FeatureEdgeSet::Hard.
-    static const unsigned char kHardFeature = 0x1;
-
     struct Halfedge;
       
     struct Vertex
@@ -52,10 +48,14 @@ public:
         bool removed = false;
         size_t debugIndex = 0;
         size_t outputIndex = 0;
+        // Frozen: a boundary vertex, or one whose faces don't close a fan.
         bool featured = false;
-        // On a hard feature edge: never moved or removed except by a
-        // collapse along the hard line.
-        bool marked = false;
+        // An end of a feature edge that the remesh never moves or removes:
+        // feature degree other than 2, or a turn of more than 45 degrees
+        // between its two feature edges (featureCorners).  The other
+        // vertices on feature edges are chain vertices: they slide along the
+        // chain and are projected onto it.
+        bool featureCorner = false;
         double targetEdgeLength = 0.0; // 0 = use global default in split/collapse
         Vertex *_allocLink = nullptr;
     };
@@ -79,15 +79,13 @@ public:
         Halfedge *previousHalfedge = nullptr;
         Halfedge *oppositeHalfedge = nullptr;
         // A feature edge (both halfedges carry it), from the caller's set:
-        // split halves inherit it, a flip clears it unless it is hard.
+        // split halves inherit it, it is never flipped, and a collapse
+        // removes one only along its chain.
         bool feature = false;
         unsigned char featureFlags = 0;
-        // A hard (user-marked) feature edge: never flipped, split on its
-        // line, kept by collapses (collapseEdge).
-        bool hard() const
-        {
-            return feature && 0 != (featureFlags & kHardFeature);
-        }
+        // The input chain the feature edge lies on, from 1 (featureCorners);
+        // 0 for no feature edge.
+        size_t featureChain = 0;
         size_t debugIndex = 0;
         Halfedge *_allocLink = nullptr;
     };
@@ -98,13 +96,16 @@ public:
     
     double averageEdgeLength();
     void breakEdge(Halfedge *halfedge);
-    // collapseTo: where the kept vertex goes; nullptr = the edge's midpoint.
-    bool collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared, const Vector3 *collapseTo=nullptr);
-    // On exactly two hard edges that meet at 150 degrees or more: a point
-    // of a hard line that a collapse along the line may remove.
-    bool isStraightHardChainVertex(Vertex *vertex);
+    bool collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared);
     bool flipEdge(Halfedge *halfedge);
+    // Flips the edge under a flat face, judged by the face across only.
+    bool flipEdgeUnderFlatFace(Halfedge *halfedge);
     void relaxVertex(Vertex *vertex);
+    // Number of feature edges at the vertex; the other ends of the first two
+    // go to `first` and `second` when given.
+    size_t featureDegree(Vertex *vertex, Vertex **first = nullptr, Vertex **second = nullptr);
+    // A chain vertex: on exactly two feature edges, not frozen, no corner.
+    bool isChainVertex(Vertex *vertex);
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);
     Face *moveToNextFace(Face *face);
     Vertex *moveToNextVertex(Vertex *vertex);
@@ -115,15 +116,27 @@ public:
     // indices with a flags byte each; call before anything adds a vertex.
     void markFeatureEdges(const std::vector<std::pair<size_t, size_t>> &edges,
         const std::vector<unsigned char> &flags);
-    // Marks the ends of feature edges as feature vertices.
-    void featureVertices();
-    void featureBoundaries();
-    // Feature edges a flip has removed so far.
-    size_t clearedFeatureEdges() const
+    // Splits the third edge of every face with two feature edges, so that
+    // no face lies on two chains (or twice on one); returns the new vertices.
+    std::vector<Vertex *> splitFacesOnTwoFeatureEdges();
+    // Marks the input's feature corners and numbers its chains (the paths
+    // of feature edges between corners); call right after markFeatureEdges.
+    void featureCorners();
+    struct FeatureSegment
     {
-        return m_clearedFeatureEdges;
-    }
+        Vector3 first;
+        Vector3 second;
+        size_t chain = 0;
+    };
+    // Every feature edge once, with its chain.
+    std::vector<FeatureSegment> featureSegments();
+    // The chain of the vertex's first feature edge; 0 for none.
+    size_t vertexFeatureChain(Vertex *vertex);
+    // Moves the vertex unless that degenerates or folds one of its faces.
+    bool moveVertexIfValid(Vertex *vertex, const Vector3 &target);
+    void featureBoundaries();
 private:
+    void relinkFlippedEdge(Halfedge *halfedge);
     Vertex *m_firstVertex = nullptr;
     Vertex *m_lastVertex = nullptr;
     Face *m_firstFace = nullptr;
@@ -134,7 +147,6 @@ private:
     Vertex *m_vertexAllocLink = nullptr;
     Face *m_faceAllocLink = nullptr;
     Halfedge *m_halfedgeAllocLink = nullptr;
-    size_t m_clearedFeatureEdges = 0;
     
     static inline uint64_t makeHalfedgeKey(size_t first, size_t second)
     {
@@ -175,6 +187,10 @@ private:
     bool isVertexPairConnected(Vertex *first, Vertex *second);
     bool isFaceOfVertex(Vertex *vertex, Vertex *second, Vertex *third);
     bool testMoveWouldDegenerate(Vertex *vertex, const Vector3 &target);
+    bool testMoveWouldFold(Vertex *vertex, const Vector3 &target);
+    bool collapseEdgeTo(Halfedge *halfedge, const Vector3 &collapseTo, double maxEdgeLengthSquared,
+        bool joinFeatures = false);
+    bool testCollapseWouldJoinFeatureEdges(Halfedge *halfedge);
     bool testCollapseWouldFoldOrDegenerate(Vertex *vertex,
         Vertex *otherVertex,
         const Vector3 &collapseTo,

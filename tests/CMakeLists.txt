@@ -95,3 +95,7 @@ add_test(NAME marked_edges COMMAND marked_edges_test)
 add_executable(plan_test plan_test.cpp)
 target_link_libraries(plan_test PRIVATE autoremesher_core)
 add_test(NAME plan COMMAND plan_test)
+
+add_executable(crease_remesh_test crease_remesh_test.cpp)
+target_link_libraries(crease_remesh_test PRIVATE autoremesher_core)
+add_test(NAME crease_remesh COMMAND crease_remesh_test)
