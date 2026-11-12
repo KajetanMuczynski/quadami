@@ -83,7 +83,8 @@ CI (`.github/workflows/`):
     fails on exit status, quads outside 0.6-1.5x target, >2 % non-quads, any non-manifold edge,
     an input island more than 1 % farther than one output edge from the output (TARGETS H4 coverage: dropped
     or collapsed parts), report/OBJ mismatch; folded faces are reported in the job summary, not gated yet), worker tests, zip installed into a real Blender (4.2 LTS on Linux, 5.2 on Windows and
-    macOS). All three zips (Linux glibc 2.28+, macOS 11.2+ Apple silicon) are uploaded as artifacts
+    macOS) and remeshed headless (`addon/tests/blender_smoke.py`); Linux also installs it into Blender 4.5 LTS
+    (Kajetan's) and presses Remesh, Copy Report and Cancel in a real window under Xvfb (`addon/tests/blender_operator.py`). All three zips (Linux glibc 2.28+, macOS 11.2+ Apple silicon) are uploaded as artifacts
     `addon-<platform>`. One macOS job per PR, since macOS runners are the scarce ones.
   - `site`: tests and builds the website (`tools/site/`, whitelist in `site.json`); fails on broken links,
     upstream links outside the credits page, images outside the media folders, private paths. Artifact `site-preview`.
