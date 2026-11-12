@@ -1,0 +1,17 @@
+# 2026-10-31 · cloud thread · Keep creases through the isotropic remesh (TODO 2.5)
+- Repos/commits: core 8dfba4f on master 57c19f9 (branch `fix/crease-remesh`; first commit 0c52264 from 2026-10-28)
+- Did:
+  - Ran the full two-sided lane: master 57c19f9 against 0c52264 and 8dfba4f, on every public set plus the marked, realsculpt and realsword sets, 6 replicates each.
+  - Ran three variants of the T-set short-piece rule: a 3-edge threshold (adopted as 8dfba4f), a 5-edge threshold, and also dropping the short pieces before the remesh.
+  - Traced the remaining costs with probe builds that dump T and switch off projection or relax.
+  - Updated the TODO 2.5 entry and REFERENCE row 4.
+- Found:
+  - With a threshold of one edge, T's set kept 1-3-edge crease pieces, and the map folded around them on sculpts.
+  - Dropping those pieces before the remesh cuts sculpt tips.
+  - On barramundi and leeperrysmith at 10k, T is fine, so the loss comes after it (map or extraction), not from the remesh.
+- Measured (ab.py, 6 replicates, against master): the numbers are in the TODO 2.5 entry. Threshold dose on the sculpt set:
+  - 1 edge: Hausdorff ×1.04 against master.
+  - 3 edges: ×0.96.
+  - 5 edges: as 3 edges, but folds 30 → 51.
+  - Dropping before the remesh too: ×1.16 against 3 edges.
+- Next: sizing that respects creases, plus rim smoothing (2.8), as one follow-up PR that is A/B'd against master and against this change.

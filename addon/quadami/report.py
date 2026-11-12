@@ -85,8 +85,8 @@ def summary_rows(report):
         folded = output.get("folded_or_twisted_faces", output.get("folded_faces", 0))
         twisted = output.get("twisted_quads", 0)
         rows.append(("Folded faces", "%d (%d twisted)" % (folded, twisted) if twisted else str(folded), folded > 0))
-        # The core's input cleanup: open seams it welded, duplicate triangles
-        # it removed, pinched vertices it split, islands with almost no area
+        # The core's input cleanup: faces that use a vertex twice and
+        # duplicate triangles it removed, open seams it welded, pinched vertices it split, islands with almost no area
         # for their length (zero-width slivers) it left out, triangles on a zero-length edge it dropped and
         # triangles it turned to match their neighbours.  Not a problem, only
         # reported.
@@ -95,6 +95,9 @@ def summary_rows(report):
         welded = int(diagnostics.get("input_welded_edges", 0))
         if welded:
             fixes.append("%d seam edges welded" % welded)
+        repeated = int(diagnostics.get("input_repeated_corner_triangles", 0))
+        if repeated:
+            fixes.append("%d faces with a repeated vertex removed" % repeated)
         duplicates = int(diagnostics.get("input_duplicate_triangles", 0))
         if duplicates:
             fixes.append("%d duplicate faces removed" % duplicates)
@@ -274,6 +277,58 @@ def fold_offer_lines(width=WARNING_WIDTH, measure=len):
 # paths lose the user's name (redact).  The worker log is capped twice: the
 # worker keeps its last 40 lines (worker.RemeshJob), the copy its last
 # COPY_LOG_CHARS characters of those.
+# Stall warning: the worker prints a progress line whenever the percentage
+# or the step changes, so a long silence means one step is either slow or
+# stuck, and the two cannot be told apart from outside.  The panel warns when
+# the silence is STALL_MARGIN times the longest silent step measured for the
+# run's target, and never before STALL_MINIMUM_SECONDS.  Measured with
+# tools/bench/progress_probe.py on a 4-vCPU box (2026-11-04, Quality): the
+# longest silence was 1-4 s up to 30,000 quads, 36-87 s at 100,000, 114 s at
+# 200,000 and 380 s at 400,000 (all "Correcting field curl", one solve,
+# except 87 s "Cleaning up triangles"); 200,000 to 400,000 grows as
+# target^1.75.  It only warns: a run is stopped only by Cancel or Esc.
+STALL_MINIMUM_SECONDS = 300.0
+STALL_REFERENCE_QUADS = 400_000
+STALL_REFERENCE_SECONDS = 380.0
+STALL_EXPONENT = 1.75
+STALL_MARGIN = 3.0
+# A silence also counts as normal while it is shorter than this many times
+# the run's time before it: a slower computer or a larger input stretches
+# the earlier steps as well.
+STALL_ELAPSED_FACTOR = 2.0
+
+
+def stall_seconds(target_quads, before=0.0):
+    """How long a run with this Target Quads may go without a progress line
+    before the panel warns; `before` is the run's time before the silence."""
+    longest = STALL_REFERENCE_SECONDS * (max(int(target_quads), 1) / STALL_REFERENCE_QUADS) ** STALL_EXPONENT
+    return max(STALL_MINIMUM_SECONDS, STALL_MARGIN * longest, STALL_ELAPSED_FACTOR * before)
+
+
+def _minutes(seconds):
+    minutes = int(seconds // 60)
+    return "%d min" % minutes if minutes < 120 else "%d h %02d min" % divmod(minutes, 60)
+
+
+def stall_note(silent, elapsed, target_quads, step=""):
+    """Warning under the progress bar when the worker has printed no progress
+    for longer than stall_seconds(), else None.  `silent` is the time since
+    its last progress line, `elapsed` the run's time so far."""
+    if silent < stall_seconds(target_quads, elapsed - silent):
+        return None
+    where = " in \"%s\"" % step if step else ""
+    return ("No progress for %s%s, far longer than any step took in our tests at this Target Quads. "
+            "It may be stuck: press Cancel and lower Target Quads, or wait, as it can still finish"
+            % (_minutes(silent), where))
+
+
+def stall_status(silent, elapsed, target_quads):
+    """Short form for the status bar, or "" while there is progress."""
+    if silent < stall_seconds(target_quads, elapsed - silent):
+        return ""
+    return "no progress for %s, may be stuck" % _minutes(silent)
+
+
 COPY_LOG_CHARS = 4000
 _USER_DIRECTORY = re.compile(r"(?i)(/home/|/Users/|[A-Z]:[\\/]+(?:Users|Documents and Settings)[\\/]+)[^/\\\s\"']+")
 
