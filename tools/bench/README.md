@@ -121,9 +121,16 @@ $P tools/bench/ab.py run HEAD --set closed   # genus check; also --set suzanne
   `crease_diagonal_quads`; the CLI's definitions since interface 1.11, blank for runs measured before
   it), `nm_vertices`, and per input island, matched to output islands by nearest input triangle:
   `holes_added` / `holes_closed`, `handles_lost` / `handles_added`, `islands_dropped` (no output or under
-  half its area within one output edge), `islands_merged`, `islands_changed` (Euler characteristic or
-  loops differ, or split), `area_uncovered` and `area_wrong_side` (input area within one output edge
-  but under a face facing the other way: thin parts collapsed into one sheet, pleats), and a per-island
+  half its area within one target edge of its own output), `islands_merged`, `islands_changed` (Euler
+  characteristic or loops differ, or split), `islands_reversed` (output islands facing against the
+  input), `area_uncovered` (input area farther than one target edge, the side of a square of the
+  input's area over the target quads, from the output faces that stand for its own island: the face's
+  vertices are nearest that island, or its output island's majority is, and islands lying exactly on
+  each other count as one; since 2026-11-05, before that any output face within one *output* edge
+  covered it, so a dropped island next to another island's output and an output with dense regions
+  read as covered), `area_uncovered_any_island` (the same from every output face; the difference is
+  area only another island's output lies near) and `area_wrong_side` (input area that near but under a
+  face facing the other way: thin parts collapsed into one sheet, pleats), and a per-island
   topology line under the global one. `flipped_vs_input` measures against the input oriented as the
   core orients it (`flipped_vs_raw` is the old count against the file's own normals); runs measured
   before 2026-10-22 need `--remeasure`, which `compare` points out. When B has libQEx

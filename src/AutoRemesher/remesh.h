@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 12;
+const int InterfaceVersionMinor = 13;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -104,6 +104,11 @@ struct RemeshParameters {
     bool flattenSpikes = false;
     // Since 1.9.
     QuadSmoothing quadSmoothing = QuadSmoothing::Laplacian;
+    // Since 1.12.  > 0: also count lost parts at the quad width of this
+    // target (QualityReport::referenceLostParts), so a host can tell whether
+    // the parts an earlier run at this target lost came back.  Changes no
+    // output geometry.
+    uint32_t lostPartsReferenceTarget = 0;
 };
 
 struct RemeshRequest {
@@ -175,10 +180,21 @@ const double LostPartQuadWidths = 3.0;
 // part (a vertex whose normal faces it) lies within this many quad widths
 // (QualityReport::thinLostVertexCount).
 const double ThinLostPartQuadWidths = 2.0;
-// Since 1.12.  Share of the input surface farther than one planned quad
+// Since 1.13.  Share of the input surface farther than one planned quad
 // width from the output at or above which the core warns that a large part
 // of the surface is missing (QualityReport::uncoveredAreaShare).
 const double LargeSurfaceLossShare = 0.1;
+
+// Since 1.12.  Lost input vertices by cause at one quad width; the fields of
+// QualityReport with the same names.
+struct LostPartCounts {
+    size_t farInputVertexCount = 0;
+    size_t pieceLostVertexCount = 0;
+    size_t lostPieceCount = 0;
+    size_t thinLostVertexCount = 0;
+    size_t openEdgeLostVertexCount = 0;
+    size_t otherLostVertexCount = 0;
+};
 
 // Measured on the result mesh.  Field definitions are in INTERFACE.md §3.1.
 struct QualityReport {
@@ -242,7 +258,7 @@ struct QualityReport {
     // by that ratio.
     double farthestInputQuadWidths = 0.0;
     size_t farInputVertexCount = 0;
-    // Since 1.12.  Share of the input surface area farther than one h0
+    // Since 1.13.  Share of the input surface area farther than one h0
     // (uncovered) and than LostPartQuadWidths h0 (far) from the output, on
     // area samples at most h0 / 2 apart (the far vertex count alone misleads
     // where the tessellation is dense or coarse: hole rims, a cone's apex).
@@ -261,6 +277,13 @@ struct QualityReport {
     size_t thinLostVertexCount = 0;
     size_t openEdgeLostVertexCount = 0;
     size_t otherLostVertexCount = 0;
+    // Since 1.12.  RemeshParameters::lostPartsReferenceTarget (0: not
+    // measured) and the far vertices by cause at h0 of that target, with the
+    // same distances and rules.  Each raise of the target shrinks h0, so finer
+    // parts count as lost; at the reference width only what the earlier run
+    // could have kept counts.
+    size_t lostPartsReferenceTarget = 0;
+    LostPartCounts referenceLostParts;
     size_t collapsedIslandCount = 0;
     size_t smallestCollapsedIslandFaces = 0;
     size_t smallestCollapsedIslandTargetQuads = 0;
