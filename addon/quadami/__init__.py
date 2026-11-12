@@ -244,28 +244,51 @@ def _flooded_marks(mesh, counts, kinds):
     return [kind for kind in kinds if transfer.flooded(len(mesh.edges), counts.get(kind.lower(), 0))]
 
 
+# Edit Mode steps that clear and set each mark, as Blender 4.2 and 5.0 name
+# them in the Edit Mode header's Edge menu (VIEW3D_MT_edit_mesh_edges).
+MARK_EDIT_STEPS = {
+    "SHARP": ("Edge > Clear Sharp", "Edge > Mark Sharp"),
+    "SEAM": ("Edge > Clear Seam", "Edge > Mark Seam"),
+    "CREASE": ("Edge > Edge Crease, type -1, Enter", "Edge > Edge Crease, type 1, Enter"),
+}
+
+
+def _flood_hint(flooded, from_result=False):
+    """How to replace flooded marks by edges the user chooses, with no
+    numpad or other shortcut beyond Tab and A (both on every keyboard)."""
+    steps = [MARK_EDIT_STEPS[kind] for kind in flooded]
+    text = "To follow chosen edges instead: "
+    if from_result:
+        text += "show the original (eye icon in the Outliner) and click it, then "
+    text += ("Tab into Edit Mode, A to select all, %s; select the edges to keep, %s; Tab back and Remesh"
+             % (" and ".join(clear for clear, _ in steps), " and ".join(mark for _, mark in steps)))
+    if "SHARP" in flooded:
+        text += ". Clearing Sharp can change how the original is shaded"
+    return text
+
+
 def _flood_warning(flooded):
     if not flooded:
         return None
     labels = dict((kind.upper(), label) for kind, label in MARK_NAMES)
     return ("Follow Marks left out %s: more than half of the edges carry it, as after an FBX or OBJ "
-            "import, rather than the edges to keep; Keep from Original does not copy it either"
-            % " and ".join(labels[kind] for kind in flooded))
+            "import, rather than the edges to keep; Keep from Original does not copy it either. %s"
+            % (" and ".join(labels[kind] for kind in flooded), _flood_hint(flooded, from_result=True)))
 
 
 def _mark_line(obj, kinds):
-    """Panel line with how many edges of obj carry each mark, and whether
-    a followed mark floods the mesh."""
+    """Panel line with how many edges of obj carry each mark, and, when a
+    followed mark floods the mesh, how to replace it (else None)."""
     if obj is None or obj.type != "MESH":
         return None
     counts = _mark_counts(obj.data)
     if not counts:
         return None
     text = "Marked: " + ", ".join("%s %d" % (label, counts[kind]) for kind, label in MARK_NAMES if kind in counts)
-    flood = bool(_flooded_marks(obj.data, counts, kinds))
-    if flood:
-        text += " (most edges: not followed)"
-    return text, flood
+    flooded = _flooded_marks(obj.data, counts, kinds)
+    if flooded:
+        text += " (most edges: not followed, Remesh runs without them)"
+    return text, _flood_hint(flooded) if flooded else None
 
 
 def _mesh_arrays(context, obj, follow_marks=()):
@@ -804,10 +827,13 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
             room = _text_room(context)
             column = layout.column(align=True)
             column.enabled = _job is None
-            text, flood = line
-            icon = room.icon if flood else 0
+            text, hint = line
+            icon = room.icon if hint else 0
             for i, part in enumerate(report_rows.wrap(text, room.panel - icon - room.pad, room.measure)):
-                column.label(text=part, icon=("ERROR" if 0 == i else "BLANK1") if flood else "NONE")
+                column.label(text=part, icon=("ERROR" if 0 == i else "BLANK1") if hint else "NONE")
+            if hint:
+                for i, part in enumerate(report_rows.wrap(hint, room.panel - icon - room.pad, room.measure)):
+                    column.label(text=part, icon="INFO" if 0 == i else "BLANK1")
         header, body = layout.panel(ID + "_advanced", default_closed=True)
         header.label(text="Advanced")
         if body is not None:
@@ -834,6 +860,12 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
                 for i, part in enumerate(report_rows.wrap(stall, room.panel - room.icon - room.pad, room.measure)):
                     column.label(text=part, icon="ERROR" if 0 == i else "BLANK1")
             layout.operator(OBJECT_OT_remesh_quads_cancel.bl_idname, icon="CANCEL")
+            note = report_rows.running_note(_job.elapsed)
+            if note:
+                room = _text_room(context)
+                column = layout.column(align=True)
+                for i, part in enumerate(report_rows.wrap(note, room.panel - room.icon - room.pad, room.measure)):
+                    column.label(text=part, icon="INFO" if 0 == i else "BLANK1")
         else:
             layout.operator(OBJECT_OT_remesh_quads.bl_idname, icon="MOD_REMESH")
 

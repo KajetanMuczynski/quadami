@@ -167,6 +167,22 @@ def kept_text(kept):
     return ", ".join(parts)
 
 
+# A run shows the note below its progress bar from this many seconds on.
+RUNNING_NOTE_SECONDS = 30
+
+
+def running_note(seconds):
+    """Note under a long run's progress bar, or None for a short one.  There
+    is deliberately no time limit: a fixed limit would also stop large runs
+    that are only slow, and Esc or Cancel stops any run at once."""
+    if seconds < RUNNING_NOTE_SECONDS:
+        return None
+    minutes, rest = divmod(int(seconds), 60)
+    elapsed = "%d min %02d s" % (minutes, rest) if minutes else "%d s" % rest
+    return ("Running for %s. There is no time limit: it runs until it finishes or you press Cancel "
+            "or Esc. A lower Target Quads runs faster" % elapsed)
+
+
 def wrap(text, width=WARNING_WIDTH, measure=len):
     """A panel text wrapped to the panel's width: greedily by words, so that
     measure(line) <= width; a word wider than that is split.  By default in
