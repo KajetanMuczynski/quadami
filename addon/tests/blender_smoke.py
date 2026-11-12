@@ -50,11 +50,13 @@ if installed:
     addon_utils.enable(module_name, default_set=True, handle_error=None)
     addon = sys.modules[module_name]
     names = importlib.import_module(module_name + ".names")
+    density_module = importlib.import_module(module_name + ".density")
     report = importlib.import_module(module_name + ".report")
     worker = importlib.import_module(module_name + ".worker")
 else:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     import quadami as addon  # noqa: E402
+    from quadami import density as density_module  # noqa: E402
     from quadami import names, report, worker  # noqa: E402
 
     addon.register()
@@ -122,6 +124,14 @@ try:
     flood.attributes.new("sharp_edge", "BOOLEAN", "EDGE").data.foreach_set("value", [True] * len(flood.edges))
     assert addon._flooded_marks(flood, addon._mark_counts(flood), {"SHARP"}) == ["SHARP"], len(flood.edges)
     assert addon._flood_warning(["SHARP"]).startswith("Follow Marks left out Sharp")
+    # Both the panel line and the warning say how to clear the imported marks.
+    assert "Edge > Clear Sharp" in addon._flood_warning(["SHARP"]) and "Outliner" in addon._flood_warning(["SHARP"])
+    hint = addon._flood_hint(["SHARP", "SEAM"])
+    assert "Clear Sharp and Edge > Clear Seam" in hint and "Outliner" not in hint, hint
+    flooded_object = bpy.data.objects.new("Flood", flood)
+    line = addon._mark_line(flooded_object, {"SHARP"})
+    assert "not followed" in line[0] and "Edge > Mark Sharp" in line[1], line
+    bpy.data.objects.remove(flooded_object)
     # Nor are such marks copied onto the result (zigzag paths all over it).
     assert "sharp" in addon.transfer.marked_edges(flood) and "sharp" not in addon.transfer.copied_marks(flood)
     assert "sharp" in addon.transfer.copied_marks(mesh)
@@ -257,6 +267,36 @@ try:
     source.scale = (1.0, 1.0, 3.0)
     bpy.context.view_layer.update()
     assert "scaled unevenly" in panel_labels()
+    source.scale = (1.0, 1.0, 1.0)
+    bpy.context.view_layer.update()
+
+    # Density preview: the source planned, shown, and Change sets Target Quads
+    # within the plan's range; another setting or a mesh edit takes it down.
+    positions, triangles, smooth, marked, flooded = addon._mesh_arrays(bpy.context, source, settings.follow_marks)
+    planned = worker.remesh(executable, positions, triangles, settings.parameters(), marked_edges=marked, plan=True)
+    assert planned.ok and len(planned.plan.edge) == len(positions), (planned.status, planned.message, planned.log)
+    assert planned.plan.quads == settings.target_quads == 2000
+    density_module.show(density_module.Preview(source.name, density_module.settings_key(settings), planned.plan,
+                                               positions, triangles, planned.report))
+    settings.preview_change = 10.0
+    assert settings.target_quads == 2200, settings.target_quads
+    labels = panel_labels()
+    assert "quads planned" in labels and "Quad edge" in labels, labels
+    assert addon._overlay_state() == (2200, True)
+    settings.target_quads = 1800
+    assert abs(settings.preview_change + 10.0) < 1e-6, settings.preview_change
+    settings.target_quads = 4500
+    assert addon._overlay_state() is None and "outside the preview" in panel_labels()
+    settings.target_quads = 2000
+    adaptivity = settings.adaptivity
+    settings.adaptivity = 0.7 if adaptivity != 0.7 else 0.3
+    assert addon._overlay_state() is None and "Settings changed" in panel_labels()
+    settings.adaptivity = adaptivity
+    assert addon._overlay_state() == (2000, True)
+    mesh.vertices[0].co.x += 0.01
+    mesh.update()
+    bpy.context.view_layer.update()
+    assert density_module.current() is None, "a mesh edit drops the plan"
     print("blender_smoke: OK, Blender %s" % bpy.app.version_string)
 finally:
     if installed:

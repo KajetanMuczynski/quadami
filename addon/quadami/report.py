@@ -138,7 +138,7 @@ def summary_rows(report):
     # Parts of the input farther than three quad widths from the result: a
     # limb, vine or spike that came out missing.  Older workers don't send it.
     lost = report.get("lost_parts")
-    # Since interface 1.13 also the share of the surface farther than one
+    # Since interface 1.14 also the share of the surface farther than one
     # quad width: a large share is the first thing to say.
     if report.get("status") == "ok" and lost is not None:
         far = int(lost.get("far_input_vertices", 0))
@@ -174,6 +174,22 @@ def kept_text(kept):
         if count:
             parts.append("%d %s" % (count, words[count != 1]) if isinstance(words, tuple) else words)
     return ", ".join(parts)
+
+
+# A run shows the note below its progress bar from this many seconds on.
+RUNNING_NOTE_SECONDS = 30
+
+
+def running_note(seconds):
+    """Note under a long run's progress bar, or None for a short one.  There
+    is deliberately no time limit: a fixed limit would also stop large runs
+    that are only slow, and Esc or Cancel stops any run at once."""
+    if seconds < RUNNING_NOTE_SECONDS:
+        return None
+    minutes, rest = divmod(int(seconds), 60)
+    elapsed = "%d min %02d s" % (minutes, rest) if minutes else "%d s" % rest
+    return ("Running for %s. There is no time limit: it runs until it finishes or you press Cancel "
+            "or Esc. A lower Target Quads runs faster" % elapsed)
 
 
 def wrap(text, width=WARNING_WIDTH, measure=len):

@@ -35,6 +35,7 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "quadami"))
+import density  # noqa: E402
 import names  # noqa: E402
 import raise_hint  # noqa: E402
 import report  # noqa: E402
@@ -159,7 +160,7 @@ class ReportTest(unittest.TestCase):
         self.assertIn(("Missing parts", "up to 7 quad widths", True), report.summary_rows(lost))
         kept = dict(base, lost_parts={"farthest_input_quad_widths": 0.4, "far_input_vertices": 0})
         self.assertIn(("Missing parts", "none", False), report.summary_rows(kept))
-        # Since 1.13: a large share of the surface missing leads the row, also
+        # Since 1.14: a large share of the surface missing leads the row, also
         # when no vertex is beyond three quad widths.
         plate = dict(base, lost_parts={"farthest_input_quad_widths": 4.5, "far_input_vertices": 128,
                                        "uncovered_area_share": 0.38})
@@ -172,6 +173,11 @@ class ReportTest(unittest.TestCase):
         self.assertIn(("Missing parts", "none", False), report.summary_rows(small))
         # A worker from before the measure sends no lost_parts: no row.
         self.assertFalse(any(label == "Missing parts" for label, _, _ in report.summary_rows(base)))
+
+    def test_running_note(self):
+        self.assertIsNone(report.running_note(29.9))
+        self.assertTrue(report.running_note(30).startswith("Running for 30 s. There is no time limit"))
+        self.assertTrue(report.running_note(125.5).startswith("Running for 2 min 05 s."))
 
     def test_warnings_are_wrapped(self):
         lines = report.warning_lines({"status": "ok", "warnings": ["1 of 3 islands produced no faces"]},
@@ -663,6 +669,50 @@ class FakeWorkerTest(unittest.TestCase):
             job.start()
 
 
+class PlanTest(unittest.TestCase):
+    """The density preview's rescale (worker.Plan) and the shader's copy of it."""
+
+    def plan(self):
+        # Island 0: 90 % of the area; island 1: 10 % with a floor of 32 quads;
+        # island 2: a left-out sliver.
+        islands = [{"area_share": 0.9, "planned_quads": 900.0, "floor_quads": 32.0, "left_out": False},
+                   {"area_share": 0.1, "planned_quads": 100.0, "floor_quads": 32.0, "left_out": False},
+                   {"area_share": 0.0, "planned_quads": 0.0, "floor_quads": 1.0, "left_out": True}]
+        edge = np.array([1.0, 2.0, 0.5, 0.5, 0.0], dtype=np.float32)
+        island = np.array([0, 0, 1, 1, 2])
+        return worker.Plan(edge, island, islands, 1000)
+
+    def test_rescale(self):
+        plan = self.plan()
+        self.assertAlmostEqual(plan.planned_quads(1000), 1000.0)
+        # Island 1 reaches its floor below 320 quads, then stops shrinking.
+        self.assertAlmostEqual(plan.planned_quads(200), 0.9 * 200 + 32.0)
+        edge = plan.edge_at(1250)
+        np.testing.assert_allclose(edge[:4], plan.edge[:4] * math.sqrt(1000 / 1250), rtol=1e-6)
+        self.assertEqual(edge[4], 0.0)
+        edge = plan.edge_at(200)
+        self.assertAlmostEqual(float(edge[2]), 0.5 * math.sqrt(100 / 32), places=5)
+
+    def test_shader_matches_rescale(self):
+        plan = self.plan()
+        a, share, floor = density.vertex_attributes(plan)
+        for quads in (200, 800, 1000, 1250):
+            np.testing.assert_allclose(density.shader_edges(a, share, floor, quads), plan.edge_at(quads),
+                                       rtol=1e-5)
+
+    def test_change_limits(self):
+        self.assertEqual(density.change_quads(5000, 0.0), 5000)
+        self.assertEqual(density.change_quads(5000, density.CHANGE_MAX), 6000)
+        self.assertEqual(density.change_quads(5000, density.CHANGE_MIN), 4000)
+        self.assertEqual(density.change_quads(5000, 1000.0), 6000)
+
+    def test_band(self):
+        self.assertTrue(density.in_band(5000, 4000))
+        self.assertTrue(density.in_band(5000, 6000))
+        self.assertFalse(density.in_band(5000, 3999))
+        self.assertFalse(density.in_band(5000, 6001))
+
+
 @unittest.skipIf(EXECUTABLE is None, "set AUTOREMESHER_EXECUTABLE to a built autoremesher-cli")
 class CliTest(unittest.TestCase):
     @classmethod
@@ -705,6 +755,18 @@ class CliTest(unittest.TestCase):
         # The output lies on the unit sphere.
         radii = np.linalg.norm(outcome.positions, axis=1)
         self.assertLess(float(np.abs(radii - 1.0).max()), 0.01)
+
+    def test_plan(self):
+        outcome = worker.remesh(EXECUTABLE, self.positions.astype(np.float32), self.triangles,
+                                {"target_quads": 2000, "adaptivity": 0.0}, plan=True)
+        self.assertEqual(outcome.status, "ok", outcome.message + "\n" + outcome.log)
+        plan = outcome.plan
+        self.assertEqual(len(plan.edge), len(self.positions))
+        self.assertEqual(plan.quads, 2000)
+        self.assertAlmostEqual(plan.planned_quads(2000), 2000.0, places=3)
+        # Uniform quads: the edge is sqrt(area / quads) on the unit sphere.
+        self.assertAlmostEqual(float(np.median(plan.edge)) / math.sqrt(4 * math.pi / 2000), 1.0, delta=0.03)
+        np.testing.assert_allclose(plan.edge_at(2500), plan.edge * math.sqrt(2000 / 2500), rtol=1e-6)
 
     def test_fold_repair_flag(self):
         outcome = worker.remesh(EXECUTABLE, self.positions.astype(np.float32), self.triangles,

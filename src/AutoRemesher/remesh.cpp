@@ -30,6 +30,7 @@
 #include <iomanip>
 #include <limits>
 #include <locale>
+#include <memory>
 #include <numeric>
 #include <sstream>
 #include <unordered_map>
@@ -980,6 +981,56 @@ bool parseQuadSmoothing(const std::string& text, QuadSmoothing* smoothing)
     return true;
 }
 
+// The engine for a request: its mesh, parameters and callbacks.
+static std::unique_ptr<::AutoRemesher::AutoRemesher> makeEngine(const RemeshRequest& request,
+    const RemeshCallbacks& callbacks)
+{
+    std::vector<Vector3> vertices;
+    vertices.reserve(request.positions.size() / 3);
+    for (size_t i = 0; i < request.positions.size(); i += 3)
+        vertices.emplace_back(request.positions[i], request.positions[i + 1], request.positions[i + 2]);
+    std::vector<std::vector<size_t>> triangles;
+    triangles.reserve(request.triangles.size() / 3);
+    for (size_t i = 0; i < request.triangles.size(); i += 3)
+        triangles.push_back({ request.triangles[i], request.triangles[i + 1], request.triangles[i + 2] });
+
+    const RemeshParameters& parameters = request.parameters;
+    auto enginePointer = std::make_unique<::AutoRemesher::AutoRemesher>(std::move(vertices), std::move(triangles));
+    auto& engine = *enginePointer;
+    // The engine counts triangles, two per quad, as the app always passed it.
+    engine.setTargetTriangleCount((size_t)parameters.targetQuadCount * 2);
+    if (parameters.edgeScaling > 0.0)
+        engine.setScaling(parameters.edgeScaling);
+    engine.setGradientAdaptivity(parameters.adaptivity);
+    engine.setAnisotropy(parameters.anisotropy);
+    engine.setSharpEdgeDegrees(parameters.sharpEdgeDegrees);
+    if (!request.featureEdges.empty()) {
+        std::vector<std::pair<size_t, size_t>> marked;
+        marked.reserve(request.featureEdges.size() / 2);
+        for (size_t i = 0; i + 1 < request.featureEdges.size(); i += 2)
+            marked.emplace_back(request.featureEdges[i], request.featureEdges[i + 1]);
+        engine.setMarkedEdges(std::move(marked));
+    }
+    engine.setSmoothNormalDegrees(parameters.smoothNormalDegrees);
+    engine.setUseQex(Extractor::Qex == parameters.extractor);
+    engine.setRepairInputFolds(parameters.repairFolds);
+    engine.setFlattenSpikes(parameters.flattenSpikes);
+    engine.setTangentialQuadSmoothing(QuadSmoothing::Tangential == parameters.quadSmoothing);
+    engine.setTrianglesPerQuad(MeshResolution::Fast == parameters.resolution
+            ? ::AutoRemesher::FastTrianglesPerQuad
+            : ::AutoRemesher::QualityTrianglesPerQuad);
+    if (callbacks.progress) {
+        engine.setTag(const_cast<RemeshProgressHandler*>(&callbacks.progress));
+        engine.setProgressHandler(forwardProgress);
+    }
+    if (nullptr != callbacks.cancel) {
+        const CancelToken* token = callbacks.cancel;
+        engine.setCancelCheck([token]() { return token->cancelRequested(); });
+    }
+
+    return enginePointer;
+}
+
 RemeshResult remeshWithPreview(const RemeshRequest& request,
     const RemeshCallbacks& callbacks,
     RemeshPreview* preview)
@@ -1003,48 +1054,10 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     if (nullptr != callbacks.cancel && callbacks.cancel->cancelRequested())
         return finish(RemeshStatus::Cancelled, "cancelled before the run started");
 
-    std::vector<Vector3> vertices;
-    vertices.reserve(request.positions.size() / 3);
-    for (size_t i = 0; i < request.positions.size(); i += 3)
-        vertices.emplace_back(request.positions[i], request.positions[i + 1], request.positions[i + 2]);
-    std::vector<std::vector<size_t>> triangles;
-    triangles.reserve(request.triangles.size() / 3);
-    for (size_t i = 0; i < request.triangles.size(); i += 3)
-        triangles.push_back({ request.triangles[i], request.triangles[i + 1], request.triangles[i + 2] });
-
+    auto enginePointer = makeEngine(request, callbacks);
+    auto& engine = *enginePointer;
     const RemeshParameters& parameters = request.parameters;
-    ::AutoRemesher::AutoRemesher engine(std::move(vertices), std::move(triangles));
-    // The engine counts triangles, two per quad, as the app always passed it.
-    engine.setTargetTriangleCount((size_t)parameters.targetQuadCount * 2);
-    if (parameters.edgeScaling > 0.0)
-        engine.setScaling(parameters.edgeScaling);
-    engine.setGradientAdaptivity(parameters.adaptivity);
-    engine.setAnisotropy(parameters.anisotropy);
-    engine.setSharpEdgeDegrees(parameters.sharpEdgeDegrees);
-    if (!request.featureEdges.empty()) {
-        std::vector<std::pair<size_t, size_t>> marked;
-        marked.reserve(request.featureEdges.size() / 2);
-        for (size_t i = 0; i + 1 < request.featureEdges.size(); i += 2)
-            marked.emplace_back(request.featureEdges[i], request.featureEdges[i + 1]);
-        engine.setMarkedEdges(std::move(marked));
-    }
-    engine.setSmoothNormalDegrees(parameters.smoothNormalDegrees);
-    engine.setUseQex(Extractor::Qex == parameters.extractor);
     engine.setKeepPreviewData(nullptr != preview);
-    engine.setRepairInputFolds(parameters.repairFolds);
-    engine.setFlattenSpikes(parameters.flattenSpikes);
-    engine.setTangentialQuadSmoothing(QuadSmoothing::Tangential == parameters.quadSmoothing);
-    engine.setTrianglesPerQuad(MeshResolution::Fast == parameters.resolution
-            ? ::AutoRemesher::FastTrianglesPerQuad
-            : ::AutoRemesher::QualityTrianglesPerQuad);
-    if (callbacks.progress) {
-        engine.setTag(const_cast<RemeshProgressHandler*>(&callbacks.progress));
-        engine.setProgressHandler(forwardProgress);
-    }
-    if (nullptr != callbacks.cancel) {
-        const CancelToken* token = callbacks.cancel;
-        engine.setCancelCheck([token]() { return token->cancelRequested(); });
-    }
 
     // Hosts get every outcome as a status: a worker process should report an
     // error, and an exception escaping into a Qt thread would end the app.
@@ -1058,6 +1071,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     report.ignoredFeatureEdgeCount = engine.ignoredMarkedEdgeCount();
     const size_t marksDroppedIslands = engine.markedEdgesDroppedIslandCount();
     const size_t marksTooDenseIslands = engine.markedEdgesTooDenseIslandCount();
+    const size_t sharpDroppedIslands = engine.sharpEdgesDroppedIslandCount();
     if (nullptr != preview)
         preview->phaseReport = engine.phaseReport();
     result.stageDiagnostics = engine.takeDiagnostics();
@@ -1138,6 +1152,11 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
         report.warnings.push_back("Marked edges were not followed on " + std::to_string(marksDroppedIslands)
             + (1 == marksDroppedIslands ? " part" : " parts")
             + ": following them folded the quads there (marks that cross other creases or each other)");
+    }
+    if (sharpDroppedIslands > 0) {
+        report.warnings.push_back("Sharp edges were not kept on " + std::to_string(sharpDroppedIslands)
+            + (1 == sharpDroppedIslands ? " part" : " parts")
+            + ": keeping them changed the part's shape (a hole closed or the part collapsed)");
     }
     if (report.ignoredFeatureEdgeCount > 0) {
         report.warnings.push_back(std::to_string(report.ignoredFeatureEdgeCount)
@@ -1261,6 +1280,64 @@ RemeshResult remesh(const RemeshRequest& request, const RemeshCallbacks& callbac
     return remeshWithPreview(request, callbacks, nullptr);
 }
 
+RemeshResult planRemesh(const RemeshRequest& request, const RemeshCallbacks& callbacks)
+{
+    const auto start = std::chrono::steady_clock::now();
+    RemeshResult result;
+    result.parameters = request.parameters;
+    QualityReport& report = result.report;
+    report.inputVertexCount = request.positions.size() / 3;
+    report.inputTriangleCount = request.triangles.size() / 3;
+    report.inputFeatureEdgeCount = request.featureEdges.size() / 2;
+    const auto finish = [&](RemeshStatus status, const std::string& message) {
+        result.status = status;
+        result.message = message;
+        report.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        return result;
+    };
+    if (const char* reason = validate(request))
+        return finish(RemeshStatus::InvalidInput, reason);
+    if (nullptr != callbacks.cancel && callbacks.cancel->cancelRequested())
+        return finish(RemeshStatus::Cancelled, "cancelled before the run started");
+
+    auto enginePointer = makeEngine(request, callbacks);
+    auto& engine = *enginePointer;
+    engine.setKeepPreviewData(false);
+    engine.setPlanOnly(true);
+    bool completed = false;
+    try {
+        completed = engine.remesh();
+    } catch (const std::exception& e) {
+        return finish(RemeshStatus::Failed, std::string("planning failed: ") + e.what());
+    }
+    report.ignoredFeatureEdgeCount = engine.ignoredMarkedEdgeCount();
+    result.stageDiagnostics = engine.takeDiagnostics();
+    if (!result.stageDiagnostics.empty())
+        report.diagnostics = summarizeDiagnostics(result.stageDiagnostics);
+    if (engine.cancelled())
+        return finish(RemeshStatus::Cancelled, "cancelled");
+    if (!completed)
+        return finish(RemeshStatus::Failed, "the core stopped before planning any island");
+    for (const auto& step : engine.stepTimes())
+        report.stepSeconds.emplace_back(step.name, step.microseconds / 1e6);
+    report.islandCount = engine.islandCount();
+
+    RemeshPlan& plan = result.plan;
+    plan.vertexEdgeLengths = engine.planVertexEdgeLengths();
+    plan.vertexIslands = engine.planVertexIslands();
+    const double scaling = request.parameters.edgeScaling > 0.0 ? request.parameters.edgeScaling : 1.0;
+    for (const auto& island : engine.planIslands()) {
+        PlanIsland out;
+        out.areaShare = island.areaShare;
+        out.floorQuads = island.floorQuads;
+        out.leftOut = island.leftOut;
+        out.plannedQuads = island.leftOut ? 0.0 : island.plannedQuads / (scaling * scaling);
+        plan.plannedQuads += out.plannedQuads;
+        plan.islands.push_back(out);
+    }
+    return finish(RemeshStatus::Ok, std::string());
+}
+
 std::string toJson(const RemeshResult& result)
 {
     const RemeshParameters& parameters = result.parameters;
@@ -1360,6 +1437,21 @@ std::string toJson(const RemeshResult& result)
     for (size_t i = 0; i < report.warnings.size(); ++i)
         out << (0 == i ? "" : ", ") << jsonString(report.warnings[i]);
     out << "],\n";
+    if (!result.plan.islands.empty()) {
+        const RemeshPlan& plan = result.plan;
+        out << "  \"plan\": {\"vertices\": " << jsonCount(plan.vertexEdgeLengths.size())
+            << ", \"planned_quads\": " << jsonNumber(plan.plannedQuads)
+            << ", \"islands\": [";
+        for (size_t i = 0; i < plan.islands.size(); ++i) {
+            const PlanIsland& island = plan.islands[i];
+            out << (0 == i ? "\n" : ",\n")
+                << "    {\"area_share\": " << jsonNumber(island.areaShare)
+                << ", \"planned_quads\": " << jsonNumber(island.plannedQuads)
+                << ", \"floor_quads\": " << jsonNumber(island.floorQuads)
+                << ", \"left_out\": " << (island.leftOut ? "true" : "false") << "}";
+        }
+        out << "\n  ]},\n";
+    }
     out << "  \"diagnostics\": {";
     for (size_t i = 0; i < report.diagnostics.size(); ++i) {
         out << (0 == i ? "" : ", ") << jsonString(report.diagnostics[i].first)
