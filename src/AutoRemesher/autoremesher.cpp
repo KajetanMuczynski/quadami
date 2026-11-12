@@ -1264,6 +1264,13 @@ bool AutoRemesher::remeshIslands()
     auto t_start = std::chrono::high_resolution_clock::now();
     const double cpuStart = processCpuSeconds();
 
+    // Triangles that use a vertex twice go before anything reads edges: they
+    // have no third edge, and every later step assumes three.
+    const size_t repeatedCornerTriangles = removeRepeatedCornerTriangles(m_triangles);
+    if (0 != repeatedCornerTriangles)
+        std::cerr << "Input cleanup: removed " << repeatedCornerTriangles
+                  << " faces that use a vertex twice" << std::endl;
+
     // Open seams first: welding can leave zero-length edges and duplicate
     // triangles, which the next two steps remove.  Pinched vertices are split
     // last, once no merge can make new ones.
@@ -1277,6 +1284,7 @@ bool AutoRemesher::remeshIslands()
     if (!m_markedEdges.empty() && 0 != seams.weldedVertices)
         followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
     InputCleanupStats cleanup = cleanInput(m_vertices, m_triangles, inputCleanupTolerance(m_vertices));
+    cleanup.repeatedCornerTriangles = repeatedCornerTriangles;
     cleanup.weldedEdges = seams.weldedEdges;
     cleanup.weldedVertices = seams.weldedVertices;
     cleanup.weldKeptParts = seams.keptParts;
@@ -2207,6 +2215,7 @@ bool AutoRemesher::remeshIslands()
         run.set("input_welded_edges", (double)cleanup.weldedEdges);
         run.set("input_welded_vertices", (double)cleanup.weldedVertices);
         run.set("input_weld_kept_parts", (double)cleanup.weldKeptParts);
+        run.set("input_repeated_corner_triangles", (double)cleanup.repeatedCornerTriangles);
         run.set("input_duplicate_triangles", (double)cleanup.duplicateTriangles);
         run.set("input_split_vertices", (double)cleanup.splitVertices);
         run.set("input_sliver_islands", (double)sliverIslands);

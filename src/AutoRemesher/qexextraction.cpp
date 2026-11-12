@@ -172,6 +172,13 @@ bool extractWithQex(const std::vector<Vector3>& vertices,
             outcome->reason = "a face is not a triangle";
             return false;
         }
+        // OpenMesh's add_face() assumes distinct corners: on (a, a, b) it
+        // links halfedges through invalid handles and writes before its
+        // arrays (heap corruption, "free(): invalid size").
+        if (tri[0] == tri[1] || tri[1] == tri[2] || tri[2] == tri[0]) {
+            outcome->reason = "a triangle uses a vertex twice";
+            return false;
+        }
     }
     outcome->cutVertices = cutAtNonManifoldVertices(vertices, triangles, &cutVertices, &cutTriangles);
     QEx::TriMesh mesh;

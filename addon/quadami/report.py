@@ -85,8 +85,8 @@ def summary_rows(report):
         folded = output.get("folded_or_twisted_faces", output.get("folded_faces", 0))
         twisted = output.get("twisted_quads", 0)
         rows.append(("Folded faces", "%d (%d twisted)" % (folded, twisted) if twisted else str(folded), folded > 0))
-        # The core's input cleanup: open seams it welded, duplicate triangles
-        # it removed, pinched vertices it split, islands with almost no area
+        # The core's input cleanup: faces that use a vertex twice and
+        # duplicate triangles it removed, open seams it welded, pinched vertices it split, islands with almost no area
         # for their length (zero-width slivers) it left out, triangles on a zero-length edge it dropped and
         # triangles it turned to match their neighbours.  Not a problem, only
         # reported.
@@ -95,6 +95,9 @@ def summary_rows(report):
         welded = int(diagnostics.get("input_welded_edges", 0))
         if welded:
             fixes.append("%d seam edges welded" % welded)
+        repeated = int(diagnostics.get("input_repeated_corner_triangles", 0))
+        if repeated:
+            fixes.append("%d faces with a repeated vertex removed" % repeated)
         duplicates = int(diagnostics.get("input_duplicate_triangles", 0))
         if duplicates:
             fixes.append("%d duplicate faces removed" % duplicates)
