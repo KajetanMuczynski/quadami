@@ -131,6 +131,12 @@ public:
     {
         return m_markedEdgesDroppedIslandCount;
     }
+    // Islands remeshed again without their sharp edges: the run with them
+    // changed the island's topology or lost most of its quads.
+    size_t sharpEdgesDroppedIslandCount() const
+    {
+        return m_sharpEdgesDroppedIslandCount;
+    }
     // Islands whose marks were not used: more than a quarter of the planned
     // quad edges would have to lie on them.
     size_t markedEdgesTooDenseIslandCount() const
@@ -378,6 +384,8 @@ public:
         size_t weldedEdges = 0;
         size_t weldedVertices = 0;
         size_t weldKeptParts = 0;
+        // Triangles of the input that use one vertex twice, removed first.
+        size_t repeatedCornerTriangles = 0;
         // Triangles removed because an earlier one has the same corners.
         size_t duplicateTriangles = 0;
         // Vertices added by splitPinchedVertices(): one per extra fan.
@@ -492,6 +500,7 @@ private:
     std::vector<std::pair<size_t, size_t>> m_markedEdges;
     size_t m_ignoredMarkedEdgeCount = 0;
     size_t m_markedEdgesDroppedIslandCount = 0;
+    size_t m_sharpEdgesDroppedIslandCount = 0;
     size_t m_markedEdgesTooDenseIslandCount = 0;
     double m_smoothNormalDegrees = 0.0;
     bool m_useQex = true;
