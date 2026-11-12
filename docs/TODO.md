@@ -283,7 +283,7 @@ Everything we know about and deliberately left undone, with the reason and what 
 
 | Gap | Why accepted for now | Closed by | Owner | Since |
 |---|---|---|---|---|
-| Add-on UI untested: panel, modal operator, Esc and progress in a real Blender window; Windows on ARM | CI runs Blender headless only (`addon/README.md` "Status"; its "macOS is untested" predates the macOS CI job) | Manual runs (Windows run, Mac check above) | K | 2026-10-15 |
+| Add-on UI partly untested: how the panel looks, Esc from the keyboard, the progress display, undo; the modal operator in a window on Windows and macOS; Windows on ARM | Since 2026-11-04 Linux CI presses Remesh, Copy Report and Cancel in Blender 4.5's window (`addon/tests/blender_operator.py`); Windows and macOS run Blender headless only (no GPU on the runners) | Manual runs (Windows run, Mac check above) | K | 2026-10-15 |
 | Output gate reports folded faces and empty islands but does not fail on them | Master still has folds on the corpus; gating now would keep CI red | The map fixes (3.3, 3.8, 4.1/4.5), then gate | C | 2026-10-15 |
 | Runs with the wrong genus (M16) | After libQEx (2026-10-22): corpus 24 replicate-runs, all demosthenes, closed 2 (torus_0.03 Quality 150), all lost handles; 96 % are already missing in libQEx's raw output, so map-bound (2.13) | Local sizing at short handles (2.22 (a)) | C | 2026-10-21 |
 | Output differs across platforms | Each build is deterministic on Linux, Windows and macOS (checked 2026-10-26); no run matches across platforms (0 of 1,800 run keys, release-check #5): OBJ parse on arm64, math library, Eigen's vector code, library sort and container order (1.7) | 2.9a, 2.9; the full fix is 2.9b (decided 2026-10-26); per-platform H7 as a CI check (8.6) | C | 2026-10-14 |
