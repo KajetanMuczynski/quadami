@@ -518,6 +518,64 @@ class CopyReportTest(unittest.TestCase):
         self.assertTrue(report.system_text())
 
 
+class StallTest(unittest.TestCase):
+    def test_threshold(self):
+        minimum = report.STALL_MINIMUM_SECONDS
+        self.assertEqual(report.stall_seconds(5000), minimum)
+        # Grows with the target, and with the time the run took before.
+        self.assertGreater(report.stall_seconds(1_000_000), report.stall_seconds(200_000))
+        self.assertGreater(report.stall_seconds(200_000), minimum)
+        self.assertEqual(report.stall_seconds(5000, before=1000), 1000 * report.STALL_ELAPSED_FACTOR)
+        # Never below the longest step measured at the reference target.
+        reference = report.stall_seconds(report.STALL_REFERENCE_QUADS)
+        self.assertGreaterEqual(reference, report.STALL_MARGIN * report.STALL_REFERENCE_SECONDS)
+
+    def test_note(self):
+        self.assertIsNone(report.stall_note(299, 400, 5000, "Rounding cover to integers"))
+        self.assertEqual(report.stall_status(299, 400, 5000), "")
+        note = report.stall_note(300, 400, 5000, "Rounding cover to integers")
+        self.assertTrue(note.startswith('No progress for 5 min in "Rounding cover to integers"'), note)
+        self.assertIn("press Cancel", note)
+        self.assertEqual(report.stall_status(3 * 3600 + 120, 4 * 3600, 5000),
+                         "no progress for 3 h 02 min, may be stuck")
+        # A silence shorter than twice the run before it is not a stall.
+        self.assertIsNone(report.stall_note(400, 700, 5000))
+
+    def test_note_fits_the_panel(self):
+        # At most 7 lines of WARNING_WIDTH characters, the narrowest sidebar.
+        note = report.stall_note(7200, 7300, 199_999, "Collapsing three valence edge pairs")
+        self.assertLessEqual(len(report.wrap(note)), 7, report.wrap(note))
+
+    @unittest.skipIf(os.name == "nt", "uses a shell script as the worker")
+    def test_silent_restarts_on_progress(self):
+        with tempfile.TemporaryDirectory() as folder:
+            script = os.path.join(folder, "slow.sh")
+            with open(script, "w") as f:
+                f.write("#!/bin/sh\nsleep 0.6\necho '5% done. Solving'\necho 'a log line'\nsleep 0.6\n")
+            os.chmod(script, 0o755)
+            positions, triangles = uv_sphere(4, 8)
+            job = worker.RemeshJob(script, positions, triangles, {"target_quads": 100})
+            self.assertEqual(job.silent, 0.0)
+            job.start()
+            try:
+                silent_before, seen = 0.0, False
+                while not job.done:
+                    job.poll()
+                    if job.step == "Solving" and not seen:
+                        seen = True
+                        self.assertLess(job.silent, 0.3)
+                    if not seen:
+                        silent_before = job.silent
+                    time.sleep(0.02)
+                self.assertTrue(seen)
+                self.assertGreater(silent_before, 0.4)
+                # Log lines do not count as progress.
+                self.assertGreater(job.silent, 0.4)
+                self.assertGreaterEqual(job.elapsed, job.silent)
+            finally:
+                job.cleanup()
+
+
 class EnvironmentTest(unittest.TestCase):
     def test_snap_library_paths_dropped(self):
         env = worker.worker_environment({
