@@ -268,6 +268,26 @@ Known limits (0.3 preview):
   remesher straightens it, but on coarse models a zigzag larger than a quad stays. Draw more points there.
 - If following the guides would fold the quads of a part, that part is remeshed without them and a warning says so.
 
+### Density Preview: pick Target Quads before you remesh
+
+**Preview Density** (in a box under the main settings) shows how big the quads will be, painted on your
+model, without remeshing. It plans the run once (a progress bar; Esc cancels), which takes about half as
+long as a Remesh at the same Target Quads. Then:
+
+- Orange parts get smaller quads, blue parts larger ones; the panel says about how many quads are planned
+  and the quad edge length in scene units. **Checker** draws squares about one quad across, so you can see
+  whether a detail (an ear, a finger, a ridge) gets one quad or several.
+- Drag **Change** (±20 %) or type a new Target Quads within that range: the colours and squares follow
+  at once, nothing is recomputed. Change sets Target Quads, so Remesh then uses the count you settled on.
+- It is a plan, not the result, but a close one: a region's quads usually come out within about 5 % of
+  the shown size, about as close as two Remesh runs of the same model are to each other. Small flat parts
+  (leaves, flower cards) and flat CAD faces can be 10-30 % off, and at low Target Quads two runs of a
+  sculpt can differ by about 10 % anyway. On a low-poly model (a box, a cylinder, a cone) each big face shows
+  about its average size: the result's quads still get smaller toward its corners and rims, by up to about
+  1.4×. It shows size only, never edge loops or poles.
+- Editing the mesh removes the preview. Changing another setting, or Target Quads more than 20 % away from
+  the planned count, asks you to preview again. Click the button again to hide it.
+
 ---
 
 ## 5. Reading the result

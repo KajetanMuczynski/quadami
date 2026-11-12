@@ -61,7 +61,11 @@ public:
         const ProgressHandler* progressHandler = nullptr,
         // The caller's SurfaceMesh of these vertices and triangles, if it has
         // one, instead of a second copy built here.
-        const SurfaceMesh* surfaceMesh = nullptr);
+        const SurfaceMesh* surfaceMesh = nullptr,
+        // A plan (--plan-only): the quad edge each triangle gets from the
+        // continuous cover, sqrt(3D area / uv area); the solve stops there,
+        // before the rounding, and leaves the rest of the result empty.
+        std::vector<double>* planFaceEdges = nullptr);
 };
 
 }
