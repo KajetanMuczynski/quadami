@@ -15,8 +15,9 @@ case the gate fails on:
     which keeps the input's genus and so passes every topology count (TARGETS H4, Kajetan 2026-10-23);
   - an output OBJ whose own counts disagree with the report (so a broken counter can't hide a
     bad mesh).
-Folded faces, boundary edges, holes in closed islands and components are reported, not gated (an
-island without output fails the coverage check), until the plan sets targets for them (TODO 0.7). The thresholds are wide on purpose: this
+Folded faces, twisted quads (folded under both diagonals), boundary edges, holes in closed islands
+and components are reported, not gated (an island without output fails the coverage check), until
+the plan sets targets for them (TODO 0.7). The thresholds are wide on purpose: this
 gate catches broken output, not small quality changes. A Markdown table goes to $GITHUB_STEP_SUMMARY when set.
 """
 import json
@@ -300,7 +301,7 @@ def run_case(cli, work, name, mesh, target):
     out = report["output"]
     quads, others, non_manifold = obj_counts(output)
     row.update(quads=quads, non_quads=others, non_manifold=non_manifold,
-               folded=out["folded_faces"], boundary=out["boundary_edges"],
+               folded=out["folded_faces"], twisted=out["twisted_quads"], boundary=out["boundary_edges"],
                components=out["components"], empty_islands=report["islands"]["without_output"],
                holes=report["islands"]["holes"],
                islands=report["islands"]["input"])
@@ -328,7 +329,7 @@ def main():
     os.makedirs(work, exist_ok=True)
     rows = [run_case(cli, work, name, mesh, target) for name, mesh, target in corpus()]
 
-    columns = ["case", "target", "quads", "non_quads", "non_manifold", "folded", "empty_islands",
+    columns = ["case", "target", "quads", "non_quads", "non_manifold", "folded", "twisted", "empty_islands",
                "islands", "boundary", "holes", "components", "uncovered", "seconds"]
     lines = ["| " + " | ".join(columns) + " | result |", "|" + "---|" * (len(columns) + 1)]
     for row in rows:

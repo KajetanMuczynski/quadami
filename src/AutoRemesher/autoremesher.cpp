@@ -101,6 +101,30 @@ namespace {
 
     const double triangleAreaPerSquaredEdge = 0.86602540378 * 0.5;
 
+    // A conical tip asks the quads for round(deficit / 90 degrees) quarter
+    // turns at its apex; from 135 degrees on that is two, a valence-2 vertex
+    // (Blender's default cone: 199 degrees). Below, a single valence-3 cone
+    // (a box corner, 90 degrees) does not need the apex kept to look right.
+    // The threshold stays off 135 and 150 degrees, which CAD corners hit
+    // exactly (45 and 30 degree prisms), so float noise does not decide.
+    // The deficit is gathered within half a target edge of T, so a tip
+    // rounded off below that scale in a dense input still counts.
+    const double conicalTipDegrees = 140.0;
+    // From 225 degrees on a tip asks for three or more quarter turns, more
+    // than a valence-2 vertex gives: a needle (TODO 2.19). Kept there, a
+    // brush's one-vertex spike split off as its own piece of quads
+    // (brush_box_relief, brush_pits), so needles are left as they were.
+    const double needleTipDegrees = 225.0;
+    const double conicalTipRadius = 0.5;
+    // How far the deficit gathered out to eight edges of T may stray from
+    // the one at half an edge before the tip counts as rounded or ringed
+    // rather than a cone: real cones stay within 1 degree, the false tips
+    // found on the bench sets moved 16 degrees or more (2026-11-01); a
+    // sculpted horn that is a cone for only three quads costs folds and
+    // libQEx fallbacks when pinned (realsculpt cube).
+    const double conicalTipHoldDegrees = 10.0;
+    const double conicalTipHoldShare = 0.05;
+
     // Rounds of tangential smoothing after the surface projection (TODO 2.8),
     // the extractor's own count.
     const size_t surfaceRelaxIterations = 5;
@@ -312,6 +336,133 @@ namespace {
                 ++lengths.nearTheta;
         }
         return lengths;
+    }
+
+    // Conical tips (TODO 2.23): interior vertices where the angle deficit
+    // (2 pi minus the angle sum) gathered within `radius` is at least
+    // `minimumDeficit` and below `maximumDeficit`, the apex of a cone. Each
+    // tip is the vertex with the largest own deficit of its cluster, and it
+    // must hold at least half of the gathered deficit: a point, not a rounded
+    // cap smaller than a quad (the fingertips of human_neutral at 10k hold 5
+    // to 27 %, a subdivided cone's apex 75 %). A cluster touching a boundary
+    // is left out, and so is one whose triangles do not form a cap (some
+    // faces away from their mean normal): a corner of sharp edges, which the
+    // feature edges hold, or folded brush input, whose angle sums mean
+    // nothing (brush_box_relief had 18 such "tips"); so is one whose deficit
+    // does not hold out to one and two T edges. The isotropic remesh
+    // keeps tips where they are: it used to collapse and relax the apex away,
+    // so the quads were laid out on a cut cone and their cap sat about one
+    // quad below the tip.
+    std::vector<size_t> conicalTips(const std::vector<Vector3>& vertices,
+        const std::vector<std::vector<size_t>>& triangles, double radius, double minimumDeficit,
+        double maximumDeficit)
+    {
+        const size_t n = vertices.size();
+        std::vector<double> angleSum(n, 0.0);
+        std::vector<std::vector<size_t>> neighbours(n);
+        std::vector<std::vector<size_t>> vertexTriangles(n);
+        std::unordered_map<unsigned long long, int> edgeFaces;
+        const auto key = [](size_t a, size_t b) {
+            return ((unsigned long long)std::min(a, b) << 32) | (unsigned long long)std::max(a, b);
+        };
+        for (size_t i = 0; i < triangles.size(); ++i) {
+            const auto& t = triangles[i];
+            if (t.size() != 3)
+                continue;
+            for (size_t k = 0; k < 3; ++k) {
+                const size_t a = t[k], b = t[(k + 1) % 3], c = t[(k + 2) % 3];
+                const Vector3 u = vertices[b] - vertices[a], w = vertices[c] - vertices[a];
+                angleSum[a] += std::atan2(Vector3::crossProduct(u, w).length(), Vector3::dotProduct(u, w));
+                ++edgeFaces[key(a, b)];
+                neighbours[a].push_back(b);
+                vertexTriangles[a].push_back(i);
+            }
+        }
+        const auto isCap = [&](const std::vector<size_t>& vertexSet) {
+            std::vector<Vector3> normals;
+            Vector3 mean;
+            for (const size_t u : vertexSet)
+                for (const size_t i : vertexTriangles[u]) {
+                    const auto& t = triangles[i];
+                    normals.push_back(Vector3::crossProduct(vertices[t[1]] - vertices[t[0]], vertices[t[2]] - vertices[t[0]]));
+                    mean += normals.back();
+                }
+            for (const Vector3& normal : normals)
+                if (Vector3::dotProduct(normal, mean) <= 0.0)
+                    return false;
+            return true;
+        };
+        std::vector<char> interior(n, 1);
+        for (const auto& it : edgeFaces)
+            if (it.second != 2)
+                interior[(size_t)(it.first >> 32)] = interior[(size_t)(it.first & 0xffffffffu)] = 0;
+        std::vector<double> deficit(n, 0.0);
+        std::vector<size_t> candidates;
+        const double seedDeficit = 5.0 * M_PI / 180.0;
+        for (size_t v = 0; v < n; ++v) {
+            if (!interior[v] || neighbours[v].empty())
+                continue;
+            deficit[v] = 2.0 * M_PI - angleSum[v];
+            if (deficit[v] >= seedDeficit)
+                candidates.push_back(v);
+        }
+        std::sort(candidates.begin(), candidates.end(), [&](size_t a, size_t b) {
+            return deficit[a] != deficit[b] ? deficit[a] > deficit[b] : a < b;
+        });
+        std::vector<char> taken(n, 0);
+        std::vector<size_t> tips, region;
+        std::vector<char> seen(n, 0);
+        // The vertices within `distance` of v, connected through the mesh,
+        // into `region`; returns their deficit, `open` if one is on a boundary.
+        const auto gather = [&](size_t v, double distance, bool* open) {
+            region.assign(1, v);
+            seen[v] = 1;
+            double gathered = 0.0;
+            for (size_t i = 0; i < region.size(); ++i) {
+                const size_t u = region[i];
+                if (!interior[u] && nullptr != open)
+                    *open = true;
+                gathered += deficit[u];
+                for (const size_t w : neighbours[u])
+                    if (!seen[w] && (vertices[w] - vertices[v]).length() <= distance) {
+                        seen[w] = 1;
+                        region.push_back(w);
+                    }
+            }
+            for (const size_t u : region)
+                seen[u] = 0;
+            return gathered;
+        };
+        for (const size_t v : candidates) {
+            if (taken[v])
+                continue;
+            bool open = false;
+            const double gathered = gather(v, radius, &open);
+            if (open || gathered < minimumDeficit || gathered >= maximumDeficit
+                || deficit[v] < 0.5 * gathered || !isCap(region))
+                continue;
+            const std::vector<size_t> cluster = region;
+            // A cone's flanks are developable, so the deficit gathered stays
+            // that of the apex out to eight edges of T (about five quads).
+            // A noise spike or a bump is ringed by negative curvature that
+            // cancels it (spot_noisy, plane), and a rounded end keeps
+            // gathering more (an ellipsoid's end, the sword's guard tips,
+            // a sculpted horn); pinned, both cost folds around them.
+            const double holdTolerance = std::max(conicalTipHoldDegrees * M_PI / 180.0, conicalTipHoldShare * gathered);
+            bool holds = true;
+            for (const double scale : { 2.0, 4.0, 8.0, 16.0 }) {
+                if (std::abs(gather(v, scale * radius, nullptr) - gathered) > holdTolerance) {
+                    holds = false;
+                    break;
+                }
+            }
+            if (!holds)
+                continue;
+            tips.push_back(v);
+            for (const size_t u : cluster)
+                taken[u] = 1;
+        }
+        return tips;
     }
 }
 
@@ -800,7 +951,8 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     std::atomic<long long>* adaptiveFieldTimeUs,
     const ProgressHandler* progressHandler,
     std::vector<Vector3>* decimatedVerticesOut,
-    std::vector<std::vector<size_t>>* decimatedTrianglesOut)
+    std::vector<std::vector<size_t>>* decimatedTrianglesOut,
+    std::vector<Vector3>* conicalTipsOut)
 {
     auto t_decimateStart = std::chrono::high_resolution_clock::now();
     decimateIfTooDense(vertices, triangles, topology, voxelSize, sharpEdgeDegrees, featureEdges,
@@ -952,9 +1104,22 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     IsotropicRemesher isotropicRemesher(vertices, triangles);
     if (nullptr != progressHandler && *progressHandler)
         isotropicRemesher.setProgressHandler(*progressHandler);
+    const std::vector<size_t> tips = conicalTips(vertices, triangles,
+        conicalTipRadius * voxelSize, conicalTipDegrees * M_PI / 180.0, needleTipDegrees * M_PI / 180.0);
+    if (nullptr != decimationStats)
+        decimationStats->conicalTips += tips.size();
+    if (nullptr != conicalTipsOut) {
+        conicalTipsOut->clear();
+        for (const size_t v : tips)
+            conicalTipsOut->push_back(vertices[v]);
+    }
+    if (!tips.empty())
+        isotropicRemesher.setPinnedVertices(&tips);
     isotropicRemesher.setTargetEdgeLength(voxelSize);
     if (!vertexTargetLengths.empty())
         isotropicRemesher.setVertexTargetEdgeLengths(&vertexTargetLengths);
+    featureEdges = filterDetectedChains(featureEdges, vertices, triangles, voxelSize,
+        nullptr != sharpEdgeStats ? &sharpEdgeStats->filtered : nullptr);
     isotropicRemesher.setFeatureEdges(featureEdges);
     isotropicRemesher.setSmoothNormalDegrees(smoothNormalDegrees);
     isotropicRemesher.remesh();
@@ -962,9 +1127,14 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     triangles = isotropicRemesher.remeshedTriangles();
     featureEdges = reclassifyFeatureEdges(isotropicRemesher.featureEdges(), vertices, triangles,
         sharpEdgeDegrees, nullptr != sharpEdgeStats ? &sharpEdgeStats->classified : nullptr);
+    // Three edges, not one: on the sculpt set pieces of one to three edges
+    // still cost the map (sculpt_decimated 2k Hausdorff x2.8 at one edge,
+    // x1.3 at three) and no cad or primitives crease is that short.
+    constexpr double kMinFeatureComponentEdges = 3.0;
+    featureEdges = dropShortFeatureComponents(featureEdges, vertices, kMinFeatureComponentEdges * voxelSize,
+        nullptr != sharpEdgeStats ? &sharpEdgeStats->tShort : nullptr);
     if (nullptr != sharpEdgeStats) {
         sharpEdgeStats->carried = isotropicRemesher.featureEdges().size();
-        sharpEdgeStats->flipped = isotropicRemesher.clearedFeatureEdges();
     }
 #if AUTO_REMESHER_DEBUG
     std::cerr << "Island[" << islandIndex << "]: Uniformly remesh done, vertex count: " << vertices.size() << " triangle count: " << triangles.size() << std::endl;
@@ -1368,6 +1538,8 @@ bool AutoRemesher::remeshIslands()
     struct IslandRun {
         std::vector<Vector3> decimatedVertices;
         std::vector<std::vector<size_t>> decimatedTriangles;
+        // Where the isotropic remesh kept conical tips (TODO 2.23).
+        std::vector<Vector3> conicalTips;
         std::vector<std::vector<Vector2>> capturedUvs;
         std::vector<std::vector<Vector2>> capturedOriginalUvs;
         std::vector<uint8_t> capturedExtractedConnectionMoved;
@@ -1406,7 +1578,7 @@ bool AutoRemesher::remeshIslands()
         resample(ctx.vertices, ctx.triangles, ctx.inputTopology, ctx.voxelSize, ctx.adaptivity,
             ctx.sharpEdgeDegrees, run.isotropicFeatureEdges, &sharpEdgeStats, ctx.smoothNormalDegrees, islandIndex, stats,
             &adaptiveFieldTime, &isotropicProgress,
-            &run.decimatedVertices, &run.decimatedTriangles);
+            &run.decimatedVertices, &run.decimatedTriangles, &run.conicalTips);
         auto t1 = std::chrono::high_resolution_clock::now();
         run.resampleUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
         resampleTime += run.resampleUs;
@@ -1439,9 +1611,10 @@ bool AutoRemesher::remeshIslands()
         run.features.set("set_input_edges", (double)ctx.featureEdges.size());
         run.features.set("set_decimated_edges", (double)sharpEdgeStats.decimatedEdges);
         run.features.set("set_decimation_dropped", (double)sharpEdgeStats.decimationDropped);
-        run.features.set("set_flipped", (double)sharpEdgeStats.flipped);
+        run.features.set("set_filtered", (double)sharpEdgeStats.filtered);
         run.features.set("set_t_carried", (double)sharpEdgeStats.carried);
         run.features.set("set_t_classified", (double)sharpEdgeStats.classified);
+        run.features.set("set_t_short", (double)sharpEdgeStats.tShort);
         run.features.set("set_t_edges", (double)run.isotropicFeatureEdges.size());
         run.features.set("set_t_length_rel_h", featureEdgeLength(run.isotropicFeatureEdges, ctx.vertices) / h);
         ctx.isotropicMarkedEdgeCount = (size_t)std::count_if(run.isotropicFeatureEdges.flags.begin(),
@@ -1475,6 +1648,7 @@ bool AutoRemesher::remeshIslands()
         parameterizer.setGradientAdaptivity(ctx.adaptivity);
         parameterizer.setAnisotropy(ctx.anisotropy);
         parameterizer.setSharpEdgeDegrees(ctx.sharpEdgeDegrees);
+        parameterizer.setConicalTips(&run.conicalTips);
         parameterizer.setFeatureEdges(&run.isotropicFeatureEdges);
         bool parameterizeSucceeded = true;
         try {
@@ -1517,6 +1691,7 @@ bool AutoRemesher::remeshIslands()
             QuadExtractor extractor(&vertices, &triangles, uvs.get());
             extractor.setOriginalTriangleUvs(&run.capturedOriginalUvs);
             extractor.setSingularVertices(&run.capturedSingularVertexIndices);
+            extractor.setConicalTips(&run.conicalTips);
             extractor.setInputBoundary(&ctx.inputBoundary);
             extractor.setUseQex(m_useQex);
             extractor.setTangentialSmoothing(m_tangentialQuadSmoothing);
@@ -2089,6 +2264,7 @@ bool AutoRemesher::remeshIslands()
         run.set("decimated_triangles_before", (double)decimationStats.trianglesBefore.load());
         run.set("decimated_triangles_after", (double)decimationStats.trianglesAfter.load());
         run.set("undecimated_islands", (double)decimationStats.islandsKeptUndecimated.load());
+        run.set("conical_tips", (double)decimationStats.conicalTips.load());
         run.set("input_merged_vertices", (double)cleanup.mergedVertices);
         run.set("input_dropped_triangles", (double)cleanup.droppedTriangles);
         run.set("input_cleanup_kept_parts", (double)cleanup.keptParts);
