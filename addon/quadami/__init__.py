@@ -33,7 +33,8 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, Po
 
 from . import raise_hint
 from . import report as report_rows
-from . import transfer, worker
+from . import transfer
+from . import worker
 from .names import ID, NAME
 
 REPORT_PROPERTY = ID + "_report"
