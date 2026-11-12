@@ -19,8 +19,10 @@
 
 // The per-face counts of the quality report on hand-made faces. A face is
 // folded when a corner turns against the face's area vector (scaled Jacobian
-// <= 0), whatever its neighbours and whichever way it faces. Then the
-// boundary loops and non-manifold vertices, and the holes counted in the
+// <= 0), whatever its neighbours and whichever way it faces, and a quad is
+// twisted when both ways of cutting it into two triangles give triangles that
+// face apart, which a saddle-shaped quad can be with every corner positive.
+// Then the boundary loops and non-manifold vertices, and the holes counted in the
 // output of islands that were closed in the input (ENVELOPE §3.2): a closed
 // head at 10k came out with 2 holes and the add-on showed nothing.
 
@@ -317,6 +319,56 @@ int lostPartReferenceFailures()
     return ok ? 0 : 1;
 }
 
+// A quad sheared across an input crease, its diagonal on the crease: twisted
+// by the two-diagonal test, but bent along the crease, so it is counted
+// apart when the crease is 90 degrees or more (here 100) and stays twisted
+// when the input's crease is elsewhere or blunter (60 degrees).
+int creaseDiagonalFailures()
+{
+    const double c80 = std::cos(80.0 * M_PI / 180.0);
+    const double s80 = std::sin(80.0 * M_PI / 180.0);
+    AutoRemesher::RemeshMesh quad;
+    quad.positions = { 0, 0, 0, 0.9, 0.3, 0, 1, 0, 0, 0.1, 0.3 * c80, -0.3 * s80 };
+    quad.faceSizes = { 4 };
+    quad.faceIndices = { 0, 1, 2, 3 };
+    // Two triangles meeting along the x axis from -1 to 2: the top one in
+    // z = 0, the other turned down by `degrees` between the face normals.
+    const auto crease = [](double degrees, double dx) {
+        const double angle = (180.0 - degrees) * M_PI / 180.0;
+        return std::vector<double> { -1 + dx, 0, 0, 2 + dx, 0, 0, 0.5 + dx, 2, 0,
+            0.5 + dx, 2 * std::cos(angle), -2 * std::sin(angle) };
+    };
+    const std::vector<uint32_t> triangles = { 0, 1, 2, 1, 0, 3 };
+    const auto run = [&](const std::vector<double>& positions) {
+        AutoRemesher::QualityReport report;
+        AutoRemesher::measureMesh(quad, &report);
+        AutoRemesher::discountCreaseDiagonalQuads(positions, triangles, quad, &report);
+        return report;
+    };
+    int failures = 0;
+    const struct {
+        const char* name;
+        std::vector<double> positions;
+        size_t twisted;
+        size_t creaseDiagonal;
+    } cases[] = {
+        { "on a 100 degree crease", crease(100.0, 0.0), 0, 1 },
+        { "crease moved away", crease(100.0, 10.0), 1, 0 },
+        { "on a 60 degree crease", crease(60.0, 0.0), 1, 0 },
+    };
+    for (const auto& c : cases) {
+        const AutoRemesher::QualityReport report = run(c.positions);
+        const bool ok = c.twisted == report.twistedQuadCount && c.creaseDiagonal == report.creaseDiagonalQuadCount
+            && c.twisted == report.foldedOrTwistedFaceCount && 0 == report.foldedFaceCount;
+        failures += ok ? 0 : 1;
+        printf("sheared quad %-24s twisted %zu (want %zu), crease diagonal %zu (want %zu), folded or twisted %zu%s\n",
+            c.name, report.twistedQuadCount, c.twisted, report.creaseDiagonalQuadCount, c.creaseDiagonal,
+            report.foldedOrTwistedFaceCount, ok ? "" : "  FAIL");
+    }
+    printf("\n");
+    return failures;
+}
+
 // Handles per island from the islands' twice-handle counts: a torus that came
 // out as a sphere, a sphere that gained two handles, an island with a
 // non-manifold input (not measured) and an unchanged genus-2 island.
@@ -349,6 +401,7 @@ int main()
         size_t folded;
         size_t degenerate;
         size_t flips;
+        size_t twisted;
     };
     const std::vector<double> square = { 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0 };
     // A 2 x 2 grid of unit quads, vertex (i, j) at index 3 * j + i.
@@ -357,18 +410,23 @@ int main()
         for (int i = 0; i < 3; ++i)
             grid.insert(grid.end(), { (double)i, (double)j, 0.0 });
     const std::vector<Case> cases = {
-        { "convex quad", square, { { 0, 1, 2, 3 } }, 0, 0, 0 },
-        { "convex quad, reversed", square, { { 3, 2, 1, 0 } }, 0, 0, 0 },
-        { "skew quad", { 0, 0, 0, 1, 0, 0.2, 1, 1, 0, 0, 1, 0.2 }, { { 0, 1, 2, 3 } }, 0, 0, 0 },
-        { "dart", { 0, 0, 0, 2, 0, 0, 0.5, 0.5, 0, 0, 2, 0 }, { { 0, 1, 2, 3 } }, 1, 0, 0 },
-        { "bow-tie", { 0, 0, 0, 3, 1, 0, 3, 0, 0, 0, 2, 0 }, { { 0, 1, 2, 3 } }, 1, 0, 0 },
-        { "convex pentagon", { 0, 0, 0, 2, 0, 0, 3, 1, 0, 1, 2, 0, -1, 1, 0 }, { { 0, 1, 2, 3, 4 } }, 0, 0, 0 },
-        { "arrow pentagon", { 0, 0, 0, 2, 0, 0, 2, 2, 0, 1, 0.5, 0, 0, 2, 0 }, { { 0, 1, 2, 3, 4 } }, 1, 0, 0 },
-        { "repeated corner", square, { { 0, 1, 1, 2 } }, 0, 1, 0 },
-        { "zero area", { 0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0 }, { { 0, 1, 2, 3 } }, 0, 1, 0 },
+        { "convex quad", square, { { 0, 1, 2, 3 } }, 0, 0, 0, 0 },
+        { "convex quad, reversed", square, { { 3, 2, 1, 0 } }, 0, 0, 0, 0 },
+        { "skew quad", { 0, 0, 0, 1, 0, 0.2, 1, 1, 0, 0, 1, 0.2 }, { { 0, 1, 2, 3 } }, 0, 0, 0, 0 },
+        // Corners lifted and lowered in turn: at 0.25 both cuts into
+        // triangles still face the same way, at 0.5 neither does (twisted),
+        // while every corner still turns with the area vector (not folded).
+        { "saddle quad", { 0, 0, 0.25, 1, 0, -0.25, 1, 1, 0.25, 0, 1, -0.25 }, { { 0, 1, 2, 3 } }, 0, 0, 0, 0 },
+        { "twisted quad", { 0, 0, 0.5, 1, 0, -0.5, 1, 1, 0.5, 0, 1, -0.5 }, { { 0, 1, 2, 3 } }, 0, 0, 0, 1 },
+        { "dart", { 0, 0, 0, 2, 0, 0, 0.5, 0.5, 0, 0, 2, 0 }, { { 0, 1, 2, 3 } }, 1, 0, 0, 0 },
+        { "bow-tie", { 0, 0, 0, 3, 1, 0, 3, 0, 0, 0, 2, 0 }, { { 0, 1, 2, 3 } }, 1, 0, 0, 1 },
+        { "convex pentagon", { 0, 0, 0, 2, 0, 0, 3, 1, 0, 1, 2, 0, -1, 1, 0 }, { { 0, 1, 2, 3, 4 } }, 0, 0, 0, 0 },
+        { "arrow pentagon", { 0, 0, 0, 2, 0, 0, 2, 2, 0, 1, 0.5, 0, 0, 2, 0 }, { { 0, 1, 2, 3, 4 } }, 1, 0, 0, 0 },
+        { "repeated corner", square, { { 0, 1, 1, 2 } }, 0, 1, 0, 0 },
+        { "zero area", { 0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0 }, { { 0, 1, 2, 3 } }, 0, 1, 0, 0 },
         // One quad wound the other way: its two inner edges are flips, but
         // no corner of any face turns back, so nothing is folded.
-        { "reversed quad in a grid", grid, { { 0, 1, 4, 3 }, { 1, 2, 5, 4 }, { 3, 4, 7, 6 }, { 4, 7, 8, 5 } }, 0, 0, 2 },
+        { "reversed quad in a grid", grid, { { 0, 1, 4, 3 }, { 1, 2, 5, 4 }, { 3, 4, 7, 6 }, { 4, 7, 8, 5 } }, 0, 0, 2, 0 },
     };
 
     int failures = 0;
@@ -378,15 +436,17 @@ int main()
     failures += lostPartFailures();
     failures += lostPartCauseFailures();
     failures += lostPartReferenceFailures();
-    printf("%-24s %13s %17s %11s\n", "case", "folded", "degenerate", "flips");
+    failures += creaseDiagonalFailures();
+    printf("%-24s %13s %17s %11s %13s\n", "case", "folded", "degenerate", "flips", "twisted");
     for (const auto& c : cases) {
         const AutoRemesher::QualityReport report = measure(c.positions, c.faces);
         const bool ok = report.foldedFaceCount == c.folded && report.degenerateFaceCount == c.degenerate
-            && report.orientationFlipCount == c.flips;
+            && report.orientationFlipCount == c.flips && report.twistedQuadCount == c.twisted
+            && report.foldedOrTwistedFaceCount == (c.folded || c.twisted ? 1u : 0u);
         failures += ok ? 0 : 1;
-        printf("%-24s %6zu (want %zu) %10zu (want %zu) %4zu (want %zu)%s\n", c.name.c_str(),
+        printf("%-24s %6zu (want %zu) %10zu (want %zu) %4zu (want %zu) %6zu (want %zu)%s\n", c.name.c_str(),
             report.foldedFaceCount, c.folded, report.degenerateFaceCount, c.degenerate,
-            report.orientationFlipCount, c.flips, ok ? "" : "  FAIL");
+            report.orientationFlipCount, c.flips, report.twistedQuadCount, c.twisted, ok ? "" : "  FAIL");
     }
     return failures ? 1 : 0;
 }

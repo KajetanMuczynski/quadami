@@ -133,6 +133,23 @@ class ReportTest(unittest.TestCase):
         self.assertIn(("Empty islands", "1 of 3", True), rows)
         self.assertIn(("Time", "0.8 s", False), rows)
         self.assertFalse(any(label in ("Input cleanup", "Holes") for label, _, _ in rows))
+        self.assertIn(("Folded faces", "0", False), rows)
+
+    def test_folded_faces_count_twisted_quads(self):
+        # Interface 1.11: the row counts faces folded at a corner or twisted
+        # (folded under both diagonals), each once, and says how many are twisted.
+        def row(output):
+            rows = report.summary_rows({"status": "ok", "parameters": {"target_quads": 2000},
+                                        "output": dict({"quads": 2000}, **output)})
+            return next(r for r in rows if r[0] == "Folded faces")
+        self.assertEqual(row({"folded_faces": 3, "twisted_quads": 9, "folded_or_twisted_faces": 10}),
+                         ("Folded faces", "10 (9 twisted)", True))
+        self.assertEqual(row({"folded_faces": 3, "twisted_quads": 0, "folded_or_twisted_faces": 3}),
+                         ("Folded faces", "3", True))
+        self.assertEqual(row({"folded_faces": 0, "twisted_quads": 0, "folded_or_twisted_faces": 0}),
+                         ("Folded faces", "0", False))
+        # A core before 1.11 has only the corner count.
+        self.assertEqual(row({"folded_faces": 4}), ("Folded faces", "4", True))
 
     def test_missing_parts(self):
         # Kajetan's joined sword at 3k: the vines came out missing (2026-10-22).

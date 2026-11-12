@@ -6,6 +6,7 @@
 """
 import os
 import sys
+import tempfile
 import unittest
 
 import numpy as np
@@ -63,6 +64,42 @@ def report(Vin, Fin_quads, V, faces, h, sharp_degrees=90.0):
     return sharp, angles, metrics.crease_report(Vin, sharp, angles, V, faces, edges(faces), h, sharp_degrees)
 
 
+def sheet(n):
+    """Flat quad grid [0, 1]^2 at z = 0, normals up."""
+    V = np.array([[i / n, j / n, 0.0] for i in range(n + 1) for j in range(n + 1)])
+    return V, [[i * (n + 1) + j, (i + 1) * (n + 1) + j, (i + 1) * (n + 1) + j + 1, i * (n + 1) + j + 1]
+               for i in range(n) for j in range(n)]
+
+
+def write(path, V, F):
+    with open(path, "w") as fp:
+        fp.writelines("v %.17g %.17g %.17g\n" % tuple(p) for p in V)
+        fp.writelines("f " + " ".join(str(x + 1) for x in f) + "\n" for f in F)
+
+
+def hinge_metrics(beta, theta, n=8):
+    """Two unit squares meeting along x = 0 with a dihedral (normal) angle beta, measured against
+    themselves at sharp-edge angle theta."""
+    c, s = np.cos(np.radians(beta)), np.sin(np.radians(beta))
+    V, F = [], []
+    for side in (-1, 1):
+        for i in range(n + 1):
+            for j in range(n + 1):
+                x = i / n
+                V.append([side * x * c if side > 0 else -x, j / n, x * s if side > 0 else 0.0])
+    m = (n + 1) * (n + 1)
+    for side, off in ((-1, 0), (1, m)):
+        for i in range(n):
+            for j in range(n):
+                q = [off + i * (n + 1) + j, off + (i + 1) * (n + 1) + j, off + (i + 1) * (n + 1) + j + 1,
+                     off + i * (n + 1) + j + 1]
+                F.append(q[::-1] if side < 0 else q)
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "hinge.obj")
+        write(path, np.array(V), F)
+        return metrics.compute(path, path, None, samples=2000, sharp_degrees=theta)
+
+
 class CreaseReport(unittest.TestCase):
     def test_box_with_aligned_output(self):
         V, F = box(1, 1, 1, 4)
@@ -74,7 +111,7 @@ class CreaseReport(unittest.TestCase):
         self.assertEqual(r["bent_quads_per_1k"], 0.0)
 
     def test_right_angle_counts_on_every_rotation(self):
-        # A rotated box computes some of its 90 deg dihedrals a few ulp below 90; theta - 1 deg keeps them.
+        # A rotated box computes some of its 90 deg dihedrals a few ulp below 90; theta - 0.1 deg keeps them.
         below = 0
         for degrees in ((23.0, 37.0, 11.0), (0.0, 45.0, 0.0)):
             R = rotation(degrees)
@@ -91,6 +128,30 @@ class CreaseReport(unittest.TestCase):
         self.assertIsNone(r["coverage_theta_all"])
         self.assertIsNone(r["coverage_theta"])
         self.assertEqual(r["bent_quads_per_1k"], 0.0)
+
+    def test_threshold_is_the_cores(self):
+        # The core marks |beta| >= theta - 0.1 deg (kSharpEdgeToleranceDegrees); metrics.py used theta - 1.
+        for beta, theta, kept in ((89.5, 90.0, False), (89.95, 90.0, True), (35.0, 30.0, True)):
+            r = hinge_metrics(beta, theta)["creases"]
+            self.assertEqual(r["coverage_theta_all"] is not None, kept, (beta, theta))
+
+    def test_winding_seam_is_not_a_crease(self):
+        # Half of a flat sheet written with the other winding: the core orients it before it looks
+        # for creases, so the seam is no 180-degree crease.
+        V, F = sheet(8)
+        F = np.array(metrics.triangulate(F))
+        F[len(F) // 2:] = F[len(F) // 2:, ::-1]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "in.obj")
+            write(path, V, F)
+            self.assertEqual(len(metrics.input_side(path)["sharp_edges"]), 0)
+
+    def test_zero_area_triangle_makes_no_crease(self):
+        V, F = sheet(4)
+        F = metrics.triangulate(F).tolist()
+        V = np.vstack([V, [[0.5, 0.0, 0.0]]])  # on the boundary edge from (0.25, 0) to (0.75, 0): collinear
+        F.append([0, len(V) - 1, 5])
+        self.assertEqual(len(metrics.sharp_edges(V, np.array(F))), 0)
 
     def test_output_off_the_creases(self):
         # A smaller box inside: its edges run 0.07 from the creases, 0.7 h away.

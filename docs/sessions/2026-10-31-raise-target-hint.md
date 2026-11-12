@@ -1,6 +1,6 @@
 # 2026-10-31 · cloud thread · Build the Raise Target Quads hint (Tier A)
 - Repos/commits: master 8534e6e, branch `feat/raise-target-hint` (PR #159)
-- Did: core `--lost-parts-reference <count>` (interface 1.11): the lost-part pass also counts far
+- Did: core `--lost-parts-reference <count>` (interface 1.12; 1.11 went to #167 first): the lost-part pass also counts far
   vertices by cause at the quad width of an earlier target, report `lost_parts.reference`;
   `measureLostParts` builds the topology once and classifies per width. Add-on `raise_hint.py`: run
   history on the source object keyed by input and settings, the ladder of docs/RAISE-TO-CLEAR.md

@@ -111,6 +111,14 @@ class Basics(unittest.TestCase):
         self.assertEqual((m["faces"]["quads"], m["topology"]["euler_input"], m["topology"]["euler_output"]), (6, 2, 2))
         self.assertLess(m["distance"]["hausdorff"], 1e-12)
 
+    def test_negative_line_indices(self):
+        # `l -2 -1` (marked edges) counts back from the last vertex, like faces; it was off by one.
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "m.obj")
+            with open(path, "w") as fp:
+                fp.write("v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nl 3 4\nl -2 -1\n")
+            self.assertEqual(metrics.read_obj_lines(path).tolist(), [[2, 3], [2, 3]])
+
     @unittest.expectedFailure
     def test_degenerate_quad_is_not_also_a_folded_quad(self):
         # A quad with a repeated vertex is degenerate (V4), and the CLI's folded count leaves it out,

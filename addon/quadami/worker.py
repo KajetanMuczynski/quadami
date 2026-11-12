@@ -78,7 +78,7 @@ RUN_FLAGS = {
 
 # The interface version that brought --lost-parts-reference; an older
 # configured worker would reject the flag.
-LOST_PARTS_REFERENCE_INTERFACE = (1, 11)
+LOST_PARTS_REFERENCE_INTERFACE = (1, 12)
 
 _PROGRESS_LINE = re.compile(r"^(\d+)% done\.(?: (.*))?$")
 
