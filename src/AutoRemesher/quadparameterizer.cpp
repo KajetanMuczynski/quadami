@@ -36,6 +36,9 @@
 #include <limits>
 #include <memory>
 #include <queue>
+#include <set>
+#include <cstdio>
+#include <cstring>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
@@ -1217,11 +1220,249 @@ namespace {
         result->set("untangle_factorizations", (double)factorizations);
     }
 
+    // Research prototype (closed edge loops, AUTOREMESHER_ALIGN_CONES="ratio[,maxOffset]"):
+    // a separatrix of the continuous cover (the isoline out of a cone) that
+    // passes another cone at a small transverse offset becomes, after
+    // rounding, an edge loop that misses that pole by a row or two and spirals
+    // on. Traces every separatrix until it passes a cone within
+    // min(maxOffset, ratio x distance travelled) and returns the row "the
+    // second cone's transverse coordinate, carried into the first cone's chart
+    // along the trace, equals the first cone's": aligning the pair turns the
+    // separatrix into a cone-to-cone edge.
+    using SparseRow = std::vector<std::pair<size_t, double>>;
+    struct ConeAlignment {
+        SparseRow row;
+        double offset; // continuous value of the row, in cells
+        double along; // distance travelled, in cells
+    };
+
+    std::vector<ConeAlignment> detectConeAlignments(const SurfaceMesh& mesh, const std::vector<int>& rotation,
+        const std::vector<double>& x, size_t uvVariables, double ratio, double maxOffset, DiagnosticRecord* record)
+    {
+        static const int M[4][2][2] = { { { 1, 0 }, { 0, 1 } }, { { 0, 1 }, { -1, 0 } }, { { -1, 0 }, { 0, -1 } }, { { 0, -1 }, { 1, 0 } } };
+        const auto rot = [](size_t c, const std::vector<int>& r) { return (r[c] % 4 + 4) % 4; };
+        const auto uv = [&](size_t c) { return Vector2(x[2 * c], x[2 * c + 1]); };
+        const auto tr = [&](size_t c) { return Vector2(x[uvVariables + 2 * c], x[uvVariables + 2 * c + 1]); };
+        const auto apply = [&](int r, const Vector2& p) {
+            return Vector2(M[r][0][0] * p.x() + M[r][0][1] * p.y(), M[r][1][0] * p.x() + M[r][1][1] * p.y());
+        };
+        const auto applyT = [&](int r, const Vector2& p) {
+            return Vector2(M[r][0][0] * p.x() + M[r][1][0] * p.y(), M[r][0][1] * p.x() + M[r][1][1] * p.y());
+        };
+        const auto cross2 = [](const Vector2& a, const Vector2& b) { return a.x() * b.y() - a.y() * b.x(); };
+        const size_t vertices = mesh.vertexCount();
+        std::vector<char> cone(vertices, 0);
+        for (size_t vertex = 0; vertex < vertices; ++vertex) {
+            const auto& incident = mesh.cornersAroundVertex(vertex);
+            if (incident.empty())
+                continue;
+            size_t start = incident.front(), c = start, steps = 0;
+            int accumulated = 0;
+            bool closed = true;
+            do {
+                if (mesh.oppositeCorner(c) == SurfaceMesh::npos) {
+                    closed = false;
+                    break;
+                }
+                accumulated = (accumulated + rotation[c]) % 4;
+                c = mesh.nextCorner(mesh.oppositeCorner(c));
+            } while (c != start && ++steps <= incident.size() + 1);
+            if (closed && c == start && (accumulated % 4 + 4) % 4 != 0)
+                cone[vertex] = 1;
+        }
+        double cells = 0.0;
+        for (size_t f = 0; f < mesh.faceCount(); ++f)
+            cells += .5 * std::fabs(cross2(uv(3 * f + 1) - uv(3 * f), uv(3 * f + 2) - uv(3 * f)));
+        const double maxAlong = 2.0 * std::sqrt(std::max(cells, 1.0));
+        std::vector<ConeAlignment> out;
+        std::set<std::pair<size_t, size_t>> pairs;
+        size_t cones = 0, traces = 0, boundaryStops = 0, longStops = 0, duplicates = 0, expensive = 0;
+        double worstMismatch = 0.0;
+        for (size_t a = 0; a < vertices; ++a) {
+            if (!cone[a])
+                continue;
+            ++cones;
+            for (const size_t ca : mesh.cornersAroundVertex(a)) {
+                const size_t f0 = ca / 3;
+                const Vector2 p0 = uv(ca), e1 = uv(mesh.nextCorner(ca)) - p0, e2 = uv(mesh.previousCorner(ca)) - p0;
+                if (cross2(e1, e2) <= 0.0)
+                    continue;
+                for (int dirIndex = 0; dirIndex < 4; ++dirIndex) {
+                    Vector2 d = apply(dirIndex, Vector2(1, 0));
+                    if (!(cross2(e1, d) > 0.0 && cross2(d, e2) >= 0.0))
+                        continue;
+                    ++traces;
+                    const int k0 = d.x() != 0.0 ? 1 : 0;
+                    int k = k0;
+                    double level = p0[k];
+                    int A[2][2] = { { 1, 0 }, { 0, 1 } };
+                    std::vector<size_t> path;
+                    size_t face = f0, entry = ca; // entry: corner of `face` the trace came in by (ca: starts at the cone)
+                    Vector2 entryPoint = p0;
+                    double along = 0.0;
+                    bool found = false;
+                    size_t steps = 0;
+                    while (steps++ < 4 * mesh.faceCount()) {
+                        // Cones on or next to the current face.
+                        double best = std::numeric_limits<double>::max();
+                        size_t bestCorner = SurfaceMesh::npos, bestVia = SurfaceMesh::npos, bestVertex = SurfaceMesh::npos;
+                        double bestAhead = 0.0;
+                        const auto consider = [&](size_t vertex, const Vector2& p, size_t corner, size_t via) {
+                            if (!cone[vertex] || (vertex == a && along < 1.0))
+                                return;
+                            const double ahead = along + Vector2::dotProduct(p - entryPoint, d);
+                            if (ahead < 0.5)
+                                return;
+                            const double off = p[k] - level;
+                            if (std::fabs(off) > maxOffset || std::fabs(off) >= best)
+                                return;
+                            best = std::fabs(off);
+                            bestCorner = corner;
+                            bestVia = via;
+                            bestVertex = vertex;
+                            bestAhead = ahead;
+                        };
+                        for (size_t l = 0; l < 3; ++l) {
+                            const size_t cc = 3 * face + l;
+                            consider(mesh.cornerVertex(cc), uv(cc), cc, SurfaceMesh::npos);
+                            const size_t occ = mesh.oppositeCorner(cc);
+                            if (occ == SurfaceMesh::npos)
+                                continue;
+                            const size_t far = mesh.previousCorner(occ);
+                            consider(mesh.cornerVertex(far), apply(rot(cc, rotation), uv(far)) + tr(cc), far, cc);
+                        }
+                        if (bestCorner != SurfaceMesh::npos) {
+                            // The first cone the separatrix passes within maxOffset
+                            // ends it; align only if that is cheap.
+                            if (best > ratio * bestAhead) {
+                                ++expensive;
+                                found = true;
+                                break;
+                            }
+                            if (bestVertex == a || pairs.count({ std::min(a, bestVertex), std::max(a, bestVertex) })) {
+                                ++duplicates;
+                                found = true;
+                                break;
+                            }
+                            std::vector<size_t> full = path;
+                            int B[2][2] = { { A[0][0], A[0][1] }, { A[1][0], A[1][1] } };
+                            if (bestVia != SurfaceMesh::npos) {
+                                full.push_back(bestVia);
+                                const int r = rot(bestVia, rotation);
+                                for (int i = 0; i < 2; ++i)
+                                    for (int j = 0; j < 2; ++j)
+                                        B[i][j] = A[i][0] * M[r][0][j] + A[i][1] * M[r][1][j];
+                            }
+                            ConeAlignment al;
+                            al.row.push_back({ 2 * ca + k0, 1.0 });
+                            if (B[k0][0])
+                                al.row.push_back({ 2 * bestCorner, -(double)B[k0][0] });
+                            if (B[k0][1])
+                                al.row.push_back({ 2 * bestCorner + 1, -(double)B[k0][1] });
+                            // Translations along the path, as holonomyRow composes them.
+                            int C[2][2] = { { 1, 0 }, { 0, 1 } };
+                            for (const size_t pc : full) {
+                                const size_t t = uvVariables + 2 * pc;
+                                if (C[k0][0])
+                                    al.row.push_back({ t, -(double)C[k0][0] });
+                                if (C[k0][1])
+                                    al.row.push_back({ t + 1, -(double)C[k0][1] });
+                                const int r = rot(pc, rotation);
+                                int D[2][2];
+                                for (int i = 0; i < 2; ++i)
+                                    for (int j = 0; j < 2; ++j)
+                                        D[i][j] = C[i][0] * M[r][0][j] + C[i][1] * M[r][1][j];
+                                std::copy(&D[0][0], &D[0][0] + 4, &C[0][0]);
+                            }
+                            double value = 0.0;
+                            for (const auto& term : al.row)
+                                value += term.second * x[term.first];
+                            // Self-check: the row's value is minus the offset seen by the trace.
+                            const double sign = (bestVia == SurfaceMesh::npos ? uv(bestCorner)[k] : (apply(rot(bestVia, rotation), uv(bestCorner)) + tr(bestVia))[k]) - level;
+                            worstMismatch = std::max(worstMismatch, std::fabs(std::fabs(value) - std::fabs(sign)));
+                            al.offset = value;
+                            al.along = bestAhead;
+                            pairs.insert({ std::min(a, bestVertex), std::max(a, bestVertex) });
+                            out.push_back(std::move(al));
+                            found = true;
+                            break;
+                        }
+                        // Leave the face where the line exits it.
+                        size_t exitCorner = SurfaceMesh::npos;
+                        double exitLambda = 0.0, exitAhead = -1.0;
+                        for (size_t l = 0; l < 3; ++l) {
+                            const size_t cc = 3 * face + l;
+                            if (cc == entry || (entry == ca && face == f0 && (cc == ca || cc == mesh.previousCorner(ca))))
+                                continue;
+                            const Vector2 p = uv(cc), q = uv(mesh.nextCorner(cc));
+                            const double denominator = q[k] - p[k];
+                            if (denominator == 0.0)
+                                continue;
+                            const double lambda = (level - p[k]) / denominator;
+                            if (lambda < -1e-9 || lambda > 1.0 + 1e-9)
+                                continue;
+                            const Vector2 point = p + (q - p) * lambda;
+                            const double ahead = Vector2::dotProduct(point - entryPoint, d);
+                            if (ahead > exitAhead) {
+                                exitAhead = ahead;
+                                exitCorner = cc;
+                                exitLambda = std::min(1.0, std::max(0.0, lambda));
+                            }
+                        }
+                        if (exitCorner == SurfaceMesh::npos || exitAhead < -1e-9)
+                            break;
+                        along += std::max(0.0, exitAhead);
+                        if (along > maxAlong) {
+                            ++longStops;
+                            break;
+                        }
+                        const size_t oc = mesh.oppositeCorner(exitCorner);
+                        if (oc == SurfaceMesh::npos) {
+                            ++boundaryStops;
+                            break;
+                        }
+                        const int r = rot(exitCorner, rotation);
+                        path.push_back(exitCorner);
+                        int B[2][2];
+                        for (int i = 0; i < 2; ++i)
+                            for (int j = 0; j < 2; ++j)
+                                B[i][j] = A[i][0] * M[r][0][j] + A[i][1] * M[r][1][j];
+                        std::copy(&B[0][0], &B[0][0] + 4, &A[0][0]);
+                        entryPoint = uv(oc) * exitLambda + uv(mesh.nextCorner(oc)) * (1.0 - exitLambda);
+                        d = applyT(r, d);
+                        k = d.x() != 0.0 ? 1 : 0;
+                        level = entryPoint[k];
+                        face = oc / 3;
+                        entry = oc;
+                    }
+                    (void)found;
+                }
+            }
+        }
+        double meanOffset = 0.0, meanAlong = 0.0;
+        for (const auto& al : out) {
+            meanOffset += std::fabs(al.offset);
+            meanAlong += al.along;
+        }
+        record->set("cones", (double)cones);
+        record->set("traces", (double)traces);
+        record->set("pairs", (double)out.size());
+        record->set("duplicates", (double)duplicates);
+        record->set("expensive", (double)expensive);
+        record->set("boundary_stops", (double)boundaryStops);
+        record->set("long_stops", (double)longStops);
+        record->set("mean_offset", out.empty() ? 0.0 : meanOffset / out.size());
+        record->set("mean_along", out.empty() ? 0.0 : meanAlong / out.size());
+        record->set("worst_mismatch", worstMismatch);
+        return out;
+    }
+
     // Appends "cover_system" and one "rounding_iteration" per pass to
     // `diagnostics`, and fills `result` with the residuals and map validity.
     bool solveQuadCover(const CoverContext& ctx, std::vector<double>* values,
         const ProgressHandler* progressHandler,
-        std::vector<DiagnosticRecord>* diagnostics, DiagnosticRecord* result)
+        std::vector<DiagnosticRecord>* diagnostics, DiagnosticRecord* result,
+        const std::vector<ConeAlignment>* alignments = nullptr, bool continuousOnly = false)
     {
         const SurfaceMesh& mesh = ctx.mesh;
         const std::vector<int>& rotation = ctx.rotation;
@@ -1354,6 +1595,21 @@ namespace {
                 s.addConstraint(2 * c, 1, 2 * n, -1);
             }
         }
+        if (nullptr != alignments) {
+            double meanWeight = 0.0;
+            for (const FaceFrame& frame : frames)
+                meanWeight += frame.su * frame.sv;
+            meanWeight /= std::max<size_t>(1, frames.size());
+            const char* soft = std::getenv("AUTOREMESHER_ALIGN_SOFT");
+            const bool dry = nullptr != std::getenv("AUTOREMESHER_ALIGN_DRY");
+            for (const ConeAlignment& al : *alignments)
+                if (dry)
+                    continue;
+                else if (nullptr != soft)
+                    s.addEnergy(al.row, 0.0, std::atof(soft) * meanWeight);
+                else
+                    s.addConstraint(al.row);
+        }
         report(0.2f, "Eliminating cover constraints");
         s.finalizeConstraints();
         {
@@ -1417,6 +1673,12 @@ namespace {
                     }
                     return true;
                 }
+                if (continuousOnly) {
+                    values->resize(variables);
+                    for (size_t i = 0; i < variables; ++i)
+                        (*values)[i] = s.value(i);
+                    return true;
+                }
             }
             if (s.converged())
                 break;
@@ -1427,6 +1689,24 @@ namespace {
         report(0.96f, "Rounding cover to integers");
         size_t violatedConstraints = 0;
         const double constraintResidual = s.constraintResidual(1e-6, &violatedConstraints);
+        if (nullptr != alignments) {
+            size_t aligned = 0, alignedBefore = 0;
+            double meanAbs = 0.0;
+            for (const ConeAlignment& al : *alignments) {
+                double value = 0.0;
+                for (const auto& term : al.row)
+                    value += term.second * s.value(term.first);
+                aligned += std::fabs(value) < 1e-3;
+                if (std::getenv("AUTOREMESHER_ALIGN_PRINT"))
+                    std::fprintf(stderr, "align %.4f -> %.4f along %.1f\n", al.offset, value, al.along);
+                alignedBefore += std::fabs(al.offset) < 0.5;
+                meanAbs += std::fabs(value);
+            }
+            result->set("align_rows", (double)alignments->size());
+            result->set("align_rows_aligned", (double)aligned);
+            result->set("align_rows_continuous_below_half", (double)alignedBefore);
+            result->set("align_rows_mean_abs", alignments->empty() ? 0.0 : meanAbs / alignments->size());
+        }
         result->set("converged", s.converged() ? 1.0 : 0.0);
         result->set("integrality_residual", s.integralityResidual());
         result->set("rounded_energy", s.energy());
@@ -1662,8 +1942,24 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     }
     std::vector<double> allValues;
     DiagnosticRecord coverResult("cover_result");
+    std::vector<ConeAlignment> alignments;
+    if (const char* alignEnv = std::getenv("AUTOREMESHER_ALIGN_CONES")) {
+        if (nullptr == planFaceEdges) {
+            double ratio = std::atof(alignEnv), maxOffset = 1.5;
+            if (const char* comma = std::strchr(alignEnv, ','))
+                maxOffset = std::atof(comma + 1);
+            std::vector<double> continuous;
+            std::vector<DiagnosticRecord> scratch;
+            DiagnosticRecord scratchResult("cover_probe");
+            if (solveQuadCover(ctx, &continuous, nullptr, &scratch, &scratchResult, nullptr, true)) {
+                DiagnosticRecord alignRecord("cone_align");
+                alignments = detectConeAlignments(mesh, rotation, continuous, 2 * corners, ratio, maxOffset, &alignRecord);
+                result->diagnostics.push_back(std::move(alignRecord));
+            }
+        }
+    }
     if (!solveQuadCover(ctx, &allValues, coverProgress ? &coverProgress : nullptr,
-            &result->diagnostics, &coverResult)) {
+            &result->diagnostics, &coverResult, alignments.empty() ? nullptr : &alignments)) {
         coverResult.set("ok", 0.0);
         result->diagnostics.push_back(std::move(coverResult));
         return false;

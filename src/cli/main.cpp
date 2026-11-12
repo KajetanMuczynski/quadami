@@ -205,6 +205,13 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
                 std::fprintf(stderr, "Error: --resolution must be fast or quality, not %s\n", value.c_str());
                 return 1;
             }
+        } else if ("--align-cones" == name) {
+            // Research prototype (closed edge loops): the core reads
+            // "ratio[,maxOffset]" from the environment.
+            if ("off" != value)
+                setenv("AUTOREMESHER_ALIGN_CONES", value.c_str(), 1);
+        } else if ("--align-soft" == name) {
+            setenv("AUTOREMESHER_ALIGN_SOFT", value.c_str(), 1);
         } else if ("--fold-repair" == name) {
             if ("on" != value && "off" != value) {
                 std::fprintf(stderr, "Error: --fold-repair must be on or off, not %s\n", value.c_str());
