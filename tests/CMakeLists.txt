@@ -94,6 +94,11 @@ add_test(NAME feature_edges COMMAND feature_edges_test)
 add_executable(marked_edges_test marked_edges_test.cpp)
 target_link_libraries(marked_edges_test PRIVATE autoremesher_core)
 add_test(NAME marked_edges COMMAND marked_edges_test)
+
+add_executable(plan_test plan_test.cpp)
+target_link_libraries(plan_test PRIVATE autoremesher_core)
+add_test(NAME plan COMMAND plan_test)
+
 add_executable(crease_remesh_test crease_remesh_test.cpp)
 target_link_libraries(crease_remesh_test PRIVATE autoremesher_core)
 add_test(NAME crease_remesh COMMAND crease_remesh_test)
@@ -105,3 +110,8 @@ add_executable(sharp_edge_fallback_test sharp_edge_fallback_test.cpp)
 target_link_libraries(sharp_edge_fallback_test PRIVATE autoremesher_core)
 add_test(NAME sharp_edge_fallback COMMAND sharp_edge_fallback_test
     "${CMAKE_CURRENT_SOURCE_DIR}/data/cad-csg-bracket-rot.obj")
+add_executable(amd_ordering_test amd_ordering_test.cpp)
+target_link_libraries(amd_ordering_test PRIVATE autoremesher_core)
+add_test(NAME amd_ordering COMMAND amd_ordering_test)
+# Unpatched, Eigen's AMD ordering of this matrix runs for minutes: a hang.
+set_tests_properties(amd_ordering PROPERTIES TIMEOUT 60)

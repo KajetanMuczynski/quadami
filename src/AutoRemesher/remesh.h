@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 13;
+const int InterfaceVersionMinor = 14;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -227,7 +227,7 @@ struct QualityReport {
     size_t nonManifoldVertexCount = 0;
     size_t islandCount = 0;
     size_t islandsWithoutOutput = 0;
-    // Since 1.13.  Islands with more holes and handles than their share of
+    // Since 1.14.  Islands with more holes and handles than their share of
     // the quads can hold (chain mail, strung beads), remeshed on a closed
     // envelope that fills gaps narrower than about two quads.
     size_t envelopedIslandCount = 0;
@@ -292,6 +292,31 @@ struct QualityReport {
     std::vector<std::pair<std::string, double>> diagnostics;
 };
 
+// Since 1.13.  One island (connected part) of a plan.  Its quads at another
+// Target Quads N, the other parameters kept, are about
+// max(N * areaShare, floorQuads) / edgeScaling^2, and its edge lengths go
+// with the inverse square root of its quads; a left-out island (a sliver
+// thinner than its quads) gets none.
+struct PlanIsland {
+    double areaShare = 0.0;
+    double plannedQuads = 0.0;
+    double floorQuads = 0.0;
+    bool leftOut = false;
+};
+
+// Since 1.13.  What remesh() would aim for, from planRemesh(): per input
+// vertex the planned quad edge length in input units (0 on a left-out
+// island) and the index of its island in `islands`.  A vertex no face uses
+// takes the values of the nearest one that has them.  Planned, not
+// realised: the run's extraction, retries and rounding move the count and
+// the size by some percent.
+struct RemeshPlan {
+    std::vector<float> vertexEdgeLengths;
+    std::vector<uint32_t> vertexIslands;
+    std::vector<PlanIsland> islands;
+    double plannedQuads = 0.0;
+};
+
 struct RemeshResult {
     RemeshStatus status = RemeshStatus::Failed;
     std::string message;
@@ -302,9 +327,19 @@ struct RemeshResult {
     // (empty when the core never started).  diagnosticsToJsonLines() writes
     // them as JSON lines, schema "autoremesher.stage-diagnostics".
     std::vector<DiagnosticRecord> stageDiagnostics;
+    // Since 1.13.  Filled by planRemesh() only.
+    RemeshPlan plan;
 };
 
 RemeshResult remesh(const RemeshRequest& request,
+    const RemeshCallbacks& callbacks = RemeshCallbacks());
+
+// Since 1.13.  Runs remesh() up to the continuous cover solve of each island
+// (input handling, island split, decimation, isotropic remesh, field and the
+// cover before rounding: about half a run), takes the quad edge that map
+// gives, and returns the plan in RemeshResult::plan, without a mesh
+// (docs/PREVIEW.md).  The report holds the input counts, times and diagnostics.
+RemeshResult planRemesh(const RemeshRequest& request,
     const RemeshCallbacks& callbacks = RemeshCallbacks());
 
 // Status, message, parameters and report as one JSON object (everything but
