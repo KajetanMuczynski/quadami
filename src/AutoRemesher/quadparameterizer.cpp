@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -309,6 +310,284 @@ namespace {
             }
         }
         return count;
+    }
+
+    // Guides (FeatureEdgeSet::Guide, TODO 5.7) ask for a closed edge loop,
+    // which needs every guide vertex to be regular with the guide straight
+    // through it: a pi map angle on each side.  Where the guide kinks or
+    // crosses a fold of the surface, the field turns rounded edge by edge
+    // give a side one quarter turn more or less, and the cover puts a cone
+    // on the guide (a quarter turn short on both sides) or turns the guide's
+    // isoline through a corner (one side short, the other long).  The field
+    // cannot move such a cone: both sides are aligned to the guide at both
+    // ends, so the count is fixed by the geometry of the vertex.
+    // Re-rounds one edge inside each such side by a quarter turn, as
+    // raiseSmallConeAngles does, which moves the side's excess or shortfall
+    // to the vertex across that edge, off the guide; `push` further edges
+    // move it on, each one edge farther from the guides.  Only edges that are
+    // not hard and whose far vertex is on no hard edge and stays at
+    // minimumConeQuarters or more; the cheapest turn first.
+    struct GuideStraightening {
+        size_t guideVertices = 0; // interior, two guide edges, both constrained
+        size_t unconstrained = 0; // two guide edges, one not an isoline
+        size_t conesNear[3] = { 0, 0, 0 }; // T cones 0, 1, 2 edges from a guide, before
+        size_t straight = 0; // already two quarter turns each side
+        size_t cones = 0; // sides sum to other than four quarter turns
+        size_t corners = 0; // four in all, but not two and two
+        size_t straightened = 0;
+        size_t blocked = 0; // a side could not be fixed
+        size_t reroundedEdges = 0;
+        size_t cleared = 0; // cones near a guide moved out
+        size_t stuck = 0; // a move that found no edge onward
+    };
+
+    GuideStraightening straightenGuides(const SurfaceMesh& mesh, const std::vector<Vector3>& field,
+        const std::vector<Vector3>& normals, const std::vector<char>& guideCorners,
+        const std::vector<char>& hardCorners, const std::vector<signed char>& cornerConstraints,
+        bool apply, bool fixCorners, int zone, bool clear, std::vector<int>* rotation, std::vector<char>* rerounded)
+    {
+        GuideStraightening stats;
+        const double quarter = .5 * M_PI;
+        const auto edgeAngle = [&](size_t face, const Vector3& edge) {
+            const Vector3 u = field[face], v = Vector3::crossProduct(normals[face], u);
+            return std::atan2(Vector3::dotProduct(edge, v), Vector3::dotProduct(edge, u));
+        };
+        const auto residual = [&](size_t c) {
+            const Vector3 edge = mesh.edgeVector(c);
+            double turn = edgeAngle(mesh.cornerFace(c), edge) - edgeAngle(mesh.cornerFace(mesh.oppositeCorner(c)), edge)
+                + quarter * (*rotation)[c];
+            return std::remainder(turn, 2.0 * M_PI);
+        };
+        const size_t vertexCount = mesh.vertexCount();
+        std::vector<char> onHard(vertexCount, 0);
+        std::vector<int> guideDegree(vertexCount, 0);
+        for (size_t c = 0; c < mesh.cornerCount(); ++c) {
+            if (!hardCorners[c])
+                continue;
+            onHard[mesh.cornerVertex(c)] = onHard[mesh.cornerVertex(mesh.nextCorner(c))] = 1;
+            if (guideCorners[c])
+                ++guideDegree[mesh.cornerVertex(c)];
+        }
+        // Edge hops from the nearest guide vertex, for the push.
+        std::vector<int> hops(vertexCount, -1);
+        const int push = std::max(1, zone);
+        {
+            std::queue<size_t> queue;
+            for (size_t v = 0; v < vertexCount; ++v)
+                if (guideDegree[v] > 0) {
+                    hops[v] = 0;
+                    queue.push(v);
+                }
+            while (!queue.empty()) {
+                const size_t v = queue.front();
+                queue.pop();
+                if (hops[v] >= std::max(push + 1, 3))
+                    continue;
+                for (const size_t c : mesh.cornersAroundVertex(v)) {
+                    const size_t w = mesh.cornerVertex(mesh.nextCorner(c));
+                    if (hops[w] < 0) {
+                        hops[w] = hops[v] + 1;
+                        queue.push(w);
+                    }
+                }
+            }
+        }
+        const auto quartersOf = [&](size_t vertex, int* quarters) {
+            return FrameField::coneQuarters(mesh, vertex, residual, quarters);
+        };
+        for (size_t v = 0; v < vertexCount; ++v) {
+            int q = 4;
+            if (hops[v] >= 0 && hops[v] <= 2 && quartersOf(v, &q) && q != 4)
+                ++stats.conesNear[hops[v]];
+        }
+        // Turns edge c (out of its corner's vertex) by `sign` quarter turns:
+        // the corner's vertex gains sign quarters, the far vertex loses them.
+        const auto reround = [&](size_t c, int sign) {
+            const size_t opposite = mesh.oppositeCorner(c);
+            (*rotation)[c] = (((*rotation)[c] + sign) % 4 + 4) % 4;
+            (*rotation)[opposite] = (4 - (*rotation)[c]) % 4;
+            (*rerounded)[c] = (*rerounded)[opposite] = 1;
+            ++stats.reroundedEdges;
+        };
+        // The cheapest edge among `candidates` (corners at one vertex) whose
+        // far vertex can lose `sign` quarters; npos if none.
+        const auto cheapest = [&](const std::vector<size_t>& candidates, int sign, int minimumHops) {
+            size_t best = SurfaceMesh::npos;
+            double bestCost = 0.0;
+            for (const size_t c : candidates) {
+                const size_t opposite = mesh.oppositeCorner(c);
+                if (opposite == SurfaceMesh::npos || hardCorners[c] || hardCorners[opposite] || (*rerounded)[c])
+                    continue;
+                const size_t far = mesh.cornerVertex(mesh.nextCorner(c));
+                if (onHard[far] || hops[far] < minimumHops)
+                    continue;
+                int farQuarters = 0;
+                if (!quartersOf(far, &farQuarters) || farQuarters - sign < minimumConeQuarters)
+                    continue;
+                const double cost = std::fabs(residual(c) + sign * quarter);
+                if (best == SurfaceMesh::npos || cost < bestCost) {
+                    best = c;
+                    bestCost = cost;
+                }
+            }
+            return best;
+        };
+        // Moves `sign` quarter turns from `at` on, one edge farther from the
+        // guides each step, until `push` edges away.
+        const auto moveOut = [&](size_t at, int sign) {
+            while (hops[at] >= 0 && hops[at] < push) {
+                std::vector<size_t> onward;
+                for (const size_t d : mesh.cornersAroundVertex(at))
+                    if (hops[mesh.cornerVertex(mesh.nextCorner(d))] > hops[at])
+                        onward.push_back(d);
+                const size_t d = cheapest(onward, sign, hops[at] + 1);
+                if (d == SurfaceMesh::npos) {
+                    ++stats.stuck;
+                    return;
+                }
+                reround(d, sign);
+                at = mesh.cornerVertex(mesh.nextCorner(d));
+            }
+        };
+        if (std::getenv("AR_GUIDE_DUMP")) { // EXPERIMENT
+            size_t histogram[5] = { 0, 0, 0, 0, 0 };
+            for (size_t v = 0; v < vertexCount; ++v)
+                ++histogram[std::min(4, guideDegree[v])];
+            std::fprintf(stderr, "guide degree histogram %zu %zu %zu %zu %zu\n", histogram[0], histogram[1], histogram[2], histogram[3], histogram[4]);
+        }
+        for (size_t v = 0; v < vertexCount; ++v) {
+            if (guideDegree[v] != 2)
+                continue;
+            // The fan in walking order; crossing after walk[i] is the edge of walk[i].
+            const std::vector<size_t>& incident = mesh.cornersAroundVertex(v);
+            if (incident.empty())
+                continue;
+            std::vector<size_t> walk;
+            bool closed = true;
+            {
+                size_t c = incident.front();
+                do {
+                    const size_t opposite = mesh.oppositeCorner(c);
+                    if (opposite == SurfaceMesh::npos || walk.size() > incident.size()) {
+                        closed = false;
+                        break;
+                    }
+                    walk.push_back(c);
+                    c = mesh.nextCorner(opposite);
+                } while (c != incident.front());
+            }
+            if (!closed || walk.size() != incident.size())
+                continue;
+            std::vector<size_t> crossings;
+            bool constrained = true;
+            for (size_t i = 0; i < walk.size(); ++i)
+                if (guideCorners[walk[i]]) {
+                    crossings.push_back(i);
+                    if (ConstraintNone == cornerConstraints[walk[i]]
+                        || ConstraintNone == cornerConstraints[mesh.oppositeCorner(walk[i])])
+                        constrained = false;
+                }
+            if (crossings.size() == 2 && !constrained)
+                ++stats.unconstrained;
+            if (crossings.size() != 2 || !constrained)
+                continue;
+            ++stats.guideVertices;
+            // Map angle of each side: its corners, the turns across its inner
+            // edges, and at the guide edges the field's offset from the edge,
+            // which the leaving side takes with any whole turns left over.
+            double side[2] = { 0.0, 0.0 };
+            std::vector<size_t> inner[2];
+            for (int k = 0; k < 2; ++k) {
+                const size_t first = crossings[k], last = crossings[1 - k];
+                size_t i = (first + 1) % walk.size();
+                const size_t entry = walk[first];
+                const Vector3 entryEdge = mesh.edgeVector(entry);
+                side[k] -= FrameField::quarterResidual(edgeAngle(mesh.cornerFace(mesh.oppositeCorner(entry)), entryEdge));
+                while (true) {
+                    const size_t c = walk[i];
+                    const Vector3 out = mesh.edgeVector(c), in = -mesh.edgeVector(mesh.previousCorner(c));
+                    side[k] += std::atan2(Vector3::crossProduct(out, in).length(), Vector3::dotProduct(out, in));
+                    if (i == last) {
+                        const double offsetFar = FrameField::quarterResidual(edgeAngle(mesh.cornerFace(mesh.oppositeCorner(c)), out));
+                        side[k] += residual(c) + offsetFar;
+                        break;
+                    }
+                    side[k] += residual(c);
+                    inner[k].push_back(c);
+                    i = (i + 1) % walk.size();
+                }
+            }
+            const int quarters[2] = { (int)std::lround(side[0] / quarter), (int)std::lround(side[1] / quarter) };
+            if (quarters[0] == 2 && quarters[1] == 2) {
+                ++stats.straight;
+                continue;
+            }
+            if (quarters[0] + quarters[1] != 4)
+                ++stats.cones;
+            else
+                ++stats.corners;
+            if (!apply || (quarters[0] + quarters[1] == 4 && !fixCorners))
+                continue;
+            bool fixed = true;
+            for (int k = 0; k < 2; ++k) {
+                const int sign = quarters[k] < 2 ? 1 : -1;
+                for (int need = std::abs(2 - quarters[k]); need > 0; --need) {
+                    size_t c = cheapest(inner[k], sign, 1);
+                    if (c == SurfaceMesh::npos) {
+                        fixed = false;
+                        break;
+                    }
+                    reround(c, sign);
+                    moveOut(mesh.cornerVertex(mesh.nextCorner(c)), sign);
+                }
+            }
+            if (fixed)
+                ++stats.straightened;
+            else
+                ++stats.blocked;
+        }
+        if (apply && clear)
+            for (size_t v = 0; v < vertexCount; ++v) {
+                if (hops[v] < 1 || hops[v] >= push || onHard[v])
+                    continue;
+                int q = 4;
+                if (!quartersOf(v, &q) || q == 4)
+                    continue;
+                const int sign = q < 4 ? 1 : -1;
+                for (int need = std::abs(4 - q); need > 0; --need) {
+                    // v gains `sign` from its cheapest edge onward; the far end carries it on.
+                    std::vector<size_t> onward;
+                    for (const size_t d : mesh.cornersAroundVertex(v))
+                        if (hops[mesh.cornerVertex(mesh.nextCorner(d))] > hops[v])
+                            onward.push_back(d);
+                    const size_t d = cheapest(onward, sign, hops[v] + 1);
+                    if (d == SurfaceMesh::npos) {
+                        ++stats.stuck;
+                        break;
+                    }
+                    reround(d, sign);
+                    moveOut(mesh.cornerVertex(mesh.nextCorner(d)), sign);
+                }
+                ++stats.cleared;
+            }
+        if (const char* dump = std::getenv("AR_GUIDE_DUMP")) { // EXPERIMENT
+            if (FILE* fp = std::fopen(dump, "a")) {
+                for (size_t v = 0; v < vertexCount; ++v) {
+                    int q = 4;
+                    if (quartersOf(v, &q) && q != 4) {
+                        const Vector3 p = mesh.position(v);
+                        std::fprintf(fp, "v %.9g %.9g %.9g %d %d\n", p.x(), p.y(), p.z(), q, hops[v]);
+                    }
+                }
+                for (size_t c = 0; c < mesh.cornerCount(); ++c)
+                    if (hardCorners[c] && mesh.cornerVertex(c) < mesh.cornerVertex(mesh.nextCorner(c))) {
+                        const Vector3 p = mesh.position(mesh.cornerVertex(c)), r = mesh.position(mesh.cornerVertex(mesh.nextCorner(c)));
+                        std::fprintf(fp, guideCorners[c] ? "e %.9g %.9g %.9g %.9g %.9g %.9g\n" : "h %.9g %.9g %.9g %.9g %.9g %.9g\n", p.x(), p.y(), p.z(), r.x(), r.y(), r.z());
+                    }
+                std::fclose(fp);
+            }
+        }
+        return stats;
     }
 
     std::vector<signed char> computeCornerConstraints(const SurfaceMesh& mesh,
@@ -1538,6 +1817,43 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     std::vector<char> rerounded;
     const size_t reroundedEdges = raiseSmallConeAngles(mesh, result->field, normals, cornerConstraints,
         &rotation, &rerounded);
+    {
+        const std::vector<char> guideCorners = featureCornerFlags(mesh, hardEdges, FeatureEdgeSet::Guide);
+        if (std::find(guideCorners.begin(), guideCorners.end(), 1) != guideCorners.end()) {
+#ifndef AR_GUIDE_STRAIGHTEN_DEFAULT // EXPERIMENT: ab.py --cmake-arg keys the variants
+#define AR_GUIDE_STRAIGHTEN_DEFAULT 0
+#endif
+#ifndef AR_GUIDE_ZONE_DEFAULT
+#define AR_GUIDE_ZONE_DEFAULT 1
+#endif
+#ifndef AR_GUIDE_CLEAR_DEFAULT
+#define AR_GUIDE_CLEAR_DEFAULT 0
+#endif
+            const char* mode = std::getenv("AR_GUIDE_STRAIGHTEN"); // EXPERIMENT
+            const char* zoneText = std::getenv("AR_GUIDE_ZONE"); // EXPERIMENT
+            const char* clearText = std::getenv("AR_GUIDE_CLEAR"); // EXPERIMENT
+            const int level = mode ? std::atoi(mode) : AR_GUIDE_STRAIGHTEN_DEFAULT;
+            const GuideStraightening stats = straightenGuides(mesh, result->field, normals, guideCorners,
+                hardCorners, cornerConstraints, level >= 1, level >= 2, zoneText ? std::atoi(zoneText) : AR_GUIDE_ZONE_DEFAULT,
+                clearText ? std::atoi(clearText) > 0 : AR_GUIDE_CLEAR_DEFAULT > 0,
+                &rotation, &rerounded);
+            DiagnosticRecord record("guide_straightening");
+            record.set("guide_vertices", (double)stats.guideVertices);
+            record.set("unconstrained", (double)stats.unconstrained);
+            record.set("cones_on", (double)stats.conesNear[0]);
+            record.set("cones_hop1", (double)stats.conesNear[1]);
+            record.set("cones_hop2", (double)stats.conesNear[2]);
+            record.set("straight", (double)stats.straight);
+            record.set("cones", (double)stats.cones);
+            record.set("corners", (double)stats.corners);
+            record.set("straightened", (double)stats.straightened);
+            record.set("blocked", (double)stats.blocked);
+            record.set("rerounded_edges", (double)stats.reroundedEdges);
+            record.set("cleared", (double)stats.cleared);
+            record.set("stuck", (double)stats.stuck);
+            result->diagnostics.push_back(std::move(record));
+        }
+    }
     result->diagnostics.push_back(creaseConstraintRecord(mesh, hardCorners, cornerConstraints, rerounded));
     // A hard edge's constraint follows the field, which a re-rounded edge
     // no longer does: on that edge the two faces could ask for different
