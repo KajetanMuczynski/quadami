@@ -788,26 +788,36 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
     
     // Each triangle's two other sides become one edge.  It is hard if
     // either was: the caller keeps a hard vertex where it is, so a hard
-    // side keeps its place (collapseShortEdges).
+    // side keeps its place (collapseShortEdges).  Both halves of the new
+    // edge get the flags of both sides, so a guide bit (FeatureEdgeSet::Guide)
+    // on the side that goes is not lost.
     const bool topHard = halfedge->previousHalfedge->hard() || halfedge->nextHalfedge->hard();
     const bool bottomHard = opposite->previousHalfedge->hard() || opposite->nextHalfedge->hard();
+    const auto sideFlags = [](Halfedge *inner) {
+        unsigned char flags = inner->featureFlags;
+        if (nullptr != inner->oppositeHalfedge)
+            flags |= inner->oppositeHalfedge->featureFlags;
+        return flags;
+    };
+    const unsigned char topFlags = sideFlags(halfedge->previousHalfedge) | sideFlags(halfedge->nextHalfedge);
+    const unsigned char bottomFlags = sideFlags(opposite->previousHalfedge) | sideFlags(opposite->nextHalfedge);
     linkHalfedgePair(halfedge->previousHalfedge->oppositeHalfedge,
         halfedge->nextHalfedge->oppositeHalfedge);
     linkHalfedgePair(opposite->previousHalfedge->oppositeHalfedge,
         opposite->nextHalfedge->oppositeHalfedge);
-    const auto makeHard = [](Halfedge *side) {
+    const auto makeHard = [](Halfedge *side, unsigned char flags) {
         if (nullptr != side) {
             side->feature = true;
-            side->featureFlags |= kHardFeature;
+            side->featureFlags |= flags | kHardFeature;
         }
     };
     if (topHard) {
-        makeHard(halfedge->previousHalfedge->oppositeHalfedge);
-        makeHard(halfedge->nextHalfedge->oppositeHalfedge);
+        makeHard(halfedge->previousHalfedge->oppositeHalfedge, topFlags);
+        makeHard(halfedge->nextHalfedge->oppositeHalfedge, topFlags);
     }
     if (bottomHard) {
-        makeHard(opposite->previousHalfedge->oppositeHalfedge);
-        makeHard(opposite->nextHalfedge->oppositeHalfedge);
+        makeHard(opposite->previousHalfedge->oppositeHalfedge, bottomFlags);
+        makeHard(opposite->nextHalfedge->oppositeHalfedge, bottomFlags);
     }
     
     rightVertex->position = collapseTo;
