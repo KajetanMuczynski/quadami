@@ -202,7 +202,7 @@ jobs:
                           os.makedirs(os.path.dirname(dst), exist_ok=True)
                           shutil.copy2(os.path.join(root, f), dst)
           # Which run folder is the candidate and which the baseline, for the verdict job.
-          with open("dirs.txt") as f, open(os.path.join("build", "records", "pair.txt"), "w") as out:
+          with open("dirs.txt") as f, open(os.path.join("build", "records", "pair.txt"), "w", newline="\n") as out:
               for line in f:
                   if line.strip():
                       out.write("runs/" + os.path.basename(line.strip().rstrip("/\\")) + "\n")
@@ -254,7 +254,7 @@ jobs:
               echo "::error::no records from $p (job failed before its runs or was dropped): re-run it"
               exit 1
             fi
-            mapfile -t folders < <(sed "s|^|$d/|" "$d/pair.txt")  # candidate [baseline]
+            mapfile -t folders < <(sed -e 's/\r$//' -e "s|^|$d/|" "$d/pair.txt")  # candidate [baseline]
             args+=(--pair "${folders[@]}")
           done
           echo "# Verdict, pooled over the platforms" >> "$GITHUB_STEP_SUMMARY"
