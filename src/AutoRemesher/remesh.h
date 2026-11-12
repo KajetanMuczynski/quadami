@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 12;
+const int InterfaceVersionMinor = 13;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -227,7 +227,7 @@ struct QualityReport {
     size_t nonManifoldVertexCount = 0;
     size_t islandCount = 0;
     size_t islandsWithoutOutput = 0;
-    // Since 1.12.  Islands with more holes and handles than their share of
+    // Since 1.13.  Islands with more holes and handles than their share of
     // the quads can hold (chain mail, strung beads), remeshed on a closed
     // envelope that fills gaps narrower than about two quads.
     size_t envelopedIslandCount = 0;

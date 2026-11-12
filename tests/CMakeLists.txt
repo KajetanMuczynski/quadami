@@ -100,3 +100,8 @@ add_test(NAME crease_remesh COMMAND crease_remesh_test)
 add_executable(envelope_test envelope_test.cpp)
 target_link_libraries(envelope_test PRIVATE autoremesher_core)
 add_test(NAME envelope COMMAND envelope_test)
+
+add_executable(sharp_edge_fallback_test sharp_edge_fallback_test.cpp)
+target_link_libraries(sharp_edge_fallback_test PRIVATE autoremesher_core)
+add_test(NAME sharp_edge_fallback COMMAND sharp_edge_fallback_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/data/cad-csg-bracket-rot.obj")

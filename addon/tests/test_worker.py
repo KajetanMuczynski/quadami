@@ -162,6 +162,11 @@ class ReportTest(unittest.TestCase):
         # A worker from before the measure sends no lost_parts: no row.
         self.assertFalse(any(label == "Missing parts" for label, _, _ in report.summary_rows(base)))
 
+    def test_running_note(self):
+        self.assertIsNone(report.running_note(29.9))
+        self.assertTrue(report.running_note(30).startswith("Running for 30 s. There is no time limit"))
+        self.assertTrue(report.running_note(125.5).startswith("Running for 2 min 05 s."))
+
     def test_warnings_are_wrapped(self):
         lines = report.warning_lines({"status": "ok", "warnings": ["1 of 3 islands produced no faces"]},
                                      width=20)
