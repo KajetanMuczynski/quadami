@@ -177,7 +177,7 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
     double peakRss = 0, cpuSeconds = 0;
     double mergedVertices = 0, droppedTriangles = 0, cleanupKeptParts = 0, zeroAreaTriangles = 0;
     double flippedTriangles = 0, nonOrientablePieces = 0;
-    double weldedEdges = 0, weldedVertices = 0, weldKeptParts = 0, duplicateTriangles = 0, sliverIslands = 0, splitVertices = 0;
+    double weldedEdges = 0, weldedVertices = 0, weldKeptParts = 0, repeatedCornerTriangles = 0, duplicateTriangles = 0, sliverIslands = 0, splitVertices = 0;
     double foldRepair = 0, foldedTriangles = 0, foldClusters = 0, foldPatches = 0, foldedAfter = 0, foldClustersAfter = 0;
     double foldMovedVertices = 0, foldMaxOffset = 0, foldMaxMove = 0, foldSpikes = 0, foldSpikeDrop = 0, foldMs = 0;
     double thinShare = 0, thinSpots = 0, thinGrowth = 0;
@@ -202,6 +202,7 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
             weldedEdges = valueOf(record, "input_welded_edges", 0);
             weldedVertices = valueOf(record, "input_welded_vertices", 0);
             weldKeptParts = valueOf(record, "input_weld_kept_parts", 0);
+            repeatedCornerTriangles = valueOf(record, "input_repeated_corner_triangles", 0);
             duplicateTriangles = valueOf(record, "input_duplicate_triangles", 0);
             sliverIslands = valueOf(record, "input_sliver_islands", 0);
             splitVertices = valueOf(record, "input_split_vertices", 0);
@@ -310,6 +311,7 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
         { "input_welded_edges", weldedEdges },
         { "input_welded_vertices", weldedVertices },
         { "input_weld_kept_parts", weldKeptParts },
+        { "input_repeated_corner_triangles", repeatedCornerTriangles },
         { "input_duplicate_triangles", duplicateTriangles },
         { "input_sliver_islands", sliverIslands },
         { "input_split_vertices", splitVertices },

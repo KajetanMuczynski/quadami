@@ -66,7 +66,8 @@ struct QexOutcome {
 // The polygons libQEx (Ebke et al. 2013) extracts from the integer-grid map,
 // given per triangle corner as QuadExtractor takes it.  Faces QEx leaves as
 // n-gons are kept.  Returns false, with the reason in outcome->reason, when
-// OpenMesh rejects the triangle mesh (a non-manifold edge or vertex), libQEx
+// a triangle uses a vertex twice (OpenMesh's add_face() corrupts the heap on
+// it), OpenMesh rejects the triangle mesh (a non-manifold edge or vertex), libQEx
 // hits a limit or one of its connectivity guards, or returns no face; the
 // caller then falls back to its own extraction.
 bool extractWithQex(const std::vector<Vector3>& vertices,

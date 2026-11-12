@@ -38,6 +38,9 @@ import types
 import addon_utils
 import bpy
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blender_checks  # noqa: E402
+
 installed = "--installed" in (sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
 if installed:
     # The id is the extension's folder name; read it from the source tree.
@@ -147,6 +150,8 @@ try:
     if installed:
         # package.py copies the bundled program's id, so the panel shows no mismatch.
         assert build != "dev" and worker.worker_build_id(executable) == build, build
+        # And it is the commit CI checked out, with nothing uncommitted.
+        blender_checks.check_build(build)
     outcome = worker.remesh(executable, positions, triangles, settings.parameters(), marked_edges=marked)
     assert outcome.ok, (outcome.status, outcome.message, outcome.log)
     assert outcome.report["input"]["feature_edges"] == 128, outcome.report["input"]
@@ -161,6 +166,7 @@ try:
     assert len(obj.data.polygons) == output["faces"], (len(obj.data.polygons), output)
     assert quads == output["quads"], (quads, output)
     assert len(obj.data.vertices) == output["vertices"]
+    blender_checks.check_quad_count(output, settings.target_quads)
     assert all(polygon.use_smooth for polygon in obj.data.polygons)
     assert obj.parent == rig and obj.users_collection == source.users_collection == (parts,)
     assert max(abs(a - b) for row_a, row_b in zip(obj.matrix_world, source.matrix_world)
@@ -245,6 +251,9 @@ try:
     assert copied.startswith("Quadami report\nResult: Done\n"), copied
     assert "follow_marks=SHARP" in copied and "target_quads=2000" in copied and "test warning" in copied, copied
     assert "Blender: " + bpy.app.version_string in copied and "Full report: " in copied, copied
+    assert "Add-on build: %s\n" % build in copied, copied
+    assert not installed or "Remesher build: same\n" in copied, copied
+    blender_checks.check_copy_report(copied, final_report)
     assert addon.OBJECT_OT_copy_report.poll(bpy.context)
     bpy.context.view_layer.objects.active = source
     source.scale = (1.0, 1.0, 3.0)

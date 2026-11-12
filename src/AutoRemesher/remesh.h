@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 12;
+const int InterfaceVersionMinor = 13;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -104,6 +104,11 @@ struct RemeshParameters {
     bool flattenSpikes = false;
     // Since 1.9.
     QuadSmoothing quadSmoothing = QuadSmoothing::Laplacian;
+    // Since 1.12.  > 0: also count lost parts at the quad width of this
+    // target (QualityReport::referenceLostParts), so a host can tell whether
+    // the parts an earlier run at this target lost came back.  Changes no
+    // output geometry.
+    uint32_t lostPartsReferenceTarget = 0;
 };
 
 struct RemeshRequest {
@@ -175,6 +180,17 @@ const double LostPartQuadWidths = 3.0;
 // part (a vertex whose normal faces it) lies within this many quad widths
 // (QualityReport::thinLostVertexCount).
 const double ThinLostPartQuadWidths = 2.0;
+
+// Since 1.12.  Lost input vertices by cause at one quad width; the fields of
+// QualityReport with the same names.
+struct LostPartCounts {
+    size_t farInputVertexCount = 0;
+    size_t pieceLostVertexCount = 0;
+    size_t lostPieceCount = 0;
+    size_t thinLostVertexCount = 0;
+    size_t openEdgeLostVertexCount = 0;
+    size_t otherLostVertexCount = 0;
+};
 
 // Measured on the result mesh.  Field definitions are in INTERFACE.md §3.1.
 struct QualityReport {
@@ -251,6 +267,13 @@ struct QualityReport {
     size_t thinLostVertexCount = 0;
     size_t openEdgeLostVertexCount = 0;
     size_t otherLostVertexCount = 0;
+    // Since 1.12.  RemeshParameters::lostPartsReferenceTarget (0: not
+    // measured) and the far vertices by cause at h0 of that target, with the
+    // same distances and rules.  Each raise of the target shrinks h0, so finer
+    // parts count as lost; at the reference width only what the earlier run
+    // could have kept counts.
+    size_t lostPartsReferenceTarget = 0;
+    LostPartCounts referenceLostParts;
     size_t collapsedIslandCount = 0;
     size_t smallestCollapsedIslandFaces = 0;
     size_t smallestCollapsedIslandTargetQuads = 0;
@@ -265,7 +288,7 @@ struct QualityReport {
     std::vector<std::pair<std::string, double>> diagnostics;
 };
 
-// Since 1.12.  One island (connected part) of a plan.  Its quads at another
+// Since 1.13.  One island (connected part) of a plan.  Its quads at another
 // Target Quads N, the other parameters kept, are about
 // max(N * areaShare, floorQuads) / edgeScaling^2, and its edge lengths go
 // with the inverse square root of its quads; a left-out island (a sliver
@@ -277,7 +300,7 @@ struct PlanIsland {
     bool leftOut = false;
 };
 
-// Since 1.12.  What remesh() would aim for, from planRemesh(): per input
+// Since 1.13.  What remesh() would aim for, from planRemesh(): per input
 // vertex the planned quad edge length in input units (0 on a left-out
 // island) and the index of its island in `islands`.  A vertex no face uses
 // takes the values of the nearest one that has them.  Planned, not
@@ -300,14 +323,14 @@ struct RemeshResult {
     // (empty when the core never started).  diagnosticsToJsonLines() writes
     // them as JSON lines, schema "autoremesher.stage-diagnostics".
     std::vector<DiagnosticRecord> stageDiagnostics;
-    // Since 1.12.  Filled by planRemesh() only.
+    // Since 1.13.  Filled by planRemesh() only.
     RemeshPlan plan;
 };
 
 RemeshResult remesh(const RemeshRequest& request,
     const RemeshCallbacks& callbacks = RemeshCallbacks());
 
-// Since 1.12.  Runs remesh() up to the continuous cover solve of each island
+// Since 1.13.  Runs remesh() up to the continuous cover solve of each island
 // (input handling, island split, decimation, isotropic remesh, field and the
 // cover before rounding: about half a run), takes the quad edge that map
 // gives, and returns the plan in RemeshResult::plan, without a mesh
