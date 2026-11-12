@@ -87,7 +87,6 @@ bool IsotropicRemesher::remesh()
         } while (halfedge != face->halfedge);
     }
     m_remeshedFeatureEdges.normalize();
-    m_clearedFeatureEdges = halfedgeMesh->clearedFeatureEdges();
 
     return true;
 }

@@ -238,8 +238,8 @@ bool remesherHandsTheEdgesOnToT()
             remesher.remeshedVertices(), remesher.remeshedTriangles(), degrees, &classified);
         const double carriedLength = AutoRemesher::featureEdgeLength(carried, remesher.remeshedVertices());
         const double length = AutoRemesher::featureEdgeLength(extended, remesher.remeshedVertices());
-        std::printf("  at %.0f degrees: %zu input edges; T: %zu carried (length %.3f), %zu flipped away; T's set %zu edges (%zu classified), length %.3f of %.3f\n",
-            degrees, sharp.size(), carried.size(), carriedLength, remesher.clearedFeatureEdges(), extended.size(), classified, length, boxEdgeLength);
+        std::printf("  at %.0f degrees: %zu input edges; T: %zu carried (length %.3f); T's set %zu edges (%zu classified), length %.3f of %.3f\n",
+            degrees, sharp.size(), carried.size(), carriedLength, extended.size(), classified, length, boxEdgeLength);
         if (180.0 == degrees) {
             ok = check(extended.empty(), "at 180 degrees T has no sharp edges") && ok;
             continue;
@@ -261,12 +261,16 @@ bool remesherHandsTheEdgesOnToT()
             }
         std::printf("  ends of sharp edges of T lie within %.2g of a box edge\n", offEdge);
         ok = check(onT.edges == extended.edges, "with no hard edges T's set is T's own sharp edges") && ok;
-        // The relaxation moves feature vertices too (TODO 2.5), up to most of an edge.
-        ok = check(offEdge < 0.1, "they lie near a box edge (within one target edge)") && ok;
-        // The remesher's flips and smoothing leave little of the crease sharp
-        // on T (TODO 2.5): 1.03 of 16, though 4.8 of it is still carried.
-        ok = check(length > 0.0 && length < 1.05 * boxEdgeLength,
-                 "T keeps some of the box's edge length as sharp edges, and not more")
+        // Chain vertices slide along the box edges and are projected back
+        // onto them, corners stay (TODO 2.5).
+        ok = check(offEdge < 1e-9, "they lie on a box edge") && ok;
+        // No flip removes a box edge and nothing bends it: the whole length
+        // is carried and still sharp on T (before TODO 2.5: 1.03 of 16).
+        ok = check(std::fabs(carriedLength - boxEdgeLength) < 1e-9 * boxEdgeLength,
+                 "T carries the box's whole edge length")
+            && ok;
+        ok = check(std::fabs(length - boxEdgeLength) < 1e-9 * boxEdgeLength,
+                 "and all of it is sharp on T")
             && ok;
     }
     return ok;

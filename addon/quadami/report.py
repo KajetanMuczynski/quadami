@@ -79,7 +79,12 @@ def summary_rows(report):
         count("Non-manifold edges", output.get("non_manifold_edges", 0))
         count("Non-manifold vertices", output.get("non_manifold_vertices", 0))
         count("Winding flips", output.get("orientation_flips", 0))
-        count("Folded faces", output.get("folded_faces", 0))
+        # Folded faces: a corner turned inwards, or a quad folded under both
+        # diagonals (twisted).  Cores before interface 1.11 count only the
+        # first, which misses most twisted quads.
+        folded = output.get("folded_or_twisted_faces", output.get("folded_faces", 0))
+        twisted = output.get("twisted_quads", 0)
+        rows.append(("Folded faces", "%d (%d twisted)" % (folded, twisted) if twisted else str(folded), folded > 0))
         # The core's input cleanup: open seams it welded, duplicate triangles
         # it removed, pinched vertices it split, islands with almost no area
         # for their length (zero-width slivers) it left out, triangles on a zero-length edge it dropped and
