@@ -17,6 +17,7 @@
  *  SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include <AutoRemesher/AutoRemesher>
+#include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/MeasureMesh>
 #include <AutoRemesher/Remesh>
 #include <AutoRemesher/RemeshPreview>
@@ -31,6 +32,7 @@
 #include <locale>
 #include <numeric>
 #include <sstream>
+#include <unordered_map>
 #if defined(__has_include)
 #if __has_include(<oneapi/tbb/blocked_range.h>)
 #include <oneapi/tbb/blocked_range.h>
@@ -99,6 +101,71 @@ namespace {
         (*handler)(progress, nullptr != status ? status : "");
     }
 
+    struct FaceShape {
+        bool degenerate = false;
+        bool folded = false;
+        bool twisted = false;
+    };
+
+    // The per-face tests of measureMesh() on a face of size > 0.
+    FaceShape faceShape(const RemeshMesh& mesh, const uint32_t* corners, size_t size)
+    {
+        const auto position = [&](uint32_t vertex) {
+            return Vector3(mesh.positions[3 * (size_t)vertex],
+                mesh.positions[3 * (size_t)vertex + 1],
+                mesh.positions[3 * (size_t)vertex + 2]);
+        };
+        FaceShape shape;
+        bool repeated = false;
+        for (size_t i = 0; i < size; ++i) {
+            for (size_t j = i + 1; j < size; ++j) {
+                if (corners[i] == corners[j])
+                    repeated = true;
+            }
+        }
+
+        // Twice the area vector, by a fan from the first corner.
+        Vector3 normal;
+        double longestEdgeSquared = 0.0;
+        const Vector3 origin = position(corners[0]);
+        for (size_t i = 0; i < size; ++i) {
+            const Vector3 from = position(corners[i]);
+            const Vector3 to = position(corners[(i + 1) % size]);
+            longestEdgeSquared = std::max(longestEdgeSquared, (to - from).lengthSquared());
+            if (i > 0 && i + 1 < size)
+                normal += Vector3::crossProduct(from - origin, to - origin);
+        }
+        if (repeated || 0.5 * normal.length() <= 1e-12 * longestEdgeSquared) {
+            shape.degenerate = true;
+            return shape;
+        }
+        // Folded: some corner turns against the area vector, i.e. its
+        // scaled Jacobian is <= 0, so the face is non-convex or twisted.
+        for (size_t i = 0; i < size; ++i) {
+            const Vector3 corner = position(corners[i]);
+            const Vector3 next = position(corners[(i + 1) % size]);
+            const Vector3 previous = position(corners[(i + size - 1) % size]);
+            if (Vector3::dotProduct(Vector3::crossProduct(next - corner, previous - corner), normal) <= 0.0) {
+                shape.folded = true;
+                break;
+            }
+        }
+        // Twisted: a quad folded under both diagonals, i.e. either way of
+        // cutting it into two triangles gives triangles that face apart.
+        // A quad bent like the sides of a tetrahedron is twisted with every
+        // corner still turning with the area vector, so the corner test
+        // above misses most twisted quads.
+        if (4 == size) {
+            const Vector3 a = position(corners[0]);
+            const Vector3 b = position(corners[1]);
+            const Vector3 c = position(corners[2]);
+            const Vector3 d = position(corners[3]);
+            shape.twisted = Vector3::dotProduct(Vector3::crossProduct(b - a, c - a), Vector3::crossProduct(c - a, d - a)) < 0.0
+                && Vector3::dotProduct(Vector3::crossProduct(c - b, d - b), Vector3::crossProduct(d - b, a - b)) < 0.0;
+        }
+        return shape;
+    }
+
     size_t findRoot(std::vector<size_t>& parents, size_t vertex)
     {
         while (parents[vertex] != vertex) {
@@ -113,11 +180,6 @@ void measureMesh(const RemeshMesh& mesh, QualityReport* report)
 {
     const size_t vertexCount = mesh.positions.size() / 3;
     const size_t faceCount = mesh.faceSizes.size();
-    const auto position = [&](uint32_t vertex) {
-        return Vector3(mesh.positions[3 * (size_t)vertex],
-            mesh.positions[3 * (size_t)vertex + 1],
-            mesh.positions[3 * (size_t)vertex + 2]);
-    };
 
     report->vertexCount = vertexCount;
     report->faceCount = faceCount;
@@ -155,39 +217,16 @@ void measureMesh(const RemeshMesh& mesh, QualityReport* report)
             continue;
         }
 
-        bool repeated = false;
-        for (size_t i = 0; i < size; ++i) {
-            for (size_t j = i + 1; j < size; ++j) {
-                if (corners[i] == corners[j])
-                    repeated = true;
-            }
-        }
-
-        // Twice the area vector, by a fan from the first corner.
-        Vector3 normal;
-        double longestEdgeSquared = 0.0;
-        const Vector3 origin = position(corners[0]);
-        for (size_t i = 0; i < size; ++i) {
-            const Vector3 from = position(corners[i]);
-            const Vector3 to = position(corners[(i + 1) % size]);
-            longestEdgeSquared = std::max(longestEdgeSquared, (to - from).lengthSquared());
-            if (i > 0 && i + 1 < size)
-                normal += Vector3::crossProduct(from - origin, to - origin);
-        }
-        if (repeated || 0.5 * normal.length() <= 1e-12 * longestEdgeSquared) {
+        const FaceShape shape = faceShape(mesh, corners, size);
+        if (shape.degenerate) {
             ++report->degenerateFaceCount;
         } else {
-            // Folded: some corner turns against the area vector, i.e. its
-            // scaled Jacobian is <= 0, so the face is non-convex or twisted.
-            for (size_t i = 0; i < size; ++i) {
-                const Vector3 corner = position(corners[i]);
-                const Vector3 next = position(corners[(i + 1) % size]);
-                const Vector3 previous = position(corners[(i + size - 1) % size]);
-                if (Vector3::dotProduct(Vector3::crossProduct(next - corner, previous - corner), normal) <= 0.0) {
-                    ++report->foldedFaceCount;
-                    break;
-                }
-            }
+            if (shape.folded)
+                ++report->foldedFaceCount;
+            if (shape.twisted)
+                ++report->twistedQuadCount;
+            if (shape.folded || shape.twisted)
+                ++report->foldedOrTwistedFaceCount;
         }
 
         for (size_t i = 0; i < size; ++i) {
@@ -279,6 +318,173 @@ void measureMesh(const RemeshMesh& mesh, QualityReport* report)
     }
 }
 
+void discountCreaseDiagonalQuads(const std::vector<double>& positions, const std::vector<uint32_t>& triangles,
+    const RemeshMesh& mesh, QualityReport* report)
+{
+    // The twisted quads, with whether the corner test folds them too.
+    struct Twisted {
+        size_t offset;
+        bool folded;
+    };
+    std::vector<Twisted> twisted;
+    size_t offset = 0;
+    for (const uint32_t size : mesh.faceSizes) {
+        if (4 == size) {
+            const FaceShape shape = faceShape(mesh, mesh.faceIndices.data() + offset, size);
+            if (!shape.degenerate && shape.twisted)
+                twisted.push_back({ offset, shape.folded });
+        }
+        offset += size;
+    }
+    if (twisted.empty())
+        return;
+
+    // Per twisted quad and diagonal: its two ends, which must lie on a crease
+    // (to rounding), and its midpoint, which may be off a curved crease by a
+    // twentieth of the diagonal (a chord's sagitta).
+    struct Query {
+        Vector3 point;
+        double tolerance;
+        bool onCrease;
+    };
+    const auto output = [&](uint32_t vertex) {
+        return Vector3(mesh.positions[3 * (size_t)vertex], mesh.positions[3 * (size_t)vertex + 1],
+            mesh.positions[3 * (size_t)vertex + 2]);
+    };
+    std::vector<Query> queries;
+    queries.reserve(6 * twisted.size());
+    for (const Twisted& quad : twisted) {
+        const uint32_t* corners = mesh.faceIndices.data() + quad.offset;
+        for (size_t k = 0; k < 2; ++k) {
+            const Vector3 from = output(corners[k]);
+            const Vector3 to = output(corners[k + 2]);
+            const double length = (to - from).length();
+            queries.push_back({ from, 1e-6 * length, false });
+            queries.push_back({ to, 1e-6 * length, false });
+            queries.push_back({ 0.5 * (from + to), 0.05 * length, false });
+        }
+    }
+    double reach = 0.0;
+    for (const Query& query : queries)
+        reach = std::max(reach, query.tolerance);
+    // Query points by cell of a grid 40 tolerances wide, so that most input
+    // edges look in one cell; a cell's key is a hash, and cells that share
+    // one only cost a few extra distance tests.
+    const double cellSize = 40.0 * reach;
+    if (!(cellSize > 0.0))
+        return;
+    const auto cell = [&](double coordinate) { return (int64_t)std::floor(coordinate / cellSize); };
+    const auto cellKey = [](int64_t x, int64_t y, int64_t z) {
+        return (uint64_t)x * 73856093u ^ (uint64_t)y * 19349663u ^ (uint64_t)z * 83492791u;
+    };
+    std::unordered_map<uint64_t, std::vector<size_t>> grid;
+    for (size_t q = 0; q < queries.size(); ++q) {
+        const Vector3& point = queries[q].point;
+        grid[cellKey(cell(point.x()), cell(point.y()), cell(point.z()))].push_back(q);
+    }
+
+    // Input edges near a query point, then whether they are creases.
+    const auto input = [&](uint32_t vertex) {
+        return Vector3(positions[3 * (size_t)vertex], positions[3 * (size_t)vertex + 1], positions[3 * (size_t)vertex + 2]);
+    };
+    const auto key = [](uint32_t a, uint32_t b) {
+        return ((uint64_t)std::min(a, b) << 32) | std::max(a, b);
+    };
+    std::vector<std::pair<uint64_t, size_t>> hits;
+    const auto test = [&](uint32_t first, uint32_t second, const Vector3& a, const Vector3& b, size_t q) {
+        const Query& query = queries[q];
+        const Vector3 edge = b - a;
+        const double edgeSquared = edge.lengthSquared();
+        const double t = edgeSquared > 0.0
+            ? std::max(0.0, std::min(1.0, Vector3::dotProduct(query.point - a, edge) / edgeSquared))
+            : 0.0;
+        if ((a + t * edge - query.point).length() <= query.tolerance)
+            hits.emplace_back(key(first, second), q);
+    };
+    for (size_t i = 0; i + 2 < triangles.size(); i += 3) {
+        for (size_t k = 0; k < 3; ++k) {
+            const uint32_t first = triangles[i + k];
+            const uint32_t second = triangles[i + (k + 1) % 3];
+            const Vector3 a = input(first);
+            const Vector3 b = input(second);
+            int64_t low[3];
+            int64_t high[3];
+            double cells = 1.0;
+            for (int axis = 0; axis < 3; ++axis) {
+                low[axis] = cell(std::min(a[axis], b[axis]) - reach);
+                high[axis] = cell(std::max(a[axis], b[axis]) + reach);
+                cells *= (double)(high[axis] - low[axis] + 1);
+            }
+            if (cells > (double)queries.size()) {
+                for (size_t q = 0; q < queries.size(); ++q)
+                    test(first, second, a, b, q);
+                continue;
+            }
+            for (int64_t x = low[0]; x <= high[0]; ++x) {
+                for (int64_t y = low[1]; y <= high[1]; ++y) {
+                    for (int64_t z = low[2]; z <= high[2]; ++z) {
+                        const auto found = grid.find(cellKey(x, y, z));
+                        if (found == grid.end())
+                            continue;
+                        for (const size_t q : found->second)
+                            test(first, second, a, b, q);
+                    }
+                }
+            }
+        }
+    }
+    std::sort(hits.begin(), hits.end());
+    hits.erase(std::unique(hits.begin(), hits.end()), hits.end());
+    if (hits.empty())
+        return;
+    std::vector<uint64_t> candidates;
+    candidates.reserve(hits.size());
+    for (const auto& hit : hits)
+        candidates.push_back(hit.first);
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    std::vector<std::vector<Vector3>> normals(candidates.size());
+    for (size_t i = 0; i + 2 < triangles.size(); i += 3) {
+        for (size_t k = 0; k < 3; ++k) {
+            const uint64_t edge = key(triangles[i + k], triangles[i + (k + 1) % 3]);
+            const auto found = std::lower_bound(candidates.begin(), candidates.end(), edge);
+            if (found != candidates.end() && *found == edge)
+                normals[found - candidates.begin()].push_back(
+                    Vector3::normal(input(triangles[i]), input(triangles[i + 1]), input(triangles[i + 2])));
+        }
+    }
+    // A quad bent along its diagonal folds under that diagonal only past a
+    // right angle, so only edges of 90 degrees and more (the one sharp test,
+    // with its tolerance) can explain it; as in classifySharpEdges(), an edge
+    // needs exactly two faces with a normal.
+    std::vector<char> crease(candidates.size(), 0);
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        const auto& faceNormals = normals[i];
+        if (2 != faceNormals.size() || faceNormals[0].isZero() || faceNormals[1].isZero())
+            continue;
+        const double cosine = std::max(-1.0, std::min(1.0, Vector3::dotProduct(faceNormals[0], faceNormals[1])));
+        crease[i] = isSharpNormalAngle(std::acos(cosine), 90.0) ? 1 : 0;
+    }
+    for (const auto& hit : hits) {
+        if (crease[std::lower_bound(candidates.begin(), candidates.end(), hit.first) - candidates.begin()])
+            queries[hit.second].onCrease = true;
+    }
+
+    for (size_t i = 0; i < twisted.size(); ++i) {
+        bool alongCrease = false;
+        for (size_t k = 0; k < 2; ++k) {
+            const Query* diagonal = &queries[6 * i + 3 * k];
+            alongCrease = alongCrease || (diagonal[0].onCrease && diagonal[1].onCrease && diagonal[2].onCrease);
+        }
+        if (!alongCrease)
+            continue;
+        --report->twistedQuadCount;
+        ++report->creaseDiagonalQuadCount;
+        if (!twisted[i].folded)
+            --report->foldedOrTwistedFaceCount;
+    }
+}
+
 void measureClosedIslands(const RemeshMesh& mesh,
     const std::vector<::AutoRemesher::AutoRemesher::RemeshedIsland>& islands,
     QualityReport* report)
@@ -329,7 +535,7 @@ void measureClosedIslands(const RemeshMesh& mesh,
 void measureLostParts(const std::vector<double>& positions, const std::vector<uint32_t>& triangles,
     size_t targetQuads, const RemeshMesh& mesh,
     const std::vector<::AutoRemesher::AutoRemesher::RemeshedIsland>& islands,
-    QualityReport* report, const std::vector<size_t>* leftOut)
+    QualityReport* report, const std::vector<size_t>* leftOut, size_t referenceTargetQuads)
 {
     for (const auto& island : islands) {
         if (0 == island.faceCount || island.faceCount >= 0.5 * island.targetQuads)
@@ -405,148 +611,190 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
             previousDistance = distance;
         }
     });
-    std::vector<size_t> far;
-    for (size_t i = 0; i < distances.size(); ++i) {
+    for (size_t i = 0; i < distances.size(); ++i)
         report->farthestInputQuadWidths = std::max(report->farthestInputQuadWidths, distances[i] / quadWidth);
-        if (distances[i] > radius)
-            far.push_back(i);
-    }
-    report->farInputVertexCount = far.size();
-    if (far.empty())
-        return;
 
-    // Why each far vertex is lost.  A piece of the input with no output
-    // within one quad width came out with nothing (a speck, a hair card, a
-    // whole island); a higher target does not necessarily bring it back.
-    // Otherwise the part was cut off or smoothed away: thin if its other
-    // side is close, and then the target is what limits it.
-    std::vector<uint32_t> parent(used.size());
-    std::iota(parent.begin(), parent.end(), 0u);
+    // What the classification needs besides the distances: the input's
+    // pieces (connected by shared vertices), open edges and vertex normals.
+    // The same for every width, so built once, when a vertex is far at all.
+    std::vector<uint32_t> parent;
+    std::vector<char> onOpenEdge;
+    std::vector<Vector3> normals;
     const auto root = [&](uint32_t vertex) {
         while (parent[vertex] != vertex)
             vertex = parent[vertex] = parent[parent[vertex]];
         return vertex;
     };
-    for (size_t i = 0; i < triangles.size(); i += 3) {
-        const uint32_t a = root(triangles[i]);
-        parent[root(triangles[i + 1])] = a;
-        parent[root(triangles[i + 2])] = a;
-    }
-    std::vector<char> pieceHasOutput(used.size(), 0);
-    for (size_t i = 0; i < inputVertices.size(); ++i) {
-        if (distances[i] <= quadWidth)
-            pieceHasOutput[root(inputVertices[i])] = 1;
-    }
-    std::vector<size_t> attached;
-    std::vector<uint32_t> lostPieces;
-    for (const size_t i : far) {
-        const uint32_t piece = root(inputVertices[i]);
-        if (pieceHasOutput[piece]) {
-            attached.push_back(i);
-        } else {
-            ++report->pieceLostVertexCount;
-            lostPieces.push_back(piece);
+    const auto buildTopology = [&]() {
+        if (!parent.empty())
+            return;
+        parent.resize(used.size());
+        std::iota(parent.begin(), parent.end(), 0u);
+        for (size_t i = 0; i < triangles.size(); i += 3) {
+            const uint32_t a = root(triangles[i]);
+            parent[root(triangles[i + 1])] = a;
+            parent[root(triangles[i + 2])] = a;
         }
-    }
-    std::sort(lostPieces.begin(), lostPieces.end());
-    report->lostPieceCount = (size_t)(std::unique(lostPieces.begin(), lostPieces.end()) - lostPieces.begin());
-    if (attached.empty())
-        return;
-
-    // Thickness at a sample of the attached far vertices: the distance to the
-    // nearest input vertex whose normal faces it (the part's other side),
-    // searched in a grid of cells as wide as the thin limit.  A single-sided
-    // surface (a leaf, a petal, cloth) has no other side; there the nearest
-    // open edge, an edge of one input triangle, is what is close.
-    std::vector<std::pair<uint32_t, uint32_t>> edges;
-    edges.reserve(triangles.size());
-    for (size_t i = 0; i < triangles.size(); i += 3) {
-        for (size_t k = 0; k < 3; ++k) {
-            const uint32_t a = triangles[i + k], b = triangles[i + (k + 1) % 3];
-            edges.emplace_back(std::min(a, b), std::max(a, b));
+        std::vector<std::pair<uint32_t, uint32_t>> edges;
+        edges.reserve(triangles.size());
+        for (size_t i = 0; i < triangles.size(); i += 3) {
+            for (size_t k = 0; k < 3; ++k) {
+                const uint32_t a = triangles[i + k], b = triangles[i + (k + 1) % 3];
+                edges.emplace_back(std::min(a, b), std::max(a, b));
+            }
         }
-    }
-    std::sort(edges.begin(), edges.end());
-    std::vector<char> onOpenEdge(used.size(), 0);
-    for (size_t i = 0; i < edges.size();) {
-        size_t j = i + 1;
-        while (j < edges.size() && edges[j] == edges[i])
-            ++j;
-        if (j - i == 1)
-            onOpenEdge[edges[i].first] = onOpenEdge[edges[i].second] = 1;
-        i = j;
-    }
-    std::vector<Vector3> normals(used.size());
-    for (size_t i = 0; i < triangles.size(); i += 3) {
-        const Vector3 normal = Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]),
-            point(triangles[i + 2]) - point(triangles[i]));
-        for (size_t k = 0; k < 3; ++k)
-            normals[triangles[i + k]] += normal;
-    }
-    for (auto& normal : normals)
-        normal.normalize();
-    const double cellSize = ThinLostPartQuadWidths * quadWidth;
-    Vector3 low = point(inputVertices[0]);
-    for (const uint32_t vertex : inputVertices) {
-        for (int k = 0; k < 3; ++k)
-            low[k] = std::min(low[k], point(vertex)[k]);
-    }
-    using Cell = std::array<long long, 3>;
-    const auto cellOf = [&](const Vector3& position) {
-        return Cell { (long long)std::floor((position[0] - low[0]) / cellSize),
-            (long long)std::floor((position[1] - low[1]) / cellSize),
-            (long long)std::floor((position[2] - low[2]) / cellSize) };
+        std::sort(edges.begin(), edges.end());
+        onOpenEdge.assign(used.size(), 0);
+        for (size_t i = 0; i < edges.size();) {
+            size_t j = i + 1;
+            while (j < edges.size() && edges[j] == edges[i])
+                ++j;
+            if (j - i == 1)
+                onOpenEdge[edges[i].first] = onOpenEdge[edges[i].second] = 1;
+            i = j;
+        }
+        normals.assign(used.size(), Vector3());
+        for (size_t i = 0; i < triangles.size(); i += 3) {
+            const Vector3 normal = Vector3::crossProduct(point(triangles[i + 1]) - point(triangles[i]),
+                point(triangles[i + 2]) - point(triangles[i]));
+            for (size_t k = 0; k < 3; ++k)
+                normals[triangles[i + k]] += normal;
+        }
+        for (auto& normal : normals)
+            normal.normalize();
     };
-    std::vector<std::pair<Cell, uint32_t>> grid;
-    grid.reserve(inputVertices.size());
-    for (const uint32_t vertex : inputVertices)
-        grid.emplace_back(cellOf(point(vertex)), vertex);
-    std::sort(grid.begin(), grid.end());
-    const size_t sampleCount = std::min<size_t>(attached.size(), 1024);
-    std::vector<double> thickness(sampleCount, std::numeric_limits<double>::max());
-    std::vector<char> nearOpenEdge(sampleCount, 0);
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, sampleCount), [&](const tbb::blocked_range<size_t>& range) {
-        for (size_t s = range.begin(); s != range.end(); ++s) {
-            const uint32_t vertex = inputVertices[attached[s * attached.size() / sampleCount]];
-            const Vector3 position = point(vertex);
-            const Cell cell = cellOf(position);
-            for (long long dx = -1; dx <= 1; ++dx) {
-                for (long long dy = -1; dy <= 1; ++dy) {
-                    for (long long dz = -1; dz <= 1; ++dz) {
-                        const Cell near = { cell[0] + dx, cell[1] + dy, cell[2] + dz };
-                        auto it = std::lower_bound(grid.begin(), grid.end(), std::make_pair(near, (uint32_t)0));
-                        for (; it != grid.end() && it->first == near; ++it) {
-                            const double distance = (point(it->second) - position).length();
-                            if (Vector3::dotProduct(normals[it->second], normals[vertex]) < -0.5)
-                                thickness[s] = std::min(thickness[s], distance);
-                            if (onOpenEdge[it->second] && distance <= cellSize)
-                                nearOpenEdge[s] = 1;
+
+    // Counts the vertices farther than LostPartQuadWidths widths and why each
+    // is lost, with width as the quad width; the thin parts' thickness in
+    // widths goes to thinWidths.  The distances do not depend on the width.
+    const auto classify = [&](double width, LostPartCounts* counts, std::vector<double>* thinWidths) {
+        const double farRadius = LostPartQuadWidths * width;
+        std::vector<size_t> far;
+        for (size_t i = 0; i < distances.size(); ++i) {
+            if (distances[i] > farRadius)
+                far.push_back(i);
+        }
+        counts->farInputVertexCount = far.size();
+        if (far.empty())
+            return;
+        buildTopology();
+
+        // A piece of the input with no output within one quad width came out
+        // with nothing (a speck, a hair card, a whole island); a higher target
+        // does not necessarily bring it back.  Otherwise the part was cut off
+        // or smoothed away: thin if its other side is close, and then the
+        // target is what limits it.
+        std::vector<char> pieceHasOutput(used.size(), 0);
+        for (size_t i = 0; i < inputVertices.size(); ++i) {
+            if (distances[i] <= width)
+                pieceHasOutput[root(inputVertices[i])] = 1;
+        }
+        std::vector<size_t> attached;
+        std::vector<uint32_t> lostPieces;
+        for (const size_t i : far) {
+            const uint32_t piece = root(inputVertices[i]);
+            if (pieceHasOutput[piece]) {
+                attached.push_back(i);
+            } else {
+                ++counts->pieceLostVertexCount;
+                lostPieces.push_back(piece);
+            }
+        }
+        std::sort(lostPieces.begin(), lostPieces.end());
+        counts->lostPieceCount = (size_t)(std::unique(lostPieces.begin(), lostPieces.end()) - lostPieces.begin());
+        if (attached.empty())
+            return;
+
+        // Thickness at a sample of the attached far vertices: the distance to
+        // the nearest input vertex whose normal faces it (the part's other
+        // side), searched in a grid of cells as wide as the thin limit.  A
+        // single-sided surface (a leaf, a petal, cloth) has no other side;
+        // there the nearest open edge, an edge of one input triangle, is what
+        // is close.
+        const double cellSize = ThinLostPartQuadWidths * width;
+        Vector3 low = point(inputVertices[0]);
+        for (const uint32_t vertex : inputVertices) {
+            for (int k = 0; k < 3; ++k)
+                low[k] = std::min(low[k], point(vertex)[k]);
+        }
+        using Cell = std::array<long long, 3>;
+        const auto cellOf = [&](const Vector3& position) {
+            return Cell { (long long)std::floor((position[0] - low[0]) / cellSize),
+                (long long)std::floor((position[1] - low[1]) / cellSize),
+                (long long)std::floor((position[2] - low[2]) / cellSize) };
+        };
+        std::vector<std::pair<Cell, uint32_t>> grid;
+        grid.reserve(inputVertices.size());
+        for (const uint32_t vertex : inputVertices)
+            grid.emplace_back(cellOf(point(vertex)), vertex);
+        std::sort(grid.begin(), grid.end());
+        const size_t sampleCount = std::min<size_t>(attached.size(), 1024);
+        std::vector<double> thickness(sampleCount, std::numeric_limits<double>::max());
+        std::vector<char> nearOpenEdge(sampleCount, 0);
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, sampleCount), [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t s = range.begin(); s != range.end(); ++s) {
+                const uint32_t vertex = inputVertices[attached[s * attached.size() / sampleCount]];
+                const Vector3 position = point(vertex);
+                const Cell cell = cellOf(position);
+                for (long long dx = -1; dx <= 1; ++dx) {
+                    for (long long dy = -1; dy <= 1; ++dy) {
+                        for (long long dz = -1; dz <= 1; ++dz) {
+                            const Cell near = { cell[0] + dx, cell[1] + dy, cell[2] + dz };
+                            auto it = std::lower_bound(grid.begin(), grid.end(), std::make_pair(near, (uint32_t)0));
+                            for (; it != grid.end() && it->first == near; ++it) {
+                                const double distance = (point(it->second) - position).length();
+                                if (Vector3::dotProduct(normals[it->second], normals[vertex]) < -0.5)
+                                    thickness[s] = std::min(thickness[s], distance);
+                                if (onOpenEdge[it->second] && distance <= cellSize)
+                                    nearOpenEdge[s] = 1;
+                            }
                         }
                     }
                 }
             }
+        });
+        size_t thinSamples = 0;
+        size_t openEdgeSamples = 0;
+        for (size_t s = 0; s < sampleCount; ++s) {
+            if (thickness[s] <= cellSize) {
+                ++thinSamples;
+                if (nullptr != thinWidths)
+                    thinWidths->push_back(thickness[s] / width);
+            } else if (nearOpenEdge[s]) {
+                ++openEdgeSamples;
+            }
         }
-    });
-    std::vector<double> thin;
-    size_t openEdgeSamples = 0;
-    for (size_t s = 0; s < sampleCount; ++s) {
-        if (thickness[s] <= cellSize)
-            thin.push_back(thickness[s] / quadWidth);
-        else if (nearOpenEdge[s])
-            ++openEdgeSamples;
-    }
-    const auto scaled = [&](size_t samples) {
-        return (size_t)std::llround((double)attached.size() * samples / sampleCount);
+        const auto scaled = [&](size_t samples) {
+            return (size_t)std::llround((double)attached.size() * samples / sampleCount);
+        };
+        counts->thinLostVertexCount = scaled(thinSamples);
+        counts->openEdgeLostVertexCount = std::min(scaled(openEdgeSamples), attached.size() - counts->thinLostVertexCount);
+        counts->otherLostVertexCount = attached.size() - counts->thinLostVertexCount - counts->openEdgeLostVertexCount;
     };
-    report->thinLostVertexCount = scaled(thin.size());
-    report->openEdgeLostVertexCount = std::min(scaled(openEdgeSamples), attached.size() - report->thinLostVertexCount);
-    report->otherLostVertexCount = attached.size() - report->thinLostVertexCount - report->openEdgeLostVertexCount;
+
+    LostPartCounts own;
+    std::vector<double> thin;
+    classify(quadWidth, &own, &thin);
+    report->farInputVertexCount = own.farInputVertexCount;
+    report->pieceLostVertexCount = own.pieceLostVertexCount;
+    report->lostPieceCount = own.lostPieceCount;
+    report->thinLostVertexCount = own.thinLostVertexCount;
+    report->openEdgeLostVertexCount = own.openEdgeLostVertexCount;
+    report->otherLostVertexCount = own.otherLostVertexCount;
     if (!thin.empty()) {
         std::sort(thin.begin(), thin.end());
         // In quad widths; recorded only.  Neither predicts the target that
         // brings the parts back (off by up to 30 times on the ladder).
         report->diagnostics.emplace_back("lost_thin_thickness_p10", thin[thin.size() / 10]);
         report->diagnostics.emplace_back("lost_thin_thickness_p50", thin[thin.size() / 2]);
+    }
+
+    // The same count at the quad width of an earlier run's target, so a host
+    // can tell whether the parts that run lost came back: at this run's own,
+    // smaller width, finer parts count as lost too.
+    if (referenceTargetQuads > 0) {
+        report->lostPartsReferenceTarget = referenceTargetQuads;
+        classify(std::sqrt(area / (double)referenceTargetQuads), &report->referenceLostParts, nullptr);
     }
 }
 
@@ -766,11 +1014,12 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
             mesh.faceIndices.push_back((uint32_t)vertex);
     }
     measureMesh(mesh, &report);
+    discountCreaseDiagonalQuads(request.positions, request.triangles, mesh, &report);
     measureClosedIslands(mesh, engine.remeshedIslands(), &report);
     {
         const auto lostPartsStart = std::chrono::steady_clock::now();
         measureLostParts(request.positions, request.triangles, parameters.targetQuadCount, mesh,
-            engine.remeshedIslands(), &report, &engine.leftOutVertices());
+            engine.remeshedIslands(), &report, &engine.leftOutVertices(), parameters.lostPartsReferenceTarget);
         report.diagnostics.emplace_back("lost_parts_ms",
             1000.0 * std::chrono::duration<double>(std::chrono::steady_clock::now() - lostPartsStart).count());
     }
@@ -949,6 +1198,7 @@ std::string toJson(const RemeshResult& result)
         << ", \"flatten_spikes\": " << (parameters.flattenSpikes ? "true" : "false")
         << ", \"extractor\": " << jsonString(toString(parameters.extractor))
         << ", \"quad_smoothing\": " << jsonString(toString(parameters.quadSmoothing))
+        << ", \"lost_parts_reference\": " << parameters.lostPartsReferenceTarget
         << "},\n";
     out << "  \"input\": {"
         << "\"vertices\": " << jsonCount(report.inputVertexCount)
@@ -966,6 +1216,9 @@ std::string toJson(const RemeshResult& result)
         << ", \"boundary_edges\": " << jsonCount(report.boundaryEdgeCount)
         << ", \"orientation_flips\": " << jsonCount(report.orientationFlipCount)
         << ", \"folded_faces\": " << jsonCount(report.foldedFaceCount)
+        << ", \"twisted_quads\": " << jsonCount(report.twistedQuadCount)
+        << ", \"folded_or_twisted_faces\": " << jsonCount(report.foldedOrTwistedFaceCount)
+        << ", \"crease_diagonal_quads\": " << jsonCount(report.creaseDiagonalQuadCount)
         << ",\n             \"degenerate_faces\": " << jsonCount(report.degenerateFaceCount)
         << ", \"components\": " << jsonCount(report.componentCount)
         << ", \"boundary_loops\": " << jsonCount(report.boundaryLoopCount)
@@ -994,7 +1247,20 @@ std::string toJson(const RemeshResult& result)
         << ", \"thin_vertices\": " << jsonCount(report.thinLostVertexCount)
         << ", \"open_edge_vertices\": " << jsonCount(report.openEdgeLostVertexCount)
         << ", \"other_vertices\": " << jsonCount(report.otherLostVertexCount)
-        << "},\n";
+        << ",\n                 \"reference\": ";
+    if (0 == report.lostPartsReferenceTarget) {
+        out << "null";
+    } else {
+        const LostPartCounts& reference = report.referenceLostParts;
+        out << "{\"target_quads\": " << jsonCount(report.lostPartsReferenceTarget)
+            << ", \"far_input_vertices\": " << jsonCount(reference.farInputVertexCount)
+            << ", \"piece_vertices\": " << jsonCount(reference.pieceLostVertexCount)
+            << ", \"pieces\": " << jsonCount(reference.lostPieceCount)
+            << ", \"thin_vertices\": " << jsonCount(reference.thinLostVertexCount)
+            << ", \"open_edge_vertices\": " << jsonCount(reference.openEdgeLostVertexCount)
+            << ", \"other_vertices\": " << jsonCount(reference.otherLostVertexCount) << "}";
+    }
+    out << "},\n";
     out << "  \"time\": {\"total_seconds\": " << jsonNumber(report.seconds) << ", \"steps\": [";
     for (size_t i = 0; i < report.stepSeconds.size(); ++i) {
         out << (0 == i ? "\n" : ",\n")

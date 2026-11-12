@@ -83,6 +83,12 @@ public:
     // share of T's mean feature edge length of it. A vertex the extractor
     // puts on an isoline that runs along T's edge is on it up to rounding.
     static constexpr double kPinnedToleranceOfEdge = 1e-6;
+    // Positions of the conical tips the triangle mesh kept (TODO 2.23): an
+    // output vertex there is neither merged away nor smoothed off the tip.
+    void setConicalTips(const std::vector<Vector3>* conicalTips)
+    {
+        m_conicalTips = conicalTips;
+    }
 
     void setProgressHandler(ProgressHandler progressHandler)
     {
@@ -180,6 +186,7 @@ private:
     const std::vector<std::vector<Vector2>>* m_originalTriangleUvs = nullptr;
     const std::vector<size_t>* m_singularVertices = nullptr;
     const FeatureEdgeSet* m_featureEdges = nullptr;
+    const std::vector<Vector3>* m_conicalTips = nullptr;
     const Boundary* m_inputBoundary = nullptr;
     ProgressHandler m_progressHandler;
     bool m_useQex = true;
@@ -230,6 +237,8 @@ private:
         const std::vector<size_t>& triangle,
         const std::vector<size_t>& testPoints);
     bool removeIsolatedFaces();
+    // Output vertices at a conical tip (setConicalTips()).
+    std::vector<char> conicalTipVertices() const;
     // Vertices whose faces form more than one fan: two pieces of surface
     // touching at a point.
     static std::unordered_set<size_t> findPinchedVertices(const std::vector<std::vector<size_t>>& polygons);

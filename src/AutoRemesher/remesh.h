@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 10;
+const int InterfaceVersionMinor = 12;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -104,6 +104,11 @@ struct RemeshParameters {
     bool flattenSpikes = false;
     // Since 1.9.
     QuadSmoothing quadSmoothing = QuadSmoothing::Laplacian;
+    // Since 1.12.  > 0: also count lost parts at the quad width of this
+    // target (QualityReport::referenceLostParts), so a host can tell whether
+    // the parts an earlier run at this target lost came back.  Changes no
+    // output geometry.
+    uint32_t lostPartsReferenceTarget = 0;
 };
 
 struct RemeshRequest {
@@ -176,6 +181,17 @@ const double LostPartQuadWidths = 3.0;
 // (QualityReport::thinLostVertexCount).
 const double ThinLostPartQuadWidths = 2.0;
 
+// Since 1.12.  Lost input vertices by cause at one quad width; the fields of
+// QualityReport with the same names.
+struct LostPartCounts {
+    size_t farInputVertexCount = 0;
+    size_t pieceLostVertexCount = 0;
+    size_t lostPieceCount = 0;
+    size_t thinLostVertexCount = 0;
+    size_t openEdgeLostVertexCount = 0;
+    size_t otherLostVertexCount = 0;
+};
+
 // Measured on the result mesh.  Field definitions are in INTERFACE.md §3.1.
 struct QualityReport {
     size_t inputVertexCount = 0;
@@ -193,6 +209,16 @@ struct QualityReport {
     size_t orientationFlipCount = 0;
     size_t foldedFaceCount = 0;
     size_t degenerateFaceCount = 0;
+    // Since 1.11.  Quads folded under both diagonals (each split into two
+    // triangles has them facing apart), which foldedFaceCount's corner test
+    // mostly misses, and the faces that are folded, twisted or both.  A quad
+    // with a diagonal along an input crease of 90 degrees or more is bent
+    // along that crease, not twisted: it is counted in
+    // creaseDiagonalQuadCount instead (remesh() only; measureMesh() alone
+    // has no input).
+    size_t twistedQuadCount = 0;
+    size_t foldedOrTwistedFaceCount = 0;
+    size_t creaseDiagonalQuadCount = 0;
     size_t componentCount = 0;
     // Since 1.4.  Connected pieces of the boundary-edge graph (one per hole
     // or open border; two loops touching at a vertex count once), and
@@ -241,6 +267,13 @@ struct QualityReport {
     size_t thinLostVertexCount = 0;
     size_t openEdgeLostVertexCount = 0;
     size_t otherLostVertexCount = 0;
+    // Since 1.12.  RemeshParameters::lostPartsReferenceTarget (0: not
+    // measured) and the far vertices by cause at h0 of that target, with the
+    // same distances and rules.  Each raise of the target shrinks h0, so finer
+    // parts count as lost; at the reference width only what the earlier run
+    // could have kept counts.
+    size_t lostPartsReferenceTarget = 0;
+    LostPartCounts referenceLostParts;
     size_t collapsedIslandCount = 0;
     size_t smallestCollapsedIslandFaces = 0;
     size_t smallestCollapsedIslandTargetQuads = 0;
