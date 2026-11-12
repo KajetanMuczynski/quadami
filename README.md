@@ -8,7 +8,7 @@ It is made for people who sculpt or model in Blender and need clean, even topolo
 (to animate, UV-unwrap, keep sculpting at a lower resolution, or hand over). You do not need to be
 a programmer to use it: the [user guide](docs/USER-GUIDE.md) is written for Blender beginners.
 
-> **Status: 0.2.0, a release with known limits.** It works on the sculpts we test with, but
+> **Status: 0.2.1, a release with known limits.** It works on the sculpts we test with, but
 > expect rough edges. Read [Limits and warnings](#limits-and-warnings) before you rely
 > on it, and send the panel's build line with every bug report.
 
@@ -45,7 +45,7 @@ no GitHub account needed). Do not unpack it: Blender installs the zip itself.
 | System | Zip | Tested |
 |---|---|---|
 | **Linux** (x64, any distribution with glibc 2.28 or newer, e.g. Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL 8+) | `quadami-<version>-linux-x64.zip` (built in AlmaLinux 8, so it does not need a new distribution). Works with Blender from blender.org and the snap (`/snap/bin/blender`). Or build it yourself ([addon/BEGINNERS.md](addon/BEGINNERS.md)). | CI (Ubuntu 24.04, Blender 4.2, headless) and the maintainer's laptop (Ubuntu, Blender 4.5 snap) |
-| **Windows** 10/11 (x64) | `quadami-<version>-windows-x64.zip` | CI (Blender 5.2, headless); 0.1.0 also on one Windows 10 desktop, 0.2.0 not yet by hand. The program is not signed. |
+| **Windows** 10/11 (x64) | `quadami-<version>-windows-x64.zip` | CI (Blender 5.2, headless); 0.1.0 also on one Windows 10 desktop, 0.2.x not yet by hand. The program is not signed. |
 | **macOS** (Apple silicon, macOS 11.2+): **experimental, untested** | `quadami-<version>-macos-arm64.zip` | In CI only; **never tried on a real Mac**, and the program is not notarized, so Gatekeeper may block it |
 | macOS on Intel | Build it yourself ([docs/BUILDING.md](docs/BUILDING.md)). | No |
 
