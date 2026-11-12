@@ -27,6 +27,8 @@
 #include <AutoRemesher/SingularitySimplifier>
 #include <AutoRemesher/SurfaceMesh>
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <iostream>
 #include <tbb/blocked_range.h>
@@ -368,6 +370,44 @@ bool Parameterizer::parameterize()
         DiagnosticRecord record("map_check");
         appendMapCheck(&record, checkIntegerGridMap(*m_vertices, *m_triangles, cover.triangleUvs, cover.cornerRotations, cover.singularVertices));
         m_diagnostics.push_back(std::move(record));
+    }
+    if (const char* dump = std::getenv("AR_GUIDE_DUMP")) { // EXPERIMENT
+        if (FILE* fp = std::fopen(dump, "a")) {
+            for (size_t f = 0; f < m_triangles->size(); ++f) {
+                const auto& t = (*m_triangles)[f];
+                const auto& uv = cover.triangleUvs[f];
+                const double area = (uv[1].x() - uv[0].x()) * (uv[2].y() - uv[0].y()) - (uv[2].x() - uv[0].x()) * (uv[1].y() - uv[0].y());
+                const Vector3 c = ((*m_vertices)[t[0]] + (*m_vertices)[t[1]] + (*m_vertices)[t[2]]) / 3.0;
+                double minAngle = M_PI;
+                for (int k = 0; k < 3; ++k) {
+                    const Vector3 e1 = (*m_vertices)[t[(k + 1) % 3]] - (*m_vertices)[t[k]], e2 = (*m_vertices)[t[(k + 2) % 3]] - (*m_vertices)[t[k]];
+                    minAngle = std::min(minAngle, std::atan2(Vector3::crossProduct(e1, e2).length(), Vector3::dotProduct(e1, e2)));
+                }
+                std::fprintf(fp, "f %.9g %.9g %.9g %.6g %.4g\n", c.x(), c.y(), c.z(), area, minAngle * 180.0 / M_PI);
+            }
+            if (const char* tdump = std::getenv("AR_GUIDE_DUMP_T")) {
+                if (FILE* tp = std::fopen(tdump, "w")) {
+                    for (const auto& p : *m_vertices)
+                        std::fprintf(tp, "v %.9g %.9g %.9g\n", p.x(), p.y(), p.z());
+                    for (size_t f = 0; f < m_triangles->size(); ++f) {
+                        const auto& t = (*m_triangles)[f];
+                        const auto& uv = cover.triangleUvs[f];
+                        std::fprintf(tp, "vt %.9g %.9g\nvt %.9g %.9g\nvt %.9g %.9g\n", uv[0].x(), uv[0].y(), uv[1].x(), uv[1].y(), uv[2].x(), uv[2].y());
+                        std::fprintf(tp, "f %zu/%zu %zu/%zu %zu/%zu\n", t[0] + 1, 3 * f + 1, t[1] + 1, 3 * f + 2, t[2] + 1, 3 * f + 3);
+                    }
+                    for (size_t i = 0; i < featureEdges->edges.size(); ++i)
+                        std::fprintf(tp, "l %zu %zu # %d\n", featureEdges->edges[i].first + 1, featureEdges->edges[i].second + 1, (int)featureEdges->flags[i]);
+                    for (const size_t v : cover.singularVertices)
+                        std::fprintf(tp, "# cone %zu\n", v + 1);
+                    std::fclose(tp);
+                }
+            }
+            for (const size_t v : cover.singularVertices) {
+                const Vector3 p = (*m_vertices)[v];
+                std::fprintf(fp, "s %.9g %.9g %.9g\n", p.x(), p.y(), p.z());
+            }
+            std::fclose(fp);
+        }
     }
     report(0.99f, "Collecting singularities");
     m_originalTriangleUvs = cover.triangleUvs;
