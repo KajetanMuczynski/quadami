@@ -35,6 +35,11 @@ public:
     // Bit of Halfedge::featureFlags for a hard (user-marked) edge; the same
     // bit as AutoRemesher::FeatureEdgeSet::Hard.
     static const unsigned char kHardFeature = 0x1;
+    // Hard edges between faces up to this far apart (cos 40 degrees) count
+    // as drawn on a smooth surface (isSmoothHardChainVertex): sculpt noise
+    // along a guide loop reaches 42 degrees at the 99th percentile on a
+    // 140k-triangle head, marked creases of hard-surface models are steeper.
+    static constexpr double kMinSmoothChainNormalDot = 0.76604444;
 
     struct Halfedge;
       

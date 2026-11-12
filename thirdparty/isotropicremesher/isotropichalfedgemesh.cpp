@@ -580,9 +580,12 @@ bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge, bool ear)
         return false;
         
     // Never make an ear (a triangle with two hard sides, see
-    // IsotropicRemesher::flipChainEars).
-    if ((halfedge->previousHalfedge->hard() && halfedge->oppositeHalfedge->nextHalfedge->hard())
-            || (halfedge->oppositeHalfedge->previousHalfedge->hard() && halfedge->nextHalfedge->hard()))
+    // IsotropicRemesher::flipChainEars) at a vertex of a hard line through a
+    // smooth surface; at a crease corner an ear is the shape.
+    if ((halfedge->previousHalfedge->hard() && halfedge->oppositeHalfedge->nextHalfedge->hard()
+                && isSmoothHardChainVertex(halfedge->startVertex, kMinSmoothChainNormalDot))
+            || (halfedge->oppositeHalfedge->previousHalfedge->hard() && halfedge->nextHalfedge->hard()
+                && isSmoothHardChainVertex(halfedge->oppositeHalfedge->startVertex, kMinSmoothChainNormalDot)))
         return false;
 
     Vertex *topVertex = halfedge->previousHalfedge->startVertex;

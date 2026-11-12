@@ -62,11 +62,7 @@ public:
     IsotropicHalfedgeMesh *remeshedHalfedgeMesh();
     
 private:
-    // Hard edges between faces up to this far apart (cos 40 degrees) count
-    // as drawn on a smooth surface (isSmoothHardChainVertex): sculpt noise
-    // along a guide loop reaches 42 degrees at the 99th percentile on a
-    // 140k-triangle head, marked creases of hard-surface models are steeper.
-    static constexpr double kMinSmoothChainNormalDot = 0.76604444;
+    static constexpr double kMinSmoothChainNormalDot = IsotropicHalfedgeMesh::kMinSmoothChainNormalDot;
     // Taubin rounds (one shrink, one inflate step each) per shiftVertices.
     static const size_t kHardChainSmoothingRounds = 4;
     const std::vector<Vector3> *m_vertices = nullptr;
@@ -104,6 +100,7 @@ private:
     void collapseShortEdges(double minEdgeLengthSquared, double maxEdgeLengthSquared);
     void flipEdges();
     size_t flipChainEars();
+    bool isFlatEar(IsotropicHalfedgeMesh::Halfedge *third);
     void shiftVertices();
     void relaxSmoothHardChains();
     void projectVertices();

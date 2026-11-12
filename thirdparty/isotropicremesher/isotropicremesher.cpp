@@ -465,6 +465,30 @@ void IsotropicRemesher::collapseShortEdges(double minEdgeLengthSquared, double m
     }
 }
 
+bool IsotropicRemesher::isFlatEar(IsotropicHalfedgeMesh::Halfedge *third)
+{
+    // Only where the line runs through a smooth surface, the way
+    // relaxSmoothHardChains judges it, but against the faces around the ear
+    // (across its two hard sides and its third side), not the ear itself,
+    // which may already lie flat.  An ear at a crease corner is the shape.
+    IsotropicHalfedgeMesh::Vertex *apex = third->previousHalfedge->startVertex;
+    if (apex->featured)
+        return false;
+    const IsotropicHalfedgeMesh::Halfedge *across[3] = { third->oppositeHalfedge,
+        third->nextHalfedge->oppositeHalfedge, third->previousHalfedge->oppositeHalfedge };
+    Vector3 normals[3];
+    for (int i = 0; i < 3; ++i) {
+        const IsotropicHalfedgeMesh::Halfedge *e = across[i];
+        if (nullptr == e)
+            return false;
+        normals[i] = Vector3::normal(e->previousHalfedge->startVertex->position,
+            e->startVertex->position, e->nextHalfedge->startVertex->position);
+    }
+    return Vector3::dotProduct(normals[0], normals[1]) >= kMinSmoothChainNormalDot
+        && Vector3::dotProduct(normals[0], normals[2]) >= kMinSmoothChainNormalDot
+        && Vector3::dotProduct(normals[1], normals[2]) >= kMinSmoothChainNormalDot;
+}
+
 size_t IsotropicRemesher::flipChainEars()
 {
     // A triangle with two hard sides (an ear) is a bend of a hard line that
@@ -485,7 +509,7 @@ size_t IsotropicRemesher::flipChainEars()
             // halfedge is the third side when the other two are hard.
             if (!halfedge->hard() && nullptr != halfedge->oppositeHalfedge
                     && halfedge->nextHalfedge->hard() && halfedge->previousHalfedge->hard()) {
-                if (m_halfedgeMesh->flipEdge(halfedge, true))
+                if (isFlatEar(halfedge) && m_halfedgeMesh->flipEdge(halfedge, true))
                     ++flipped;
                 break;
             }
