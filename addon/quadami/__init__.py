@@ -31,7 +31,10 @@ import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
 
-from . import density, guide_tool, transfer, worker
+from . import density
+from . import guide_tool
+from . import transfer
+from . import worker
 from . import raise_hint
 from . import report as report_rows
 from .names import ID, NAME
