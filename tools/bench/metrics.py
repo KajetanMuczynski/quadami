@@ -50,10 +50,14 @@ named *_rel_edge, which are relative to the output mean edge length):
               lies near), or that near but under an output face facing the
               other way (area_wrong_side: thin parts collapsed into one sheet,
               pleats), islands_same_as_input (none dropped, split, merged or
-              changed, output manifold). Input islands that are not manifold
-              themselves have no right topology: they are counted in
-              islands_input_non_manifold and left out of the topology counts
-              (a dropped one still counts as dropped)
+              changed, output manifold). The input's topology is taken
+              after splitting pinched vertices per fan, as the core's input
+              cleanup does (input_split_pinched_vertices; also for the global
+              *_input numbers). Handles count over all output pieces of an
+              island, so a split that cuts a handle loses it. Input islands
+              with an edge of three or more triangles have no right topology:
+              they are counted in islands_input_non_manifold and left out of
+              the topology counts (a dropped one still counts as dropped)
   normal_deviation_deg  angle between output face and (oriented) input normal at the closest point (D3)
   distance    one-sided mean / max and two-sided Hausdorff on area samples
   symmetry    (with --sym-axis) input reflection error, output geometric
@@ -219,6 +223,45 @@ def nonmanifold_vertex_mask(faces, nv):
     np.add.at(fans, pairs[:, 0], 1)
     return fans > 1
 
+
+
+def split_pinched_vertices(F, nv):
+    """Triangles F with each pinched vertex split per fan, as the core's splitPinchedVertices
+    (inputsanitizer.cpp; written from that rule): corners of a vertex are in one fan when their
+    triangles share an edge from it (an edge of three or more triangles joins them too), and the fan
+    holding the vertex's lowest triangle keeps it. Returns the triangles on nv + added vertices and
+    the number added."""
+    if not len(F):
+        return F, 0
+    keep = (F[:, 0] != F[:, 1]) & (F[:, 1] != F[:, 2]) & (F[:, 2] != F[:, 0])  # core: isDegenerate
+    tri = np.repeat(np.flatnonzero(keep), 3)
+    k = np.tile(np.arange(3), int(keep.sum()))
+    v, nx, pv = F[tri, k], F[tri, (k + 1) % 3], F[tri, (k + 2) % 3]
+    c = np.arange(len(v))
+    keys = np.concatenate([v * nv + nx, v * nv + pv]).astype(np.int64)
+    cs = np.concatenate([c, c])
+    order = np.argsort(keys, kind="stable")
+    keys, cs = keys[order], cs[order]
+    same = keys[1:] == keys[:-1]
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    _, fan = connected_components(coo_matrix((np.ones(int(same.sum())), (cs[:-1][same], cs[1:][same])),
+                                             shape=(len(v), len(v))), directed=False)
+    # Per (vertex, fan): its lowest triangle; per vertex the fan with the lowest one keeps the vertex.
+    pair = v.astype(np.int64) * len(v) + fan
+    up, pinv = np.unique(pair, return_inverse=True)
+    low = np.full(len(up), np.iinfo(np.int64).max)
+    np.minimum.at(low, pinv, tri)
+    pv_of = up // len(v)
+    o = np.lexsort((low, pv_of))
+    first = np.ones(len(up), bool)
+    first[o[1:]] = pv_of[o[1:]] != pv_of[o[:-1]]
+    new_id = np.where(first, pv_of, 0)
+    extra = np.flatnonzero(~first)
+    new_id[extra] = nv + np.arange(len(extra))
+    out = F.copy()
+    out[tri, k] = new_id[pinv]
+    return out, int(len(extra))
 
 
 def edge_faces(faces):
@@ -621,8 +664,9 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
            "islands_topology_changed": int(changed.sum()),
            "holes_added": int(np.sum(np.maximum(loops_sum - in_loops, 0)[kept])),
            "holes_closed": int(np.sum(np.maximum(in_loops - loops_sum, 0)[kept])),
-           "handles_lost": float(np.sum(np.maximum(g2_in - g2_out, 0)[kept & (k == 1)]) / 2),
-           "handles_added": float(np.sum(np.maximum(g2_out - g2_in, 0)[kept & (k == 1)]) / 2),
+           # Genus summed over the island's output pieces: a split that cuts a handle loses it.
+           "handles_lost": float(np.sum(np.maximum(g2_in - g2_out, 0)[kept]) / 2),
+           "handles_added": float(np.sum(np.maximum(g2_out - g2_in, 0)[kept]) / 2),
            "area_uncovered": uncovered, "area_uncovered_any_island": uncovered_any, "area_wrong_side": wrong,
            "island_coverage_min": float(cov.min()) if nin else None}
     if nin <= 32:
@@ -869,21 +913,27 @@ def input_side(input_path, cache_dir=None):
     used_raw = np.unique(Fin)
     Fin, welded = weld_seams(Vin, Fin, np.linalg.norm(Vin[used_raw].max(0) - Vin[used_raw].min(0)) if len(used_raw) else 0.0)
     used_in = np.unique(Fin)
-    ein = np.unique(np.sort(np.concatenate([Fin[:, [0, 1]], Fin[:, [1, 2]], Fin[:, [2, 0]]]), axis=1), axis=0)
-    ein_all = np.sort(np.concatenate([Fin[:, [0, 1]], Fin[:, [1, 2]], Fin[:, [2, 0]]]), axis=1)
+    # Topology (islands, Euler characteristic, loops, non-manifold) on the input with pinched vertices
+    # split per fan, as the core splits them before it remeshes: a correct output has them split too,
+    # and an island with a pinch is judged rather than skipped. Positions stay on Vin's indices (Fin).
+    Ft, pinched = split_pinched_vertices(Fin, len(Vin))
+    nvt = len(Vin) + pinched
+    used_t = np.unique(Ft)
+    ein_all = np.sort(np.concatenate([Ft[:, [0, 1]], Ft[:, [1, 2]], Ft[:, [2, 0]]]), axis=1)
     ein_u, ein_c = np.unique(ein_all, axis=0, return_counts=True)
+    ein = ein_u
     # Islands (vertex-connected parts) with their own Euler characteristic, boundary loops and area.
-    lab = comps(len(Vin), ein)
-    _, island_of_used = np.unique(lab[used_in], return_inverse=True)
-    vlab = np.zeros(len(Vin), np.int64)
-    vlab[used_in] = island_of_used.ravel()
-    nisl = int(vlab[used_in].max()) + 1 if len(used_in) else 0
-    island_euler, island_loops = island_topology(len(Vin), Fin[:, 0], ein, ein_u[ein_c == 1], used_in, vlab, nisl)
+    lab = comps(nvt, ein)
+    _, island_of_used = np.unique(lab[used_t], return_inverse=True)
+    vlab = np.zeros(nvt, np.int64)
+    vlab[used_t] = island_of_used.ravel()
+    nisl = int(vlab[used_t].max()) + 1 if len(used_t) else 0
+    island_euler, island_loops = island_topology(nvt, Ft[:, 0], ein, ein_u[ein_c == 1], used_t, vlab, nisl)
     tri_area = 0.5 * np.linalg.norm(np.cross(Vin[Fin[:, 1]] - Vin[Fin[:, 0]], Vin[Fin[:, 2]] - Vin[Fin[:, 0]]), axis=1)
     Fin_oriented, reoriented, nonorientable = orient_like_core(Vin, Fin)
-    # Islands that are not a 2-manifold in the input (an edge of 3+ triangles, a pinched vertex): their
-    # topology has no right answer to compare against (sword blade with a glued-on fin).
-    bad_v = nonmanifold_vertex_mask(Fin, len(Vin))
+    # Islands that are not a 2-manifold in the input after the pinch split (an edge of 3+ triangles):
+    # their topology has no right answer to compare against (sword blade with a glued-on fin).
+    bad_v = np.zeros(nvt, bool)
     bad_v[ein_u[ein_c > 2].ravel()] = True
     island_nm = np.zeros(nisl, bool)
     island_nm[vlab[bad_v]] = True
@@ -892,13 +942,14 @@ def input_side(input_path, cache_dir=None):
     sharp = sharp_edges(Vin, Fin_oriented)
     d = {"Vin": Vin, "Fin": Fin, "used_in": used_in, "input_welded_vertices": np.int64(welded),
          "diag": np.float64(np.linalg.norm(Vin[used_in].max(0) - Vin[used_in].min(0))),
-         "euler_input": np.int64(len(used_in) - len(ein) + len(Fin)),
-         "components_input": np.int64(len(np.unique(comps(len(Vin), ein)[used_in]))),
-         "boundary_loops_input": np.int64(loops(len(Vin), ein_u[ein_c == 1])),
+         "input_split_pinched_vertices": np.int64(pinched),
+         "euler_input": np.int64(len(used_t) - len(ein) + len(Fin)),
+         "components_input": np.int64(nisl),
+         "boundary_loops_input": np.int64(loops(nvt, ein_u[ein_c == 1])),
          "sharp_edges": sharp, "sharp_angles": sharp_edge_angles(Vin, Fin_oriented, sharp),
          "marked_edges": read_obj_lines(input_path), "creases_90_raw": creases_90_raw,
-         "tri_island": vlab[Fin[:, 0]], "island_euler": island_euler, "island_loops": island_loops,
-         "island_non_manifold": island_nm, "island_area": np.bincount(vlab[Fin[:, 0]], weights=tri_area, minlength=nisl),
+         "tri_island": vlab[Ft[:, 0]], "island_euler": island_euler, "island_loops": island_loops,
+         "island_non_manifold": island_nm, "island_area": np.bincount(vlab[Ft[:, 0]], weights=tri_area, minlength=nisl),
          "Fin_oriented": Fin_oriented, "input_reoriented": np.int64(reoriented),
          "input_nonorientable_pieces": np.int64(nonorientable)}
     if path:
@@ -955,6 +1006,7 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
     out["topology"]["euler_output"] = int(len(used) - len(uniq) + len(faces))
     out["topology"]["euler_input"] = int(inp["euler_input"])
     out["topology"]["input_welded_vertices"] = int(inp["input_welded_vertices"])
+    out["topology"]["input_split_pinched_vertices"] = int(inp["input_split_pinched_vertices"])
     out["topology"]["components_input"] = int(inp["components_input"])
     t = out["topology"]
     t["boundary_loops"] = loops(len(V), bnd)
