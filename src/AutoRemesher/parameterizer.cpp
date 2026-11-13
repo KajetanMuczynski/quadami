@@ -21,6 +21,7 @@
  *  SOFTWARE.
  */
 #include <AutoRemesher/FrameField>
+#include <cstdlib>
 #include <AutoRemesher/MapCheck>
 #include <AutoRemesher/Parameterizer>
 #include <AutoRemesher/QuadParameterizer>
@@ -359,7 +360,9 @@ bool Parameterizer::parameterize()
     if (m_singularitySimplification) {
         report(0.17f, "Simplifying singularities");
         simplifier.setFeatureEdges(featureEdges);
-        simplifier.setMaximumPairDistance(m_maximumSingularityPairDistance);
+        simplifier.setMaximumPairDistance(std::getenv("AUTOREMESHER_PAIR_DIST") ? (size_t)std::atoi(std::getenv("AUTOREMESHER_PAIR_DIST")) : m_maximumSingularityPairDistance);
+        if (std::getenv("AUTOREMESHER_PAIR_ROUNDS"))
+            simplifier.setMaximumRounds((size_t)std::atoi(std::getenv("AUTOREMESHER_PAIR_ROUNDS")));
         simplifier.simplify();
         {
             DiagnosticRecord record("singularity_simplifier");

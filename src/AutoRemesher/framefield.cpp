@@ -21,6 +21,7 @@
  *  SOFTWARE.
  */
 #include <AutoRemesher/FrameField>
+#include <cstdlib>
 
 #include <AutoRemesher/ConstrainedLeastSquares>
 #include <AutoRemesher/SurfaceMesh>
@@ -229,11 +230,13 @@ bool FrameField::create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdge
         system.addEnergy({ { 2 * f, co }, { 2 * f + 1, si }, { 2 * g, -1.0 } }, 0.0);
         system.addEnergy({ { 2 * f, -si }, { 2 * f + 1, co }, { 2 * g + 1, -1.0 } }, 0.0);
     }
+    // Research knob (exp/cone-select): scale the curvature guidance; 0 = smoothest field.
+    const double guideScale = std::getenv("AUTOREMESHER_FIELD_GUIDE") ? std::atof(std::getenv("AUTOREMESHER_FIELD_GUIDE")) : 1.0;
     std::vector<std::pair<size_t, size_t>> certaintyRows;
     certaintyRows.reserve(faces);
     for (size_t f = 0; f < faces; ++f)
         if (certainty[f] > 0.0) {
-            const double weight = certainty[f] * certainty[f];
+            const double weight = certainty[f] * certainty[f] * guideScale;
             const size_t rowU = system.addEnergy({ { 2 * f, 1.0 } }, periodic[2 * f], weight);
             const size_t rowV = system.addEnergy({ { 2 * f + 1, 1.0 } }, periodic[2 * f + 1], weight);
             certaintyRows.push_back({ rowU, rowV });
