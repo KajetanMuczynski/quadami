@@ -562,7 +562,7 @@ SurfaceProjector::Result SurfaceProjector::project(std::vector<Vector3>* points,
 }
 
 SurfaceProjector::RelaxResult SurfaceProjector::relax(std::vector<Vector3>* points,
-    const std::vector<std::vector<size_t>>& faces, size_t iterations) const
+    const std::vector<std::vector<size_t>>& faces, size_t iterations, const std::vector<char>* pinned) const
 {
     RelaxResult result;
     auto& positions = *points;
@@ -578,8 +578,10 @@ SurfaceProjector::RelaxResult SurfaceProjector::relax(std::vector<Vector3>* poin
     const double creaseReach = creaseReachInEdges * mesh.meanEdge;
 
     std::vector<char> movable(vertexCount, 0);
-    for (size_t v = 0; v < vertexCount; ++v)
-        movable[v] = !mesh.vertexFaces[v].empty() && !mesh.onBoundary[v];
+    for (size_t v = 0; v < vertexCount; ++v) {
+        movable[v] = !mesh.vertexFaces[v].empty() && !mesh.onBoundary[v]
+            && (nullptr == pinned || v >= pinned->size() || !(*pinned)[v]);
+    }
     for (const auto& face : faces) {
         if (4 != face.size()) {
             for (const size_t v : face)

@@ -520,6 +520,7 @@ void IsotropicRemesher::shiftVertices()
     m_halfedgeMesh->updateTriangleNormals();
     m_halfedgeMesh->updateVertexNormals();
     
+    relaxSmoothHardChains();
     for (IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr); 
             nullptr != vertex;
             vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
@@ -528,6 +529,49 @@ void IsotropicRemesher::shiftVertices()
         if (vertex->pinned)
             continue;
         m_halfedgeMesh->relaxVertex(vertex);
+    }
+}
+
+void IsotropicRemesher::relaxSmoothHardChains()
+{
+    // Hard lines on a smooth surface (isSmoothHardChainVertex) straighten
+    // like a 1D curve: Taubin smoothing along each line, so a zigzag of
+    // input edges evens out over several edges without the line shrinking.
+    // Each move stays in the vertex's tangent plane and is skipped where it
+    // would fold or degenerate a face; projectVertices then puts the vertex
+    // back on the surface. Corners, ends, crossings and creases stay where
+    // they are.
+    struct ChainVertex
+    {
+        IsotropicHalfedgeMesh::Vertex *vertex;
+        IsotropicHalfedgeMesh::Vertex *first;
+        IsotropicHalfedgeMesh::Vertex *second;
+    };
+    std::vector<ChainVertex> chain;
+    for (IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr);
+            nullptr != vertex;
+            vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
+        ChainVertex item = {vertex, nullptr, nullptr};
+        if (m_halfedgeMesh->isSmoothHardChainVertex(vertex, &item.first, &item.second))
+            chain.push_back(item);
+    }
+    if (chain.empty())
+        return;
+    std::vector<Vector3> targets(chain.size());
+    for (size_t round = 0; round < 2 * kHardChainSmoothingRounds; ++round) {
+        const double factor = 0 == round % 2 ? 0.5 : -0.53;
+        for (size_t i = 0; i < chain.size(); ++i) {
+            const ChainVertex &item = chain[i];
+            Vector3 move = (item.first->position + item.second->position) * 0.5 - item.vertex->position;
+            move = move - item.vertex->_normal * Vector3::dotProduct(move, item.vertex->_normal);
+            targets[i] = item.vertex->position + move * factor;
+        }
+        for (size_t i = 0; i < chain.size(); ++i) {
+            const Vector3 &target = targets[i];
+            if (target.containsNan() || target.containsInf())
+                continue;
+            m_halfedgeMesh->moveVertexIfValid(chain[i].vertex, target);
+        }
     }
 }
 
@@ -555,8 +599,9 @@ void IsotropicRemesher::projectVertex(IsotropicHalfedgeMesh::Vertex *vertex)
         return;
 
     // A chain vertex goes onto the input's chain, any other vertex on a
-    // feature edge stays.
-    if (m_halfedgeMesh->featureDegree(vertex) > 0) {
+    // feature edge stays; a vertex of a hard line on a smooth surface goes
+    // onto the surface, as the line is straightened (relaxSmoothHardChains).
+    if (m_halfedgeMesh->featureDegree(vertex) > 0 && !m_halfedgeMesh->isSmoothHardChainVertex(vertex)) {
         if (m_halfedgeMesh->isChainVertex(vertex))
             projectOntoFeatureChain(vertex);
         return;

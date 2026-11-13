@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 13;
+const int InterfaceVersionMinor = 14;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -180,6 +180,10 @@ const double LostPartQuadWidths = 3.0;
 // part (a vertex whose normal faces it) lies within this many quad widths
 // (QualityReport::thinLostVertexCount).
 const double ThinLostPartQuadWidths = 2.0;
+// Since 1.14.  Share of the input surface farther than one planned quad
+// width from the output at or above which the core warns that a large part
+// of the surface is missing (QualityReport::uncoveredAreaShare).
+const double LargeSurfaceLossShare = 0.1;
 
 // Since 1.12.  Lost input vertices by cause at one quad width; the fields of
 // QualityReport with the same names.
@@ -254,6 +258,12 @@ struct QualityReport {
     // by that ratio.
     double farthestInputQuadWidths = 0.0;
     size_t farInputVertexCount = 0;
+    // Since 1.14.  Share of the input surface area farther than one h0
+    // (uncovered) and than LostPartQuadWidths h0 (far) from the output, on
+    // area samples at most h0 / 2 apart (the far vertex count alone misleads
+    // where the tessellation is dense or coarse: hole rims, a cone's apex).
+    double uncoveredAreaShare = 0.0;
+    double farAreaShare = 0.0;
     // Since 1.10.  The far input vertices by cause: on a piece of the input
     // (connected by shared vertices) with no output within one h0 at all
     // (lostPieceCount such pieces); in a thin part, whose other side (a

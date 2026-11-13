@@ -31,7 +31,7 @@ import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
 
-from . import density, transfer, worker
+from . import density, guide_tool, transfer, worker
 from . import raise_hint
 from . import report as report_rows
 from .names import ID, NAME
@@ -242,6 +242,11 @@ class RemeshSettings(bpy.types.PropertyGroup):
         description="Marked edges the result keeps a row of edges along, whatever their "
                     "angle (Sharp Edge decides only for unmarked edges)")
 
+    # Not a remesh parameter: draws the active object's guides (guide_tool.py).
+    show_guides: BoolProperty(
+        name="Show Guides", default=True,
+        description="Show the active object's guides in the viewport (Object Mode)")
+
     # Not a remesh parameter: a choice next to Repair Folds and Re-run.
     flatten_spikes: BoolProperty(
         name="Also Flatten Needle Spikes", default=False,
@@ -367,8 +372,11 @@ def _mark_line(obj, kinds):
 def _mesh_arrays(context, obj, follow_marks=()):
     """Vertex positions and triangles of the evaluated mesh, in object space,
     whether most of its faces are smooth shaded, the vertex pairs of the
-    edges carrying the marks in follow_marks, and the marks left out because
-    they flood the mesh (_flooded_marks)."""
+    edges carrying the marks in follow_marks or a guide (guide_tool.py;
+    guides are always sent and never count as a flood), the marks left
+    out because they flood the mesh (_flooded_marks), and how many of the
+    sent edges are guides (none when the object's guides were lost to
+    modifiers that change its edges)."""
     depsgraph = context.evaluated_depsgraph_get()
     evaluated = obj.evaluated_get(depsgraph)
     mesh = evaluated.to_mesh()
@@ -382,20 +390,26 @@ def _mesh_arrays(context, obj, follow_marks=()):
         mesh.polygons.foreach_get("use_smooth", smooth_faces)
         marked = np.empty((0, 2), dtype=np.int32)
         flooded = []
+        # Smooth by Angle (Shade Auto Smooth) marks every edge above its
+        # angle Sharp on the evaluated mesh. Where the modifiers keep the
+        # edges as they are, the user's own marks are the original's. So are
+        # the guides; a modifier that changes the edges carries the guide
+        # attribute only if it passes edge attributes on.
+        base = obj.data
+        same = len(base.vertices) == len(mesh.vertices) and np.array_equal(
+            _edge_vertices(base), _edge_vertices(mesh))
+        source = base if same else mesh
         if follow_marks:
-            # Smooth by Angle (Shade Auto Smooth) marks every edge above its
-            # angle Sharp on the evaluated mesh. Where the modifiers keep the
-            # edges as they are, the user's own marks are the original's.
-            base = obj.data
-            same = len(base.vertices) == len(mesh.vertices) and np.array_equal(
-                _edge_vertices(base), _edge_vertices(mesh))
-            source = base if same else mesh
             flooded = _flooded_marks(source, _mark_counts(source), follow_marks)
             marked = _marked_pairs(source, [kind for kind in follow_marks if kind not in flooded])
+        guide_edges = guide_tool.guide_pairs(source)
+        if len(guide_edges):
+            both = np.sort(np.concatenate([marked, guide_edges]).astype(np.int32), axis=1)
+            marked = np.unique(both, axis=0)
     finally:
         evaluated.to_mesh_clear()
     smooth = bool(smooth_faces.size) and 2 * np.count_nonzero(smooth_faces) >= smooth_faces.size
-    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth, marked, flooded
+    return positions.reshape(-1, 3), triangles.reshape(-1, 3), smooth, marked, flooded, len(guide_edges)
 
 
 def _source(obj):
@@ -477,7 +491,7 @@ def _track(source, key, result, report):
         result[REPORT_PROPERTY] = json.dumps(report)
 
 
-def _build_object(context, source, outcome, smooth, warnings=(), addon_settings=None):
+def _build_object(context, source, outcome, smooth, warnings=(), addon_settings=None, guide_edges=0):
     """The result object, linked next to the source and placed like it,
     smooth shaded if the source mostly was. No edges are marked sharp: no
     angle threshold suits both sculpts and hard surfaces (at 30 degrees 7-21 %
@@ -497,6 +511,7 @@ def _build_object(context, source, outcome, smooth, warnings=(), addon_settings=
     report["warnings"] = list(report.get("warnings", [])) + list(warnings)
     if addon_settings:
         report["addon"] = dict(addon_settings)
+    report["guide_edges"] = guide_edges
     if changed:
         report["warnings"].append("Blender's mesh validation changed the result")
     obj[REPORT_PROPERTY] = json.dumps(report)
@@ -579,10 +594,14 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             self.report({"ERROR"}, "The original object is gone; select it and remesh again")
             return {"CANCELLED"}
         settings = _settings(context)
-        positions, triangles, self._smooth, marked, flooded = _mesh_arrays(context, obj, settings.follow_marks)
+        positions, triangles, self._smooth, marked, flooded, self._guide_edges = _mesh_arrays(
+            context, obj, settings.follow_marks)
         if len(triangles) == 0:
             self.report({"ERROR"}, "The mesh has no faces")
             return {"CANCELLED"}
+        if not self._guide_edges and guide_tool.guide_flags(obj.data) is not None:
+            self.report({"WARNING"}, "The guides were not used: a modifier changes the mesh's edges. "
+                        "Apply the modifiers, then draw the guides")
         parameters = settings.parameters()
         if self.repair_folds:
             parameters["repair_folds"] = True
@@ -661,7 +680,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             self.report({"ERROR"}, "%s: %s" % (NAME, _last_message))
             return {"CANCELLED"}
         new_obj, _last_report = _build_object(context, source, outcome, self._smooth, self._warnings,
-                                              self._addon_settings)
+                                              self._addon_settings, self._guide_edges)
         _last_run["result"] = new_obj.name
         _keep(context, source, new_obj, _last_report, _settings(context))
         _track(source, self._history_key, new_obj, _last_report)
@@ -795,7 +814,7 @@ class OBJECT_OT_density_preview(bpy.types.Operator):
             self.report({"ERROR"}, "Remesher executable not found; set it in the %s preferences" % NAME)
             return {"CANCELLED"}
         settings = _settings(context)
-        positions, triangles, _smooth, marked, _flooded = _mesh_arrays(context, target, settings.follow_marks)
+        positions, triangles, _smooth, marked, _flooded, _guide_edges = _mesh_arrays(context, target, settings.follow_marks)
         if len(triangles) == 0:
             self.report({"ERROR"}, "The mesh has no faces")
             return {"CANCELLED"}
@@ -1069,6 +1088,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
             if hint:
                 for i, part in enumerate(report_rows.wrap(hint, room.panel - icon - room.pad, room.measure)):
                     column.label(text=part, icon="INFO" if 0 == i else "BLANK1")
+        guide_tool.draw_panel(layout, context, _job is None)
         header, body = layout.panel(ID + "_advanced", default_closed=True)
         header.label(text="Advanced")
         if body is not None:
@@ -1176,6 +1196,7 @@ def _file_loaded(_dummy):
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+    guide_tool.register()
     density.draw_state = _overlay_state
     bpy.app.handlers.depsgraph_update_post.append(density.geometry_changed)
     bpy.app.handlers.load_post.append(_file_loaded)
@@ -1199,5 +1220,6 @@ def unregister():
             handlers.remove(function)
     delattr(bpy.types.Object, SOURCE_PROPERTY)
     delattr(bpy.types.Scene, ID)
+    guide_tool.unregister()
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

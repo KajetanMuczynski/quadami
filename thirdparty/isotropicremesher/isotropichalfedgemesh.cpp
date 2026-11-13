@@ -564,6 +564,9 @@ void IsotropicHalfedgeMesh::relaxVertex(Vertex *vertex)
     if (degree > 0) {
         if (2 != degree || vertex->featureCorner)
             return;
+        // Straightened by IsotropicRemesher::relaxSmoothHardChains instead.
+        if (isSmoothHardChainVertex(vertex))
+            return;
         Vector3 tangent = chainNeighbors[1]->position - chainNeighbors[0]->position;
         if (tangent.isZero())
             return;
@@ -997,6 +1000,40 @@ bool IsotropicHalfedgeMesh::collapseEdgeTo(Halfedge *halfedge, const Vector3 &co
     return true;
 }
 
+bool IsotropicHalfedgeMesh::isSmoothHardChainVertex(Vertex *vertex, Vertex **first, Vertex **second)
+{
+    if (vertex->featured || vertex->featureCorner || vertex->pinned)
+        return false;
+    std::vector<Vertex *> neighbours;
+    bool smooth = true;
+    iterateVertexHalfedges(vertex, [&](Halfedge *halfedge) {
+        if (!halfedge->feature)
+            return true;
+        if (!halfedge->hard() || nullptr == halfedge->oppositeHalfedge) {
+            smooth = false;
+            return false;
+        }
+        const Vector3 normal = Vector3::normal(halfedge->previousHalfedge->startVertex->position,
+            halfedge->startVertex->position, halfedge->nextHalfedge->startVertex->position);
+        const Halfedge *opposite = halfedge->oppositeHalfedge;
+        const Vector3 oppositeNormal = Vector3::normal(opposite->previousHalfedge->startVertex->position,
+            opposite->startVertex->position, opposite->nextHalfedge->startVertex->position);
+        if (Vector3::dotProduct(normal, oppositeNormal) < kMinSmoothChainNormalDot) {
+            smooth = false;
+            return false;
+        }
+        neighbours.push_back(halfedge->nextHalfedge->startVertex);
+        return true;
+    });
+    if (!smooth || 2 != neighbours.size())
+        return false;
+    if (nullptr != first)
+        *first = neighbours[0];
+    if (nullptr != second)
+        *second = neighbours[1];
+    return true;
+}
+
 void IsotropicHalfedgeMesh::updateVertexValences()
 {
     for (Vertex *vertex = m_firstVertex; nullptr != vertex; vertex = vertex->nextVertex) {
@@ -1172,7 +1209,10 @@ void IsotropicHalfedgeMesh::featureCorners()
             vertex->featureCorner = true;
             continue;
         }
-        if (Vector3::dotProduct(in.normalized(), out.normalized()) < maxChainTurnCosine)
+        // A hard line on a smooth surface (a guide) is a zigzag of input
+        // edges that the remesh straightens, so its kinks are no corners.
+        if (Vector3::dotProduct(in.normalized(), out.normalized()) < maxChainTurnCosine &&
+                !isSmoothHardChainVertex(vertex))
             vertex->featureCorner = true;
     }
 

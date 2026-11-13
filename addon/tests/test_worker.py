@@ -176,6 +176,17 @@ class ReportTest(unittest.TestCase):
         self.assertIn(("Missing parts", "up to 7 quad widths", True), report.summary_rows(lost))
         kept = dict(base, lost_parts={"farthest_input_quad_widths": 0.4, "far_input_vertices": 0})
         self.assertIn(("Missing parts", "none", False), report.summary_rows(kept))
+        # Since 1.14: a large share of the surface missing leads the row, also
+        # when no vertex is beyond three quad widths.
+        plate = dict(base, lost_parts={"farthest_input_quad_widths": 4.5, "far_input_vertices": 128,
+                                       "uncovered_area_share": 0.38})
+        self.assertIn(("Missing parts", "38 % of the surface, up to 4 quad widths", True), report.summary_rows(plate))
+        near = dict(base, lost_parts={"farthest_input_quad_widths": 2.2, "far_input_vertices": 0,
+                                      "uncovered_area_share": 0.12})
+        self.assertIn(("Missing parts", "12 % of the surface", True), report.summary_rows(near))
+        small = dict(base, lost_parts={"farthest_input_quad_widths": 0.9, "far_input_vertices": 0,
+                                       "uncovered_area_share": 0.02})
+        self.assertIn(("Missing parts", "none", False), report.summary_rows(small))
         # A worker from before the measure sends no lost_parts: no row.
         self.assertFalse(any(label == "Missing parts" for label, _, _ in report.summary_rows(base)))
 

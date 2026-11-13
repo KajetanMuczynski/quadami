@@ -237,6 +237,37 @@ defaults and change one thing at a time.
 Settings other than these defaults work, but the project's quality targets are checked at the defaults,
 so expect a bit more variation.
 
+### Guides: edge loops where you want them
+
+A guide is a line you draw on the model; the quads keep a row of edges along it. Drawn as a closed loop (around a
+limb, an eye, a belt), it is meant to come out as an edge loop that Alt+click selects whole, instead of a loop that
+spirals over the model.
+
+1. Select the model and stay in **Object Mode** (Tab toggles; Draw Guide does not work in Sculpt or Edit Mode).
+2. In the Quadami panel, under **Guides**, click **Draw Guide**.
+3. Click points on the surface, or hold the left mouse button and drag. The points are joined along the model's
+   own edges (blue line). Middle mouse, the scroll wheel, Alt + left drag and the navigation circles at the top right
+   still turn and zoom the view.
+4. Click the first point again to close the loop (orange line). Enter keeps an open line instead, Backspace takes back
+   the last point, Esc or right click cancels.
+5. Click **Remesh**. The guides are always used, whatever Follow Marks says; the result says how many guide edges were
+   followed.
+
+The guides stay on the model in the .blend file, so you can remesh again with other settings. The eye icon next to
+**Guides** shows or hides them; the **X** next to Draw Guide removes them all. In Edit Mode, **Mark Guide** and
+**Clear Guide** turn the selected edges into a guide or take them out of one (Select > Select Shortest Path helps there).
+
+Known limits (0.3 preview):
+
+- A loop closes only when no pole (a vertex with 3 or 5 edges) lands on it. On the test meshes about two in five
+  guide loops come out fully closed; on a real head sculpt none did yet: the loops follow most of each guide but
+  are broken by 1 to 6 poles. The work continues.
+- Draw guides on the model you remesh, not through modifiers that change its edges (the add-on warns and leaves the
+  guides out then; apply the modifiers first). Subdivision Surface and Mirror pass the guides on (checked in Blender 5.2).
+- On a low-poly model the guide follows the model's own edges, so it zigzags where they don't run along it; the
+  remesher straightens it, but on coarse models a zigzag larger than a quad stays. Draw more points there.
+- If following the guides would fold the quads of a part, that part is remeshed without them and a warning says so.
+
 ### Density Preview: pick Target Quads before you remesh
 
 **Preview Density** (in a box under the main settings) shows how big the quads will be, painted on your
@@ -277,7 +308,7 @@ another result object shows that object's own report.
 | **Folded faces** | Faces bent over or twisted ([§1](#1-words-used-here)); `N (T twisted)` says how many of the N are twisted quads. | 0. Up to about 2 per 1,000 quads is a known weakness, mostly where several poles sit close together; Adaptivity 0 gives fewer. |
 | **Input cleanup** | Only shown when the remesher fixed your *input* before starting: open seams welded (pieces that only touched, as after an import without merging or an Edge Split modifier), duplicate faces and faces that use one vertex twice removed, pinched points (two parts of the surface sharing one vertex) split, paper-thin sliver pieces with no area left out, tiny broken triangles removed, triangles turned to face the same way as their neighbours. Your object itself is never changed. | Information, not a problem. |
 | **Empty islands** | `E of N`: separate pieces of your model that got no quads at all. | 0 of N. |
-| **Missing parts** | How far the farthest point of your model is from the result, counted in quad widths (the planned quad size). Red above 3: a part such as a vine, a limb or a spike did not come out; the warning under the rows says why ([§6](#6-warnings-and-what-to-do)). | none. |
+| **Missing parts** | How far the farthest point of your model is from the result, counted in quad widths (the planned quad size). Red above 3: a part such as a vine, a limb or a spike did not come out; the warning under the rows says why ([§6](#6-warnings-and-what-to-do)). When a tenth or more of the surface is more than one quad width from the result, the row starts with that share ("38 % of the surface, up to 4 quad widths") and is red. | none. |
 | **Time** | Seconds the remesher ran. | — |
 
 To find defects on the result: select it, **Tab** into Edit Mode, press **1** (vertex select) or **3**
@@ -304,6 +335,7 @@ Warnings appear under the rows, with a red icon when they are a problem.
 | **"N folded faces in K spots could not be repaired safely and were left as they were"** | After a repair: these spots were too steep, too thin or too tangled to fix without changing your shape. | Smooth those spots in Sculpt Mode and run again ([§7](#7-sculpts-what-works-and-what-struggles)). |
 | Red **Non-manifold vertices** or **edges** | Points or edges that are not a clean surface. | Same as holes: another Target Quads, or clean the input at that spot. Report it with the build line if it stays. |
 | **"N of M islands produced no faces"**, red **Empty islands** | A small separate piece (an eyeball, a tiny flower) got nothing. | Raise Target Quads, or remesh that piece on its own: Edit Mode, select it, **P > Selection** to make it its own object *(from memory, check)*, and remesh both. |
+| **"About N % of the input surface is missing from the result (farther than one quad width from it). Check the result before using it."**, red **Missing parts** | A large part of the model did not come out: the result covers only part of it, or collapsed into a much smaller shape. Seen on plates with many small holes, where the hole rims are sharp edges and the holes are only a few quads around. The other warnings say what was lost. | Do not use the result as it is. On a holed plate, raise **Sharp Edge** above 90° (for example 135°) so the hole rims are not treated as sharp, and give it 20 to 40 quads per hole or more: on test plates with 1 to 64 holes that kept the plate and its holes (at most 2 % missing), while with sharp rims part of the plate went missing even at 80 quads per hole. Fill holes you do not need. |
 | **"Parts thinner than one quad are missing (up to N quad widths away). At T target quads there is no room for them: a limit of Target Quads, not a remeshing error. …"**, red **Missing parts** | A part thinner than one quad (a vine, a strap, a finger, a spike) was smoothed away or cut off: the quads are too big to follow it. That is what you asked for with Target Quads, not a bug. The model is still one piece where it was, so no other row shows it. | Raise Target Quads. On 10 test models, 1.5 to 8 times as many brought back the parts lost first on 7 of them and most of them on 2 more; on a flight helmet it depended on tiny changes to the input (2 of 6 tries). Each raise also makes the quads smaller, so finer parts (thinner straps, bristles) can now count as missing and the warning stays: check whether the parts you care about are back. Parts that must survive at a low count need thickening: Edit Mode, select the part, **Alt+S** (Shrink/Fatten) and move the mouse outwards. |
 | **"… N separate pieces came out with no quads at all. Raising Target Quads brought some or all such pieces back …"**, red **Missing parts** | Separate pieces of your model got nothing: specks of a few triangles, or thin wire pieces. | Raise Target Quads: at 8 times as many, all lost pieces of an iron gate came back and half of a mosquito's, while smaller ones went missing instead. Delete specks you do not need; thicken pieces you want to keep. |
 | **"Parts along open edges of single-sided surfaces (leaves, petals, cloth) are missing. …"**, red **Missing parts** | The border of a surface with only one side moved or was cut off. | Raise Target Quads: on a vase of flowers, twice as many brought back 9 in 10 of the missing petal rims; the rest stayed missing at 8 times. Or give the surface some thickness (a **Solidify** modifier, wrench tab > **Add Modifier > Generate > Solidify** *(from memory, check)*) and remesh again, or keep the original border. |
