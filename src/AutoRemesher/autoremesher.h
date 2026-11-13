@@ -210,6 +210,12 @@ public:
     // Islands that went through the pipeline but contributed no faces, either
     // because a stage failed on them or because extraction found nothing.
     // Sliver islands left out before remeshing are not counted.
+    // Islands remeshed on their envelope: more holes and handles than their
+    // quads can hold.
+    size_t envelopedIslandCount() const
+    {
+        return m_envelopedIslandCount;
+    }
     size_t islandsWithoutOutput() const
     {
         return m_islandsWithoutOutput;
@@ -560,6 +566,7 @@ private:
     // as a share of the target.
     size_t m_floorRaisedIslandCount = 0;
     double m_floorExtraQuadShare = 0.0;
+    size_t m_envelopedIslandCount = 0;
 
     bool remeshIslands();
     void throwIfCancelled() const;

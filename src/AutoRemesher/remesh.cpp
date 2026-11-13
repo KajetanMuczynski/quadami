@@ -1121,6 +1121,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
         report.stepSeconds.emplace_back(step.name, step.microseconds / 1e6);
     report.islandCount = engine.islandCount();
     report.islandsWithoutOutput = engine.islandsWithoutOutput();
+    report.envelopedIslandCount = engine.envelopedIslandCount();
 
     const auto& remeshedVertices = engine.remeshedVertices();
     const auto& remeshedFaces = engine.remeshedQuads();
@@ -1177,6 +1178,13 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     if (report.islandsWithoutOutput > 0) {
         report.warnings.push_back(std::to_string(report.islandsWithoutOutput) + " of "
             + std::to_string(report.islandCount) + " islands produced no faces");
+    }
+    if (report.envelopedIslandCount > 0) {
+        report.warnings.push_back(std::to_string(report.envelopedIslandCount)
+            + (1 == report.envelopedIslandCount ? " part has more holes and handles than its share"
+                                                : " parts have more holes and handles than their share")
+            + " of Target Quads can hold (chain mail, strung beads): remeshed as a closed shell over them."
+              " A higher Target Quads keeps more of them.");
     }
     if (marksTooDenseIslands > 0) {
         report.warnings.push_back("Marked edges were not used on " + std::to_string(marksTooDenseIslands)
@@ -1427,6 +1435,7 @@ std::string toJson(const RemeshResult& result)
     out << "  \"islands\": {"
         << "\"input\": " << jsonCount(report.islandCount)
         << ", \"without_output\": " << jsonCount(report.islandsWithoutOutput)
+        << ", \"enveloped\": " << jsonCount(report.envelopedIslandCount)
         << ", \"closed_in_input\": " << jsonCount(report.closedInputIslandCount)
         << ", \"opened\": " << jsonCount(report.openedClosedIslandCount)
         << ",\n              \"holes\": " << jsonCount(report.closedIslandHoleCount)
