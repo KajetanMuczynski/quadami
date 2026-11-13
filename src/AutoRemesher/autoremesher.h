@@ -556,6 +556,10 @@ private:
     bool m_cancelled = false;
     size_t m_islandCount = 0;
     size_t m_islandsWithoutOutput = 0;
+    // Islands raised to the small-island floor, and the quads the floor adds
+    // as a share of the target.
+    size_t m_floorRaisedIslandCount = 0;
+    double m_floorExtraQuadShare = 0.0;
 
     bool remeshIslands();
     void throwIfCancelled() const;

@@ -1718,6 +1718,8 @@ bool AutoRemesher::remeshIslands()
         double diagonal = 0.0;
         // A sliver: not remeshed, comes out empty.
         bool leftOut = false;
+        // The quads of its area share, before the small-island floor.
+        double shareQuadCount = 0.0;
         double targetQuadCount;
         double scaling;
         double adaptivity;
@@ -1838,6 +1840,7 @@ bool AutoRemesher::remeshIslands()
         const double shareTriangleCount = totalIslandArea > 0.0
             ? m_targetTriangleCount * context.area / totalIslandArea
             : 0.0;
+        context.shareQuadCount = 0.5 * shareTriangleCount;
         const double floorTriangleCount = std::min(minimumIslandTriangleCount, (double)context.triangles.size());
         if (shareTriangleCount >= floorTriangleCount || context.area <= 0.0) {
             context.targetQuadCount = 0.5 * shareTriangleCount;
@@ -1864,6 +1867,22 @@ bool AutoRemesher::remeshIslands()
         context.markedEdges.clear();
         context.followMarks = false;
         ++sliverIslands;
+    }
+    // What the floor adds: on a model of many tiny parts (chain mail, a cloud
+    // of crumbs) it is several times the target, and Target Quads does not
+    // change it, so the report says so (TODO G13).
+    m_floorRaisedIslandCount = 0;
+    m_floorExtraQuadShare = 0.0;
+    {
+        double extraQuads = 0.0;
+        for (const auto& context : islandContexes) {
+            if (context.leftOut || !(context.targetQuadCount > context.shareQuadCount))
+                continue;
+            ++m_floorRaisedIslandCount;
+            extraQuads += context.targetQuadCount - context.shareQuadCount;
+        }
+        if (m_targetTriangleCount > 0.0)
+            m_floorExtraQuadShare = extraQuads / (0.5 * m_targetTriangleCount);
     }
     for (auto& context : islandContexes)
         applyMarkedEdgeDensity(context);
@@ -2277,6 +2296,8 @@ bool AutoRemesher::remeshIslands()
             plannedQuads += island.plannedQuads;
         record.set("islands", (double)islandContexes.size());
         record.set("sliver_islands", (double)sliverIslands);
+        record.set("floor_raised_islands", (double)m_floorRaisedIslandCount);
+        record.set("floor_extra_quad_share", m_floorExtraQuadShare);
         record.set("planned_quads", plannedQuads);
         record.set("input_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(t_voxelStart - t_start).count());
         record.set("islands_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(t_buildEnd - t_voxelStart).count());
@@ -2839,6 +2860,8 @@ bool AutoRemesher::remeshIslands()
             run.set("thin_parts_ms", milliseconds(std::chrono::duration_cast<std::chrono::microseconds>(t_thinPartsEnd - t_isotropicEnd).count()));
         }
         run.set("retried_islands", (double)islandsToRetry.size());
+        run.set("floor_raised_islands", (double)m_floorRaisedIslandCount);
+        run.set("floor_extra_quad_share", m_floorExtraQuadShare);
         run.set("repaired_islands", (double)islandsRepaired.load());
         m_diagnostics.push_back(std::move(run));
 

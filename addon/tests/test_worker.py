@@ -136,6 +136,22 @@ class ReportTest(unittest.TestCase):
         self.assertFalse(any(label in ("Input cleanup", "Holes") for label, _, _ in rows))
         self.assertIn(("Folded faces", "0", False), rows)
 
+    def test_floor_marks_the_quads_row(self):
+        # The core's small-part floor added more than a quarter of the target:
+        # the Quads row is marked, and its warning is listed (TODO G13).
+        floored = {"status": "ok", "parameters": {"target_quads": 3000},
+                   "output": {"quads": 24200}, "islands": {"input": 4888, "without_output": 485},
+                   "diagnostics": {"floor_raised_islands": 4884, "floor_extra_quad_share": 34.56},
+                   "warnings": ["4884 small parts were each given a minimum of quads (up to 32)"]}
+        self.assertIn(("Quads", "24200 of 3000 target (807%)", True), report.summary_rows(floored))
+        self.assertTrue(report.warning_lines(floored)[0][2])
+        below = dict(floored, diagnostics={"floor_raised_islands": 1, "floor_extra_quad_share": 0.01}, warnings=[])
+        self.assertIn(("Quads", "24200 of 3000 target (807%)", False), report.summary_rows(below))
+        path = os.path.join(os.path.dirname(__file__), "..", "..", "src", "AutoRemesher", "remesh.cpp")
+        with open(path, encoding="utf-8") as f:
+            share = re.search(r"floorExtraWarningShare = ([0-9.]+);", f.read())
+        self.assertEqual(float(share.group(1)), report.FLOOR_EXTRA_SHARE)
+
     def test_folded_faces_count_twisted_quads(self):
         # Interface 1.11: the row counts faces folded at a corner or twisted
         # (folded under both diagonals), each once, and says how many are twisted.
@@ -681,6 +697,14 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(edge[4], 0.0)
         edge = plan.edge_at(200)
         self.assertAlmostEqual(float(edge[2]), 0.5 * math.sqrt(100 / 32), places=5)
+
+    def test_floor_parts(self):
+        plan = self.plan()
+        # At 1000 quads island 1 has 100, above its floor; the sliver is left out.
+        self.assertEqual(plan.floor_parts(1000), (0, 0.0))
+        parts, extra = plan.floor_parts(200)
+        self.assertEqual(parts, 1)
+        self.assertAlmostEqual(extra, 32.0 - 0.1 * 200)
 
     def test_shader_matches_rescale(self):
         plan = self.plan()
