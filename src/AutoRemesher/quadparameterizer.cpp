@@ -111,6 +111,9 @@ namespace {
         const std::vector<double>& scalingV;
         const std::vector<double>* faceScaling;
         double scale;
+        // Set in a plan: the first (continuous) solve's quad edge per face,
+        // then the solve stops.
+        std::vector<double>* planFaceEdges;
     };
 
     void initializeFieldAndNormals(const SurfaceMesh& mesh, const std::vector<Vector3>* guidance,
@@ -1402,6 +1405,18 @@ namespace {
                 const std::vector<double> uvs = cornerUvs(s, uvVariables);
                 appendUvOrientation(result, "continuous", measureUvOrientation(uvs));
                 appendWinding(result, "continuous", measureWinding(mesh, rotation, frames, uvs));
+                if (nullptr != ctx.planFaceEdges) {
+                    // sqrt(3D area / uv area): the edge of a unit cell on the face.
+                    ctx.planFaceEdges->assign(mesh.faceCount(), 0.0);
+                    for (size_t f = 0; f < mesh.faceCount(); ++f) {
+                        const size_t a = 3 * f, b = 3 * f + 1, c = 3 * f + 2;
+                        const double ax = s.value(2 * a), ay = s.value(2 * a + 1);
+                        const double uvArea = .5 * std::fabs((s.value(2 * b) - ax) * (s.value(2 * c + 1) - ay) - (s.value(2 * c) - ax) * (s.value(2 * b + 1) - ay));
+                        const double area = .5 * Vector3::crossProduct(mesh.edgeVector(a), -mesh.edgeVector(c)).length();
+                        (*ctx.planFaceEdges)[f] = uvArea > 0.0 && area > 0.0 ? std::sqrt(area / uvArea) : 0.0;
+                    }
+                    return true;
+                }
             }
             if (s.converged())
                 break;
@@ -1540,7 +1555,8 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     const std::vector<double>* faceScalingU,
     const std::vector<double>* faceScalingV,
     const ProgressHandler* progressHandler,
-    const SurfaceMesh* surfaceMesh)
+    const SurfaceMesh* surfaceMesh,
+    std::vector<double>* planFaceEdges)
 {
     const auto report = [progressHandler](float fraction, const char* name) {
         if (nullptr != progressHandler && *progressHandler)
@@ -1634,7 +1650,7 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     const std::vector<char> seam = computeSeam(mesh, rotation);
 
     const CoverContext ctx { mesh, result->field, normals, rotation, seam, cornerConstraints,
-        activeScalingU, activeScalingV, faceScaling, scale };
+        activeScalingU, activeScalingV, faceScaling, scale, planFaceEdges };
 
     // The cover solve reports on its own 0..1, so remap it into the tail of this
     // function's range and keep the fractions monotonic end to end.
@@ -1651,6 +1667,10 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
         coverResult.set("ok", 0.0);
         result->diagnostics.push_back(std::move(coverResult));
         return false;
+    }
+    if (nullptr != planFaceEdges) {
+        result->diagnostics.push_back(std::move(coverResult));
+        return true;
     }
 
     report(0.99f, "Building cover uvs");

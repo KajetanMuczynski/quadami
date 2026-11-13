@@ -2,8 +2,8 @@
 
 Design note for a "see it before you run it" step in the Quadami panel (Kajetan's wish, 2026-10-28:
 something like the Decimate modifier, which shows its result while the ratio is dragged). Thread
-"Design preview before remeshing", 2026-10-31, master `57c19f9`. Nothing here is built; no code
-before Kajetan agrees on the design. It overlaps with density paint (TODO 5.8,
+"Design preview before remeshing", 2026-10-31, master `57c19f9`. Kajetan agreed to the overlay
+on 2026-10-31; §4.4 says what was built and how it measured against the gates. It overlaps with density paint (TODO 5.8,
 [GUIDES-AND-DENSITY.md](GUIDES-AND-DENSITY.md) §2), the pre-run checks (G13: a `--plan-only` CLI
 mode) and Finer / Coarser after a run (G17).
 
@@ -211,6 +211,265 @@ User guide, Advanced > Resolution: Quality takes about twice as long as Fast (§
 not a preview of the Quality result (a third of the poles move). New text: "Fast to try settings
 quickly; a Quality run at the same Target Quads has about the same quad size, but its poles and
 edge loops differ." The Resolution tooltip in the add-on says "about twice as long".
+
+### 4.4 Built: plan-only core and the overlay (2026-10-31)
+
+*Superseded in part by §4.5 (2026-11-04): the plan now comes from the continuous cover solve, and the
+Change bar spans ±20 %. The numbers below are those of the first plan (the size law on the decimated mesh).*
+
+Thread "Build density preview overlay", branch `feat/density-overlay`. Kajetan's ask: a swipe check
+around a typed Target Quads (for example 4k-6k around 5k) that shows which details keep their quads,
+fast enough to drag; plan once, rescale on every move.
+
+**What it does** [C]
+- Core `planRemesh()` / CLI `--plan-only`: input handling and the island split as in a run, then each
+  island is decimated (as `resample` does before the isotropic remesher) and the Parameterizer's own
+  size law (`plannedFaceEdgeLengths`, the m_f of stage 5 on the decimated mesh) gives a planned quad
+  edge per face. Log edge is smoothed over the vertex graph (32 Jacobi steps, keeps the count) and
+  moved to the input vertices by nearest decimated vertex. Output: `plan.bin` (float32 edge per
+  input vertex, then uint32 island), the report's `plan` block (area share, planned and floor quads,
+  left-out per island). The fold survey is skipped unless Repair Folds is on. A normal run takes the
+  same code path as before (`parameterize()` calls the same refactored functions; lane below).
+- Add-on: **Preview Density** under the main settings runs the plan in the worker (progress bar,
+  Esc cancels). The result stays in memory: the plan, the source's positions and triangles and one
+  GPU batch with three numbers per vertex (a = edge·√q₀, area share, floor). The shader computes
+  edge(N) = a / √max(N·share, floor), so moving **Change** (−50 % to +100 %, it sets Target Quads)
+  or Target Quads itself is one uniform and a redraw; nothing in Python or the worker runs. Colour:
+  orange smaller, blue larger than the plan's median, two octaves; an optional checker about one
+  planned quad across. The overlay is pushed a quarter of a quad edge towards the eye, so it shows
+  over the source and over a result lying on it.
+- Cache and invalidation: one preview, in memory, for the object it was made on. Dropped when that
+  object's geometry changes (depsgraph `is_updated_geometry`: edit mode, modifiers) and on file load.
+  Hidden with "preview again" when a planning setting differs (Adaptivity, Sharp Edge, Resolution,
+  Edge Scaling, Smooth Normal, Follow Marks), when Target Quads leaves ½×-2× of the planned count,
+  or when the object is gone. Remesh does not use the plan; no disk cache was built (P3 below).
+
+**Measured** (`tools/bench/plan_report.py` over `ab.py` runs: plans with `--cli-arg=--plan-only`
+at 2.5k, 3.5k, 4.2k, 5k, 6k, 7.1k, 10k against Quality runs at the same targets; corpus 18 meshes,
+sculpt 7; one replicate, set aggregates; independent re-check: see "what I did not re-check")
+
+| | corpus | sculpt | gate |
+|---|---|---|---|
+| P2 run quads / planned quads, median (in ±10 %), at N/N₀ = ¼ to 4 | 0.994-1.000 (94-100 %) | 0.992-0.994 (100 %) | ±10 % in 90 %: **pass** |
+| P1 r² per quad, fresh plan (median over mesh × target) | 0.54 | 0.77 | ≥ 0.8: **fail** |
+| P1 r² of 16-quad regions | 0.60 | 0.79 | |
+| \|log₂ run / plan\| per quad, area-weighted mean (weighted median) | 0.19 (0.16) | 0.19 (0.15) | |
+| region size error at 5k, median over meshes (worst) | 0.14 log₂ (0.33) | 0.14 (0.23) | |
+| **swipe**: region size change between two runs vs the plan's change, 5k→6k (planned −0.13) | 0.053 (worst 0.18) | 0.052 (0.07) | |
+| same, 2.5k→5k (planned −0.50) | 0.086 (0.29) | 0.077 (0.10) | |
+| rescaled plan vs fresh plan at 2× / ½×, median | 0 on 11 meshes (no decimation); 0.08 where non-zero, max 0.14 | 0.055, max 0.12 | |
+| P3 plan / run time, median (max); plan seconds max | 0.061 (0.68); 9.7 s | 0.26 (0.63); 3.2 s | ≤ 0.15: **corpus pass, sculpt fail** |
+
+Two rows are weaker evidence than they look (found by the independent check): the planned count is
+1.000-1.024 × N on corpus, so "the run lands on Target Quads" scores the same on P2 (the plan adds
+only the small-part floors, which matter on sculpt_parts); and on one part the rescale is one factor
+everywhere, so a plan-free uniform change gives the same swipe error to three decimals. The swipe
+rows show that runs follow the √ law region by region, not that the plan's pattern is right; that is
+P1. sculpt_degenerate and sculpt_steps give byte-identical runs, so the sculpt set has 6 independent
+meshes (medians move by under 0.01).
+
+Per mesh (fresh plan, regions r²): hand 0.85, spot 0.83, human 0.78, koala 0.72, plane 0.71, cat
+0.68, sculpts 0.68-0.85; poor: nefertiti 0.17, thin_leaf 0.44, spot_noisy 0.25, wingnut −0.07,
+csg_bracket −0.04, sword −0.50. Two failure kinds [M]: on sword, nefertiti, hammer and wingnut the
+plan has the right order but about twice the run's contrast (slope of run on plan 0.3-0.6; sword's
+plan spans 4× where the run spans 1.8×); on csg_bracket, spot_noisy and thin_leaf the plan is nearly
+flat (std 0.04-0.09 log₂) while the run varies 0.2-0.3, which no smooth size law predicts. No global
+gain fixes both (slopes 0.3-3 across meshes). The earlier T route (plan on the isotropic mesh,
+smoothed) reached region r² 0.69 on corpus [M, 5k only] at a higher cost (it builds T), so P1's
+fallback "build T" does not pass either.
+
+Plan time grows with the input, not the target [M]: under 0.5 s up to 100k triangles, 1-3 s at
+0.13-0.57M, 8-9 s on cat and nefertiti (1.7-2.0M, half a run). It is a one-off per mesh and
+settings; swipes never re-plan.
+
+**Reading** [I]
+- While dragging, the overlay is right about the change: the edge goes as 1/√N on each part, and
+  runs follow that region by region within about 4 %. That is a property of the remesher, not of the
+  plan. What the plan adds is the pattern (which parts get smaller quads) and the absolute size, and
+  those are the weak part: a region is about 10 % off on average, 25-30 % on the poor meshes. So the
+  overlay answers "which parts get more or fewer quads, and roughly how big", not "this ridge gets
+  exactly 3 quads".
+- His ±20 % band was too narrow to see: ±20 % quads is only −9 % / +12 % edge, smaller than the
+  plan's own error, so the bar spans ½×-2× (−29 % / +41 % edge); the rescale stays exact or within
+  14 % of a fresh plan there. Against the runs the band is lopsided [M, 1 replicate]: a plan made
+  at half the count and rescaled up fits the run better than a fresh plan on 10 of 12 decimated
+  meshes (cat r² 0.74 against 0.65), one made at double the count worse (demosthenes 0.57 to 0.34).
+  The plan's mesh (about 18 triangles per quad) is finer than the run's T (4.5); see the lead below.
+  Beyond it the panel asks for a new preview instead of drawing a
+  stale one.
+- P3 fails on 0.4-2M sculpts (a quarter to half a run; a re-plan of a 1.7-2M input takes 8-10 s
+  where the gate asked under 1 s). The warm input cache (§4.2) would cut that,
+  but swipes don't need it; build it with G2a only if waiting for a re-plan bothers in use.
+- Gate P1 failed; by this note's own rule the overlay would be dropped. Kajetan decides (thread
+  card, 2026-10-31); recommended: ship it labelled "planned", with the accuracy in the tooltip and
+  user guide.
+
+**What would falsify this**
+- Replicates flipping the half-count advantage above on most meshes.
+- A part with a spatially varying planned change (paint, several parts at their floors) where the
+  plan's change beats the uniform one; until then the swipe rows say nothing about the plan.
+- On his laptop, a swipe that visibly lags on a 1M+ sculpt (the batch is the full source mesh;
+  only tried with software GL here, 99k triangles drawn and read back in 0.05-0.25 s).
+- A sculpt where the regions the overlay shows as finer come out coarser (sign flip, not only
+  contrast). Seen only on csg_bracket (slope −0.1 to −2), whose plan is nearly flat, so it shows
+  almost one colour there; every organic mesh and sculpt had a positive slope.
+
+Independent check [checked]: a fresh worker with its own metric code (quad size as mean edge
+length or √area; plan read at the nearest point on the input triangles, at the four corners or at
+the centre's nearest vertex; regions as balls of two quad edges) got per-quad r² 0.525-0.539 corpus
+and 0.759-0.766 sculpt, regions 0.60 / 0.78, best linear fit 0.63-0.64 / 0.77-0.78. It confirmed
+that `plan.bin` follows the input's vertex order (shuffled input, same plan permuted), that plans
+and the corpus runs are byte-identical on re-run with the current build, and the time ratios.
+
+**What I did not re-check**
+- Replicates: one per run (aggregates only; no claim here is about one mesh's discrete result).
+- The private sculpts and the `external`, `brush`, `usage` sets (accuracy; the lane covered bytes).
+- The overlay on real Blender 4.2 and 5.2 with a GPU: drawing was checked in pip `bpy` 5.2.3 with
+  software EGL (image looked right); the CI smoke runs in background mode without drawing.
+- Timings ran with `ab.py --jobs 3` on both sides, not alone.
+
+### 4.5 Plan from the continuous cover; ±20 % bar (2026-11-04)
+
+Thread "Narrow density overlay prediction bar". Kajetan's ask: the ±20 % bar of §4.4, which needs the
+plan's absolute region size to be right (his call of 2026-10-31: P1 must pass first).
+
+**Why P1 failed** [M, stage diagnostics, one run each]: the cover solve realises only part of the size
+field it is asked for. Its own `continuous_size_slope` (realised log edge against requested, per face
+of T) is 0.43 on sword and 0.77 on spot; rounding and untangling change it by under 0.02. Any size law,
+on the decimated mesh or on T, predicts what the cover is asked for, not what it gives: hence the
+plan's doubled contrast on sword and nefertiti, and the flat plan on CAD and noisy parts.
+
+**What changed** [C]: `planRemesh()` runs each island as a run does up to the first (continuous) solve
+of the cover (`QuadParameterizer::parameterize(..., planFaceEdges)`; the rounding, untangling and
+extraction are skipped) and takes per face of T the edge of a unit cell of that map,
+√(3D area / uv area). 8 Jacobi steps of log smoothing on T (was 32 on the decimated mesh), the count
+kept, nearest-vertex transfer as before. If the cover fails on an island, that island falls back to
+the size law. The add-on's Change bar spans ±20 % and the overlay asks for a new preview outside it;
+Anisotropy is now a planning setting.
+
+**Measured** (`tools/bench/plan_report.py`, new columns `rerr` = median |log₂ run / plan| of 16-quad
+regions with the bias left in, `rp90` its 90th percentile; ab.py Quality runs at 2.5k/5k/10k, fresh
+plans, medians over mesh × target; core tree 4e709af32016 with the prototype, one replicate unless noted)
+
+| | first plan (§4.4) region r² / rerr / rp90 | continuous-cover plan |
+|---|---|---|
+| corpus (18) | 0.63 / 0.16 / 0.41 | 0.96 / 0.04 / 0.13 |
+| corpus, runs u1-u5 at 5k (5 replicates) | 0.62-0.67 / 0.155-0.166 | 0.94-0.96 / 0.043-0.049 |
+| sculpt (7) | 0.78 / 0.17 / 0.56 | 0.96 / 0.04 / 0.11 (5k: 0.99) |
+| plan at 5k against runs at 4.2k / 6k (the band's ends) | corpus 0.16, sculpt 0.18 | corpus 0.064, sculpt 0.058 |
+| two runs of the same mesh (u0 against u1-u5 at 5k, the noise floor) | | corpus 0.022, sculpt 0.051 |
+| plan time / run time at the same target, median (max) | 0.07 (0.64) | corpus 0.62 (0.75), sculpt 0.72 (0.76); 19.5 s max (2M triangles) |
+
+Per mesh (fresh plan, region r² / area-weighted rerr): every corpus mesh improved; worst after:
+csg_bracket 0.40 / 0.20 (was −0.04 / 0.19: the pattern is better, the size on its flat faces still
+about 15 % off), sword 0.79 / 0.09, spot_x8 0.89 / 0.07, spot_noisy and wingnut 0.91. Smoothing
+steps (corpus fresh r² / rerr): 0: 0.95 / 0.05, 4: 0.96 / 0.04, 8: 0.96 / 0.04, 16: 0.94 / 0.05,
+32: 0.89 / 0.07. Rejected: the requested size after the curl correction (0.74 / 0.11 at 0.50 of a run)
+and the cover on Fast's T against Quality runs (0.70 / 0.12 at 0.33). The private sculpts give the same
+picture (only metrics here); his sword's small flat parts stay 10-35 % off.
+
+Independent check [checked]: a fresh worker with its own metric code (sizes sampled on the input
+surface, a ball of three local edges as the region) found the continuous-cover plan at r² 0.89-0.92,
+error 0.05-0.06 (first plan 0.32-0.47 / 0.14-0.15; uniform size 0.245), r² 0.82-0.88 over the five
+replicates, and no leak from the run into the plan. So the numbers above depend on the region
+definition by about 0.05 in r²; the conclusion does not.
+
+Second independent check [checked] (another fresh worker, balls of 2.5 local quads on surface samples,
+bias kept): the ±20 % band holds (plan at 5k against runs at 4.2k / 6k: corpus 0.058, sculpt 0.052; at
+5k 0.037 / 0.038; a uniform plan 0.22 / 0.37-0.40), and the first plan was far worse on the private
+sculpts (head 0.37-0.50, cube 0.10-0.13, sword 0.12-0.20). It found the weak spots below, which the
+set medians hide:
+- csg_bracket is worse than a uniform plan at every target (0.22-0.28 against 0.14-0.18; the plan's
+  size on the flat faces about 16 % too small); spot_noisy is no better than uniform away from the
+  planned count; cloth_sheet is 0.03 at the planned count but 0.18 at the band's ends.
+- Private head: 0.02 against the plain run, but its 1-ulp replicates at 3k come out 0.10 off
+  (r² 0.3-0.5), 0.04-0.05 at 6k: at low counts two runs of the head differ more than the plan does
+  from either, so the plan cannot be closer than that.
+- Private sword: small flat parts (the flowers) come out 11-28 % larger than planned, growing with the
+  target, in every replicate (worse than uniform at 6k and 10k); the blade drifts by 3-12 %.
+
+**Reading** [I]
+- The plan's region error is now about one third of the band's half-width (±20 % quads = −9/+12 %
+  edge = 0.13-0.16 log₂), so the ±20 % bar shows real differences; ±30 % would too.
+- The cost is the gate P3 failure: about half a run (Kajetan accepted it, 2026-11-04). A plan runs once
+  per mesh and settings; swipes inside the band redraw only. Reusing the plan's solve when Remesh runs
+  at the planned count is the follow-up that makes the plan not wasted work.
+- P1 as written (r² ≥ 0.8) passes on both sets; the absolute region error is the better gate for the
+  bar, and it sits close to the noise floor on organic meshes and sculpts. Flat CAD faces and small flat
+  parts are the exception (above): there the overlay is a rough guide only, which the tooltip and user
+  guide say.
+
+**What would falsify this**
+- A replicate set where the plan's region error rises well above the band's half-width on organic meshes.
+- A geodesic region definition (the checks used Euclidean balls, which can cross thin parts) giving much
+  lower r².
+- On his laptop, plan time far above half a run.
+
+**What I did not re-check**
+- The `external`, `brush`, `usage`, `cad` sets; Fast-resolution plans against Fast runs.
+- Plans made at other targets and rescaled beyond the band (only 2× and ½×, about 0.08 log₂ from fresh).
+- Timings ran with `ab.py --jobs 3` on both sides.
+
+### 4.6 Low-poly input: fitted transfer (2026-11-05)
+
+Thread "Fix density bar on coarse meshes", after the third independent check (research note
+density-bar-disprover-2026-11-04): on CAD inputs the overlay was 1.7-3.4x too small, worse than a
+uniform guess, because each input vertex took the nearest vertex of T and a box's only vertices are
+its corners, where the run makes its smallest quads.
+
+**What changed** [C]: where an input triangle is wider than T's mean edge, `transferPlannedEdges()`
+samples the plan at the centres of k × k equal sub-triangles (k = longest side / T's mean edge, at
+most 32) and sets the vertices of such triangles to the least-squares fit of the overlay's linear
+interpolation to those samples (other vertices held at their nearest T vertex as before), clamped to
+the range of their samples, then scales the fitted vertices so the interpolation keeps the samples'
+quad count. A cone's fan keeps its gradient to the tip; a box face shows its average. Core only:
+`plan.bin`, the report and the add-on are unchanged. A first variant (area mean of 1/edge² per vertex)
+was rejected: it flattens the cone's gradient (open cone 0.05 → 0.41).
+
+**Measured** (ab.py Quality, `cad` also Fast; plans at T and runs at 0.8T / T / 1.2T, u0-u5 on both
+sides; median over cases of the per-case median |log₂ run / plan| of ~16-quad regions with the bias
+kept; metric B splits each input triangle so that sub-triangles are at most half a quad and reads the
+plan as the shader interpolates it, metric A is the third check's own code on input triangles)
+
+| | before | fitted | uniform size |
+|---|---|---|---|
+| cad + primitives + usage (40 meshes × targets × res = 80 cases), at T, B | 0.380 | 0.182 | 0.246 |
+| same, at 0.8T / 1.2T, B | 0.408 / 0.374 | 0.167 / 0.208 | 0.234 / 0.254 |
+| same, at T, A | 0.554 | 0.099 | 0.192 |
+| corpus + external + thin (44 meshes, u0, at T: an aggregate), B / A | 0.041 / 0.040 | 0.038 / 0.040 | 0.245 |
+| plan time (sequential, nemetona, cad_cylinder) | | +3-8 % | |
+
+Per mesh [M, B at T]: cad_box q4000 1.83 → 0.46 (uniform 0.46), wedge 1.88 → 0.47, cube q5000
+1.92 → 0.50, cone 1.06 → 0.34, cylinder 0.90 → 0.33, csg_bracket_rot 0.20 → 0.09 (corpus csg_bracket
+0.145 → 0.082), open cone 0.05 → 0.13 at 1k (the only case worse than before; 0.26 → 0.18 at 5k).
+Organic meshes: no case worse than before by more than 0.02.
+
+**Reading** [I]
+- The 2-3x error is gone. Most of the gain is the overall size (the old overlay was about 2x too small
+  everywhere); with the scale factored out, cad is old 0.220 / fitted 0.213 / uniform 0.209 (check
+  below). Set medians beat uniform; single meshes (wedge, box, a 64-segment cylinder, an L-shape) stay
+  0.01-0.03 worse than uniform. On a box, wedge or cube it is about uniform: the run's quads still shrink toward corners and rims by about 1.4x inside
+  each face (B 0.46 at 4k), and eight corner values cannot draw that. Showing it needs a finer display
+  mesh (the plan sampled inside big faces and drawn on a subdivided copy), which changes `plan.bin` and
+  the add-on; not built. The user guide says big faces show their average.
+- The ±20 % bar remains meaningful on organic meshes; on low-poly hard surface it is a guide to the
+  average per face only.
+
+Independent check [checked] (fresh worker, own metric: each run quad's √area against the shader's
+edge at the closest input point, plus cubic regions of ~16 quads; research note
+density-coarse-disprover-2026-11-05): survives. Low-poly sets old / fitted / uniform 0.366 / 0.175 /
+0.222; organic 0.039 / 0.039 / 0.233, no run worse by more than 0.005; five new low-poly meshes
+(thin box, L-shape, 8×6 torus, plate with peg, star) 0.898 / 0.164 / 0.191, fitted better than old in
+90 of 90 runs. Its qualification is in the reading below.
+
+**What would falsify this**
+- A low-poly mesh (not in cad, primitives, usage) where the fitted overlay is worse than uniform in B.
+- A separate metric (e.g. geodesic regions or per-quad sizes against the shader's per-pixel edge) giving
+  the fitted plan no gain over before on cad.
+
+**What I did not re-check**
+- Fast plans on primitives and usage; Follow Marks or Adaptivity ≠ default; the add-on in Blender
+  (unchanged code, same arrays).
 
 ## 5. Design critique (what may have been missed)
 

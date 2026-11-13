@@ -25,6 +25,10 @@ import re
 # panel labels don't wrap, and the sidebar is about this wide at its default
 # size.  The panel itself wraps to its real width in pixels.
 WARNING_WIDTH = 36
+# Share of the surface farther than one quad width from the result at or
+# above which the Missing parts row says it (the core's
+# LargeSurfaceLossShare, src/AutoRemesher/remesh.h).
+LARGE_SURFACE_LOSS_SHARE = 0.1
 
 STATUS_TEXT = {
     "ok": "Done",
@@ -134,10 +138,15 @@ def summary_rows(report):
     # Parts of the input farther than three quad widths from the result: a
     # limb, vine or spike that came out missing.  Older workers don't send it.
     lost = report.get("lost_parts")
+    # Since interface 1.14 also the share of the surface farther than one
+    # quad width: a large share is the first thing to say.
     if report.get("status") == "ok" and lost is not None:
         far = int(lost.get("far_input_vertices", 0))
-        rows.append(("Missing parts", "up to %d quad widths" % int(lost.get("farthest_input_quad_widths", 0))
-                     if far else "none", far > 0))
+        share = float(lost.get("uncovered_area_share", 0.0))
+        text = "up to %d quad widths" % int(lost.get("farthest_input_quad_widths", 0)) if far else "none"
+        if share >= LARGE_SURFACE_LOSS_SHARE:
+            text = "%d %% of the surface" % round(100 * share) + (", " + text if far else "")
+        rows.append(("Missing parts", text, far > 0 or share >= LARGE_SURFACE_LOSS_SHARE))
     seconds = report.get("time", {}).get("total_seconds")
     if seconds is not None:
         rows.append(("Time", "%.1f s" % seconds, False))
@@ -235,9 +244,13 @@ def warning_lines(report, width=WARNING_WIDTH, measure=len):
     for warning in report.get("warnings", []):
         add(warning, True)
     marks = report.get("input", {}).get("feature_edges", 0) - report.get("input", {}).get("ignored_feature_edges", 0)
-    if report.get("status") == "ok" and marks > 0:
-        add("Followed %d marked edges (Follow Marks). If you don't want quads along them, untick "
-            "Follow Marks and remesh again." % marks, False)
+    guides = min(report.get("guide_edges", 0), marks)
+    if report.get("status") == "ok" and marks > guides:
+        add("Followed %d marked edges (Follow Marks%s). If you don't want quads along them, untick "
+            "Follow Marks and remesh again." % (marks - guides, ", besides the guides" if guides else ""), False)
+    if report.get("status") == "ok" and guides > 0:
+        add("Followed %d guide edges. To remesh without them, click the X next to Draw Guide "
+            "(Clear Guides) and remesh again." % guides, False)
     if report.get("kept"):
         add("Copied from the original: %s." % kept_text(report["kept"]), False)
     if report.get("status") == "ok" and report.get("islands", {}).get("holes", 0):
