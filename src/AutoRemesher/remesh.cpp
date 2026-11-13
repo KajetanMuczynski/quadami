@@ -916,6 +916,41 @@ namespace {
         return std::to_string(value);
     }
 
+    // Warns when the small-island floor adds more than this share of Target
+    // Quads. Measured with --plan-only on all 569 default mesh-target pairs of
+    // the public, hand-downloaded, thin, stress and private sets (2026-11-12):
+    // 28 pass it, all models of many loose parts (chain mail 35 times the
+    // target, a plant's leaves, a cloud of 1,000 crumbs; Rain's eyes and
+    // teeth at 3,000 with 71 %); no sculpt, CAD part or primitive comes near.
+    constexpr double floorExtraWarningShare = 0.25;
+
+    // Small islands are raised to a floor of quads (64 triangles) so they
+    // keep their shape; Target Quads does not change that floor (TODO G13,
+    // research/crumb-floor-2026-11-12.md).
+    void warnAboutFloor(QualityReport& report, uint32_t targetQuads)
+    {
+        double raised = 0.0, share = 0.0;
+        for (const auto& it : report.diagnostics) {
+            if (it.first == "floor_raised_islands")
+                raised = it.second;
+            else if (it.first == "floor_extra_quad_share")
+                share = it.second;
+        }
+        if (!(share > floorExtraWarningShare) || raised < 1.0)
+            return;
+        // Two significant digits.
+        const double expected = (1.0 + share) * (double)targetQuads;
+        const double step = std::pow(10.0, std::floor(std::log10(std::max(expected, 1.0))) - 1.0);
+        report.warnings.push_back(std::to_string((long long)raised)
+            + (1.0 == raised ? " small part was" : " small parts were")
+            + " each given a minimum of quads (up to 32) so they keep their shape, which can raise the result up "
+              "to about "
+            + std::to_string((long long)(std::round(expected / step) * step)) + " quads for "
+            + std::to_string(targetQuads) + " asked. A lower Target Quads does not make these parts smaller. To stay near the "
+                                            "target, separate the small loose parts (Edit Mode, P > By Loose Parts) and remesh only the parts "
+                                            "that need quads");
+    }
+
 }
 
 const char* toString(RemeshStatus status)
@@ -1280,6 +1315,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
         // For front ends that add their own hint under the warning.
         report.diagnostics.push_back({ "thin_parts_warned", warned ? 1.0 : 0.0 });
     }
+    warnAboutFloor(report, parameters.targetQuadCount);
     return finish(RemeshStatus::Ok, std::string());
 }
 
@@ -1343,6 +1379,7 @@ RemeshResult planRemesh(const RemeshRequest& request, const RemeshCallbacks& cal
         plan.plannedQuads += out.plannedQuads;
         plan.islands.push_back(out);
     }
+    warnAboutFloor(report, request.parameters.targetQuadCount);
     return finish(RemeshStatus::Ok, std::string());
 }
 
