@@ -615,6 +615,82 @@ void measureLostParts(const std::vector<double>& positions, const std::vector<ui
     for (size_t i = 0; i < distances.size(); ++i)
         report->farthestInputQuadWidths = std::max(report->farthestInputQuadWidths, distances[i] / quadWidth);
 
+    // The share of the input area farther than one and than three h0, on
+    // samples spread by area: each triangle split into n x n parts no wider
+    // than h0 / 2, one sample at the centroid of each.  Vertices alone
+    // mislead both ways: a coarse cone's apex carries a third of its side
+    // (23 % "missing" for a cut tip), a plate's 32-segment hole rims carry
+    // most of its vertices.  Triangles at a left-out vertex are skipped.
+    {
+        const double step = 0.5 * quadWidth;
+        // Per triangle, summed in order afterwards so the report is the same
+        // on every run.  The distance to the output moves by at most the
+        // distance moved, so a triangle whose nearest corner lies closer than
+        // h0 minus its longest edge is covered all over, and one whose
+        // farthest corner lies beyond 3 h0 plus that is far all over: their
+        // samples are not searched (most triangles of a kept surface).
+        std::vector<double> cornerDistance(used.size(), 0.0);
+        for (size_t i = 0; i < inputVertices.size(); ++i)
+            cornerDistance[inputVertices[i]] = distances[i];
+        std::vector<std::array<double, 3>> shares(triangles.size() / 3, std::array<double, 3> { 0.0, 0.0, 0.0 });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, triangles.size() / 3), [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t t = range.begin(); t != range.end(); ++t) {
+                double& localSampled = shares[t][0];
+                double& localUncovered = shares[t][1];
+                double& localFar = shares[t][2];
+                const uint32_t* corners = &triangles[3 * t];
+                if (!used[corners[0]] || !used[corners[1]] || !used[corners[2]])
+                    continue;
+                const Vector3 a = point(corners[0]), b = point(corners[1]), c = point(corners[2]);
+                const double triangleArea = 0.5 * Vector3::crossProduct(b - a, c - a).length();
+                if (!(triangleArea > 0.0))
+                    continue;
+                const double longest = std::max({ (b - a).length(), (c - b).length(), (a - c).length() });
+                const double nearest = std::min({ cornerDistance[corners[0]], cornerDistance[corners[1]], cornerDistance[corners[2]] });
+                const double farthest = std::max({ cornerDistance[corners[0]], cornerDistance[corners[1]], cornerDistance[corners[2]] });
+                localSampled += triangleArea;
+                if (nearest + longest <= quadWidth)
+                    continue;
+                if (farthest - longest > radius) {
+                    localUncovered += triangleArea;
+                    localFar += triangleArea;
+                    continue;
+                }
+                localSampled -= triangleArea;
+                const size_t n = (size_t)std::min(64.0, std::max(1.0, std::ceil(longest / step)));
+                const double weight = triangleArea / (double)(n * n);
+                // Sub-triangle (i, j) of the n x n split, upright and inverted.
+                for (size_t i = 0; i < n; ++i) {
+                    for (size_t j = 0; i + j < n; ++j) {
+                        for (int inverted = 0; inverted < 2; ++inverted) {
+                            if (inverted && i + j + 1 >= n)
+                                continue;
+                            const double u = inverted ? (i + 2.0 / 3.0) / n : (i + 1.0 / 3.0) / n;
+                            const double v = inverted ? (j + 2.0 / 3.0) / n : (j + 1.0 / 3.0) / n;
+                            const Vector3 sample = a + (b - a) * u + (c - a) * v;
+                            const double distance = output.distance(sample, radius * (1.0 + 1e-9));
+                            localSampled += weight;
+                            if (distance > quadWidth)
+                                localUncovered += weight;
+                            if (distance > radius)
+                                localFar += weight;
+                        }
+                    }
+                }
+            }
+        });
+        double sampledArea = 0.0, uncoveredArea = 0.0, farArea = 0.0;
+        for (const auto& share : shares) {
+            sampledArea += share[0];
+            uncoveredArea += share[1];
+            farArea += share[2];
+        }
+        if (sampledArea > 0.0) {
+            report->uncoveredAreaShare = uncoveredArea / sampledArea;
+            report->farAreaShare = farArea / sampledArea;
+        }
+    }
+
     // What the classification needs besides the distances: the input's
     // pieces (connected by shared vertices), open edges and vertex normals.
     // The same for every width, so built once, when a vertex is far at all.
@@ -1054,6 +1130,16 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
 
     if (0 == report.faceCount)
         return finish(RemeshStatus::Failed, "remeshing produced no faces");
+    if (report.uncoveredAreaShare >= LargeSurfaceLossShare) {
+        // First, since it says how much of the result is unusable.  Said apart
+        // from the causes the far-vertex warning gives: on a perforated plate at a few
+        // quads per hole the output collapses to a fraction of the input
+        // (48-98 % of the surface farther than a quad), while the far-vertex
+        // warning alone read like a thin part going missing.
+        report.warnings.push_back("About " + std::to_string((long long)std::lround(100.0 * report.uncoveredAreaShare))
+            + " % of the input surface is missing from the result (farther than one quad width from it). "
+              "Check the result before using it.");
+    }
     if (report.islandsWithoutOutput > 0) {
         report.warnings.push_back(std::to_string(report.islandsWithoutOutput) + " of "
             + std::to_string(report.islandCount) + " islands produced no faces");
@@ -1327,6 +1413,8 @@ std::string toJson(const RemeshResult& result)
     out << "  \"lost_parts\": {"
         << "\"farthest_input_quad_widths\": " << jsonNumber(report.farthestInputQuadWidths)
         << ", \"far_input_vertices\": " << jsonCount(report.farInputVertexCount)
+        << ", \"uncovered_area_share\": " << jsonNumber(report.uncoveredAreaShare)
+        << ", \"far_area_share\": " << jsonNumber(report.farAreaShare)
         << ", \"threshold_quad_widths\": " << jsonNumber(LostPartQuadWidths)
         << ", \"piece_vertices\": " << jsonCount(report.pieceLostVertexCount)
         << ", \"pieces\": " << jsonCount(report.lostPieceCount)

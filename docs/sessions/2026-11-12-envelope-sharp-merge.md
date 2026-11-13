@@ -4,7 +4,7 @@
   sharp-edge pass, envelope check. The sharp-edge pass skips enveloped islands and judges a run against
   `inputTopology` (the surface remeshed; for an island not enveloped that is the input). An island may
   go through both: sharp-edge retry first, envelope check on what it leaves. If the envelope replaces a
-  kept run without sharp edges, `sharp_edges_dropped` becomes 2. Interface 1.14 (#159 took 1.12, #161/#164 1.13).
+  kept run without sharp edges, `sharp_edges_dropped` becomes 2. Interface 1.15 (#159 took 1.12, #164 1.13, #178 1.14).
 - Found (ab.py, 6 replicates, cad / closed / corpus / external; HEAD vs master vs 340791e by `out.obj`
   hash) [measured]: cad, closed, corpus: HEAD byte-identical to master. external: 13 runs move only
   as #177 alone, 10 only as #165 alone, 56 in both (mosquito, flighthelmet, watch, plant, corset), all
