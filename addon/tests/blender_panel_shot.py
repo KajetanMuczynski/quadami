@@ -103,7 +103,7 @@ def setup():
 
     settings = getattr(bpy.context.scene, ID)
     settings.target_quads = 300
-    positions, triangles, smooth, marked, _flooded = addon._mesh_arrays(bpy.context, source, settings.follow_marks)
+    positions, triangles, smooth, marked, _flooded, _guide_edges = addon._mesh_arrays(bpy.context, source, settings.follow_marks)
     assert len(marked) > 0
     outcome = worker.remesh(worker.bundled_executable(), positions, triangles, settings.parameters(),
                             marked_edges=marked)

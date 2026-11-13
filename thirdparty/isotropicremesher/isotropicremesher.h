@@ -59,6 +59,8 @@ public:
     IsotropicHalfedgeMesh *remeshedHalfedgeMesh();
     
 private:
+    // Taubin rounds (one shrink, one inflate step each) per shiftVertices.
+    static const size_t kHardChainSmoothingRounds = 4;
     const std::vector<Vector3> *m_vertices = nullptr;
     const std::vector<std::vector<size_t>> *m_triangles = nullptr;
     std::vector<Vector3> *m_triangleNormals = nullptr;
@@ -97,6 +99,7 @@ private:
     void collapseShortEdges(double minEdgeLengthSquared, double maxEdgeLengthSquared);
     void flipEdges();
     void shiftVertices();
+    void relaxSmoothHardChains();
     void projectVertices();
     void projectVertex(IsotropicHalfedgeMesh::Vertex *vertex);
     void buildFeatureSegmentTree();
