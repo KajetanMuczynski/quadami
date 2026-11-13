@@ -265,6 +265,60 @@ class Validity(unittest.TestCase):
         v = self.run_metrics(self.torus_in(), out)["validity"]
         self.assertEqual((v["holes_added"], v["handles_lost"], v["islands_topology_changed"]), (2, 1.0, 1))
 
+    def test_handle_cut_by_a_split_is_lost(self):
+        # The output is the torus cut into two tubes: two pieces of one input island, each of genus 0.
+        out = join(grid(20, 16, False, True, lambda u, v: torus_point(0.48 * u, v)),
+                   grid(20, 16, False, True, lambda u, v: torus_point(0.5 + 0.48 * u, v)))
+        v = self.run_metrics(self.torus_in(), out)["validity"]
+        self.assertEqual((v["islands_split"], v["holes_added"], v["handles_lost"]), (1, 4, 1.0))
+
+    def test_split_keeping_the_handle_loses_none(self):
+        # A torus and a crumb split off it (a disc above it in the same island's vote): genus kept.
+        crumb = sheet(2, 2, 0.02, z=0.31)
+        crumb = (crumb[0] * [0.02, 1, 1] + [1.0, 0.0, 0.0], crumb[1])
+        v = self.run_metrics(self.torus_in(), join(self.torus_out(), crumb))["validity"]
+        self.assertEqual((v["islands_split"], v["handles_lost"], v["handles_added"]), (1, 0.0, 0.0))
+
+    def test_extra_piece_with_a_handle_adds_none(self):
+        # A second, tiny ring on the torus: a split island can hold another island's output piece, so
+        # handles are added only on islands kept in one piece.
+        ring = grid(12, 6, True, True, lambda u, v: torus_point(u, v, R=0.02, r=0.005, shift=1.3))
+        v = self.run_metrics(self.torus_in(), join(self.torus_out(), ring))["validity"]
+        self.assertEqual((v["islands_split"], v["handles_lost"], v["handles_added"]), (1, 0.0, 0.0))
+
+    def pinched_tori_in(self):
+        # Two tori sharing one vertex: A's outer equator point (u = 0, v = 0) is B's inner one.
+        A = self.torus_in()
+        B = grid(96, 48, True, True, lambda u, v: torus_point(u, v, shift=2.0), quads=False)
+        V, F = join(A, B)
+        shared = len(A[0]) + 48 * 48 + 24
+        self.assertLess(np.linalg.norm(V[shared] - V[0]), 1e-12)
+        return V, [[0 if x == shared else x for x in f] for f in F]
+
+    def test_pinched_input_island_is_split_like_the_core(self):
+        # The correct output has the pinch split: two separate tori, same as the input after the core's
+        # splitPinchedVertices, globally and per island.
+        r = self.run_metrics(self.pinched_tori_in(), join(self.torus_out(), self.torus_out(shift=2.0)))
+        t, v = r["topology"], r["validity"]
+        self.assertEqual(t["input_split_pinched_vertices"], 1)
+        self.assertTrue(t["same_as_input"])
+        self.assertEqual((v["islands_input"], v["islands_input_non_manifold"]), (2, 0))
+        self.assertTrue(v["islands_same_as_input"])
+
+    def test_repeated_vertex_triangle_does_not_join_a_split_pinch(self):
+        # An a a b triangle at the pinch (the core drops it before splitting) leaves the two tori apart.
+        V, F = self.pinched_tori_in()
+        F = F + [[0, 0, 1]]
+        r = self.run_metrics((V, F), join(self.torus_out(), self.torus_out(shift=2.0)))
+        self.assertTrue(r["topology"]["same_as_input"])
+        self.assertEqual(r["validity"]["islands_input"], 2)
+
+    def test_pinched_input_island_damage_is_counted(self):
+        # The same input, one torus cut open: a pinch no longer hides the island from the topology checks.
+        cut = grid(40, 16, False, True, lambda u, v: torus_point(0.98 * u, v, shift=2.0))
+        v = self.run_metrics(self.pinched_tori_in(), join(self.torus_out(), cut))["validity"]
+        self.assertEqual((v["holes_added"], v["handles_lost"], v["islands_topology_changed"]), (2, 1.0, 1))
+
     def test_handle_swapped_between_islands(self):
         # Global Euler characteristic, components and loops match, per island they do not: a torus
         # turned into a sphere-like cap pair is not available on a grid, so swap a torus and a
