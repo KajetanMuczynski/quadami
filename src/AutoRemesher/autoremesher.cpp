@@ -2928,8 +2928,8 @@ bool AutoRemesher::remeshIslands()
                     // Still as bad as a broken result: close more, until the envelope is one
                     // closed piece without handles (Euler characteristic 2).
                     for (double radius = radii.back() * envelopeClosingGrowth;
-                         best >= brokenUnfaithfulShare && lastRunEuler < 2 && radius <= maximumBrokenEnvelopeClosingRadius * 1.0001;
-                         radius *= envelopeClosingGrowth) {
+                        best >= brokenUnfaithfulShare && lastRunEuler < 2 && radius <= maximumBrokenEnvelopeClosingRadius * 1.0001;
+                        radius *= envelopeClosingGrowth) {
                         EnvelopeResult envelope;
                         if (!envelopeAt(base, radius, &envelope))
                             continue;
