@@ -1674,6 +1674,13 @@ namespace {
                     return true;
                 }
                 if (continuousOnly) {
+                    if (std::getenv("AUTOREMESHER_DUMP_UNTANGLE")) {
+                        DiagnosticRecord scratchRecord("continuous_untangle");
+                        untangleCover(mesh, frames, std::atoi(std::getenv("AUTOREMESHER_DUMP_UNTANGLE")), &s, &scratchRecord);
+                        for (const auto& item : scratchRecord.values)
+                            if (item.first.find("inverted") != std::string::npos || item.first == "untangle_components_accepted")
+                                std::fprintf(stderr, "continuous untangle: %s %g\n", item.first.c_str(), item.second);
+                    }
                     values->resize(variables);
                     for (size_t i = 0; i < variables; ++i)
                         (*values)[i] = s.value(i);
@@ -1958,6 +1965,39 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
             }
         }
     }
+    // Research prototype (T-mesh quantization): AUTOREMESHER_DUMP_COVER=prefix
+    // writes the mesh, rotations and the continuous cover solution to
+    // prefix.<call>.cont.bin, and the rounded one to prefix.<call>.round.bin.
+    static int dumpCall = 0;
+    const char* dumpEnv = nullptr == planFaceEdges ? std::getenv("AUTOREMESHER_DUMP_COVER") : nullptr;
+    const int thisDump = dumpEnv ? dumpCall++ : -1;
+    const auto writeDump = [&](const std::vector<double>& values, const char* tag) {
+        char name[4096];
+        std::snprintf(name, sizeof(name), "%s.%d.%s.bin", dumpEnv, thisDump, tag);
+        FILE* file = std::fopen(name, "wb");
+        if (!file)
+            return;
+        const uint64_t header[4] = { (uint64_t)mesh.vertexCount(), (uint64_t)mesh.faceCount(), (uint64_t)values.size(), (uint64_t)uvVariables };
+        std::fwrite(header, sizeof(header), 1, file);
+        for (size_t v = 0; v < mesh.vertexCount(); ++v) {
+            const double p[3] = { mesh.position(v).x(), mesh.position(v).y(), mesh.position(v).z() };
+            std::fwrite(p, sizeof(p), 1, file);
+        }
+        for (size_t c = 0; c < corners; ++c) {
+            const int64_t row[3] = { (int64_t)mesh.cornerVertex(c),
+                mesh.oppositeCorner(c) == SurfaceMesh::npos ? -1 : (int64_t)mesh.oppositeCorner(c), (int64_t)rotation[c] };
+            std::fwrite(row, sizeof(row), 1, file);
+        }
+        std::fwrite(values.data(), sizeof(double), values.size(), file);
+        std::fclose(file);
+    };
+    if (dumpEnv) {
+        std::vector<double> continuous;
+        std::vector<DiagnosticRecord> scratch;
+        DiagnosticRecord scratchResult("cover_probe");
+        if (solveQuadCover(ctx, &continuous, nullptr, &scratch, &scratchResult, nullptr, true))
+            writeDump(continuous, "cont");
+    }
     if (!solveQuadCover(ctx, &allValues, coverProgress ? &coverProgress : nullptr,
             &result->diagnostics, &coverResult, alignments.empty() ? nullptr : &alignments)) {
         coverResult.set("ok", 0.0);
@@ -1969,6 +2009,8 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
         return true;
     }
 
+    if (dumpEnv)
+        writeDump(allValues, "round");
     report(0.99f, "Building cover uvs");
     buildResultUv(mesh, rotation, allValues, uvVariables, result, &coverResult);
     coverResult.set("ok", 1.0);
