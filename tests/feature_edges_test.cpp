@@ -238,8 +238,8 @@ bool remesherHandsTheEdgesOnToT()
             remesher.remeshedVertices(), remesher.remeshedTriangles(), degrees, &classified);
         const double carriedLength = AutoRemesher::featureEdgeLength(carried, remesher.remeshedVertices());
         const double length = AutoRemesher::featureEdgeLength(extended, remesher.remeshedVertices());
-        std::printf("  at %.0f degrees: %zu input edges; T: %zu carried (length %.3f), %zu flipped away; T's set %zu edges (%zu classified), length %.3f of %.3f\n",
-            degrees, sharp.size(), carried.size(), carriedLength, remesher.clearedFeatureEdges(), extended.size(), classified, length, boxEdgeLength);
+        std::printf("  at %.0f degrees: %zu input edges; T: %zu carried (length %.3f); T's set %zu edges (%zu classified), length %.3f of %.3f\n",
+            degrees, sharp.size(), carried.size(), carriedLength, extended.size(), classified, length, boxEdgeLength);
         if (180.0 == degrees) {
             ok = check(extended.empty(), "at 180 degrees T has no sharp edges") && ok;
             continue;
@@ -261,14 +261,41 @@ bool remesherHandsTheEdgesOnToT()
             }
         std::printf("  ends of sharp edges of T lie within %.2g of a box edge\n", offEdge);
         ok = check(onT.edges == extended.edges, "with no hard edges T's set is T's own sharp edges") && ok;
-        // The relaxation moves feature vertices too (TODO 2.5), up to most of an edge.
-        ok = check(offEdge < 0.1, "they lie near a box edge (within one target edge)") && ok;
-        // The remesher's flips and smoothing leave little of the crease sharp
-        // on T (TODO 2.5): 1.03 of 16, though 4.8 of it is still carried.
-        ok = check(length > 0.0 && length < 1.05 * boxEdgeLength,
-                 "T keeps some of the box's edge length as sharp edges, and not more")
+        // Chain vertices slide along the box edges and are projected back
+        // onto them, corners stay (TODO 2.5).
+        ok = check(offEdge < 1e-9, "they lie on a box edge") && ok;
+        // No flip removes a box edge and nothing bends it: the whole length
+        // is carried and still sharp on T (before TODO 2.5: 1.03 of 16).
+        ok = check(std::fabs(carriedLength - boxEdgeLength) < 1e-9 * boxEdgeLength,
+                 "T carries the box's whole edge length")
+            && ok;
+        ok = check(std::fabs(length - boxEdgeLength) < 1e-9 * boxEdgeLength,
+                 "and all of it is sharp on T")
             && ok;
     }
+    return ok;
+}
+
+// pointsOnFeatureEdges (TODO 5.7): a point on a hard edge counts, a point
+// on an edge without the flag or off the edge by more than the tolerance
+// does not.
+bool pointsOnHardEdgesAreFound()
+{
+    const std::vector<Vector3> vertices = { Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 1, 0), Vector3(0, 1, 0) };
+    FeatureEdgeSet set;
+    set.edges = { { 0, 1 }, { 1, 2 }, { 2, 3 } };
+    set.flags = { FeatureEdgeSet::Hard, FeatureEdgeSet::Hard, 0 };
+    const std::vector<Vector3> points = { Vector3(0.25, 0, 0), Vector3(1, 0.5, 1e-9), Vector3(0.5, 1, 0),
+        Vector3(0.5, 1e-3, 0), Vector3(1, 1, 0), Vector3(5, 5, 5) };
+    const std::vector<char> on = pointsOnFeatureEdges(points, set, vertices, FeatureEdgeSet::Hard, 1e-6);
+    bool ok = check(on.size() == points.size(), "one flag per point");
+    ok = check(on[0] && on[1], "points on hard edges are found") && ok;
+    ok = check(!on[2], "a point on an edge without the hard flag is not") && ok;
+    ok = check(!on[3], "a point farther than the tolerance is not") && ok;
+    ok = check(on[4], "the end of a hard edge is on it") && ok;
+    ok = check(!on[5], "a far point is not") && ok;
+    const std::vector<char> any = pointsOnFeatureEdges(points, set, vertices, 0, 1e-6);
+    ok = check(any[2], "with no flag required every edge counts") && ok;
     return ok;
 }
 
@@ -281,6 +308,7 @@ int main()
     failures += decimationKeepsTheChain() ? 0 : 1;
     failures += tKeepsOnlyHardEdgesAndItsOwnCreases() ? 0 : 1;
     failures += remesherHandsTheEdgesOnToT() ? 0 : 1;
+    failures += pointsOnHardEdgesAreFound() ? 0 : 1;
     std::printf("%s\n", 0 == failures ? "all passed" : "FAILED");
     return 0 == failures ? 0 : 1;
 }

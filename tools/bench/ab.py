@@ -372,7 +372,9 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
                "--target-quads", str(asked)] + cli_args
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     else:
-        cmd = [cli, "--input", inp, "--output", os.path.join(d, "out.obj"), "--target-quads", str(asked),
+        # A plan (--plan-only, docs/PREVIEW.md) writes raw arrays, not a mesh: no out.obj, no metrics.
+        output = "plan.bin" if "--plan-only" in cli_args else "out.obj"
+        cmd = [cli, "--input", inp, "--output", os.path.join(d, output), "--target-quads", str(asked),
                "--resolution", res, "--report-json", os.path.join(d, "report.json"),
                "--stage-diagnostics", os.path.join(d, "stages.jsonl")] + cli_args
     rss_file = os.path.join(d, "rss.txt")
@@ -582,7 +584,7 @@ def value(r, k):
     if k == "flipped_off_folds": return (m.get("flipped") or {}).get("faces_off_input_folds")
     if k == "flipped_over_folds": return (m.get("flipped") or {}).get("faces_over_input_folds")
     if k in ("folded_faces", "twisted_quads", "holes_added", "holes_closed", "handles_lost", "handles_added", "islands_dropped",
-             "islands_merged", "area_uncovered", "area_wrong_side"):
+             "islands_merged", "islands_reversed", "area_uncovered", "area_uncovered_any_island", "area_wrong_side"):
         return (m.get("validity") or {}).get(k)
     if k == "nm_vertices": return (m.get("validity") or {}).get("non_manifold_vertices")
     if k == "islands_changed": return (m.get("validity") or {}).get("islands_topology_changed")
@@ -594,6 +596,7 @@ def value(r, k):
     if k == "normal_dev": return (m.get("normal_deviation_deg") or {}).get("mean")
     if k == "sj_p1": return (m.get("quads") or {}).get("sj_p1")
     if k == "skew_p95": return (m.get("quads") or {}).get("skew_p95")
+    if k == "aspect_p95": return (m.get("quads") or {}).get("aspect_p95")
     if k == "crease_cov": return (m.get("creases") or {}).get("coverage")
     if k == "crease_cov_theta": return (m.get("creases") or {}).get("coverage_theta")
     if k == "crease_bent_1k": return (m.get("creases") or {}).get("bent_quads_per_1k")
@@ -618,17 +621,17 @@ COUNTS = ["flips_cont", "flips_round", "flips", "degenerate", "non_quads", "sj_l
           "t_non_manifold", "t_opened", "qex_fallbacks",
           # Validity from metrics.py (2026-10-22): per input island, matched to the output's islands.
           "folded_faces", "twisted_quads", "nm_vertices", "holes_added", "holes_closed", "handles_lost",
-          "handles_added", "islands_dropped", "islands_merged", "islands_changed", "flipped_vs_raw",
+          "handles_added", "islands_dropped", "islands_merged", "islands_changed", "flipped_vs_raw", "islands_reversed",
           # V3's split (2026-10-23): flips over folded input vs the rest
           "flipped_off_folds", "flipped_over_folds"]
-MEANS = ["area_uncovered", "area_wrong_side", "irregular_1k", "in_out_p99", "hausdorff", "in_out_mean", "normal_dev", "vertex_dist", "sj_p1",
-         "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel", "count_err", "energy_ratio", "time", "peak_rss_mb"]
+MEANS = ["area_uncovered", "area_uncovered_any_island", "area_wrong_side", "irregular_1k", "in_out_p99", "hausdorff", "in_out_mean", "normal_dev", "vertex_dist", "sj_p1",
+         "skew_p95", "aspect_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel", "count_err", "energy_ratio", "time", "peak_rss_mb"]
 # Rows computed by metrics.py (the rest come from the CLI's own report and stage records).
 FROM_METRICS = {"sj_le_0", "flipped_vs_input", "flipped_vs_raw", "flipped_off_folds", "flipped_over_folds",
                 "folded_faces", "twisted_quads", "holes_added", "holes_closed", "handles_lost", "handles_added",
-                "islands_dropped", "islands_merged", "area_uncovered", "area_wrong_side", "nm_vertices", "islands_changed",
-                "irregular_1k", "hausdorff", "in_out_mean", "in_out_p99", "vertex_dist", "normal_dev", "sj_p1",
-                "skew_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel"}
+                "islands_dropped", "islands_merged", "area_uncovered", "area_uncovered_any_island", "area_wrong_side",
+                "nm_vertices", "islands_changed", "islands_reversed", "irregular_1k", "hausdorff", "in_out_mean", "in_out_p99", "vertex_dist", "normal_dev",
+                "sj_p1", "skew_p95", "aspect_p95", "crease_cov", "crease_cov_theta", "crease_bent_1k", "marked_cov", "marked_bevel"}
 # Rows where a higher value is the better one (for "runs B better / worse").
 HIGHER_IS_BETTER = {"sj_p1", "crease_cov", "crease_cov_theta", "marked_cov"}
 

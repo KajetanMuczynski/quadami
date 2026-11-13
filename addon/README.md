@@ -53,6 +53,15 @@ This file is for building and packaging. **Using** the add-on: [docs/USER-GUIDE.
   still there after saving the file. A failed or cancelled run shows its
   status and message instead; the worker's last output lines go to Blender's
   console.
+- **Preview Density** (`density.py`) runs the worker with `--plan-only` (the
+  run up to its continuous cover solve, about half a run) and draws the
+  planned quad size over the active mesh (a `gpu` draw handler; no data is
+  written to the mesh). The plan, the mesh arrays and one GPU batch stay in
+  memory; **Change** (±20 %, it sets Target Quads) and Target Quads only
+  change a shader uniform. The preview is dropped when the object's geometry
+  changes or a file loads, and hidden with "preview again" when a planning
+  setting changes or Target Quads leaves ±20 % of the plan
+  (docs/PREVIEW.md §4.5).
 - **Copy Report** (in the result box) puts one text block for a bug report on
   the clipboard (`report.copy_text`): build ids, Blender, system, the run's
   settings (the core's `parameters` plus the panel-only ones the add-on stores
@@ -222,16 +231,24 @@ reports `cancelled`), kill after the grace time, a rejected input and a
 worker that crashes without a report.
 
 Inside Blender, headless (`blender_smoke.py`): reads a sphere through the
-add-on, runs the worker and builds the result object, then checks counts and
-transform. Background mode has no window, so the modal operator, the panel,
-Esc and the progress display can only be checked by hand in the UI.
+add-on, runs the worker and builds the result object, then checks counts,
+quads within 0.6-1.5x of Target Quads, transform and the Copy Report text
+(build line against `SOURCE_COMMIT` when set, the Folded faces row).
+
+In Blender's window (`blender_operator.py`, installed zip, Xvfb on CI): presses
+Remesh on a sphere and on a thin torus, Remesh again on a result, Copy Report
+(read back from the clipboard) and Cancel, and checks each run the same way.
+Not covered by either: how the panel looks (`blender_panel_shot.py` takes
+screenshots for a person to look at), Esc from the keyboard, undo, and
+anything on Windows or macOS beyond `blender_smoke.py`; those stay manual.
 
 CI (the `addon` jobs of `.github/workflows/ci.yml`) runs all of it on Ubuntu 24.04 (Blender
 4.2 LTS, the oldest supported), Windows (MSVC, Blender 5.2) and macOS on Apple
 silicon (Blender 5.2): CMake build,
 DLL check (Windows), CLI argument checks, the worker tests, packaging,
 `blender --command extension validate` and `install-file` on the zip, then
-`blender_smoke.py --installed`.
+`blender_smoke.py --installed`. Linux also installs the zip into the current
+LTS (4.5) and runs `blender_smoke.py --installed` and `blender_operator.py` there.
 
 ## Status (2026-10-22)
 

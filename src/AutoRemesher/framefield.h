@@ -37,9 +37,12 @@ class FrameField {
 public:
     // Faces on a boundary or a `sharpEdges` edge are locked to that edge.
     // When `diagnostics` is given, appends a "frame_field" record to it.
+    // `tipVertices` are conical tips (TODO 2.23): the field is not guided by
+    // curvature near them.
     static bool create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdges,
         std::vector<Vector3>* field,
-        std::vector<DiagnosticRecord>* diagnostics = nullptr);
+        std::vector<DiagnosticRecord>* diagnostics = nullptr,
+        const std::vector<size_t>* tipVertices = nullptr);
 
     // The angle a cross field asks the map to have around an interior
     // vertex, in quarter turns: 4 at a regular vertex, 3 at a valence-3

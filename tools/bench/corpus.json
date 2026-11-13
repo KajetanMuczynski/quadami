@@ -12,7 +12,8 @@
   "primitives": {"targets": [1000, 5000], "resolutions": ["quality"]},
   "external_thin": {"targets": [], "resolutions": ["quality"]},
   "usage": {"targets": [1000, 5000], "resolutions": ["quality"]},
-  "marked": {"targets": [1000, 5000], "resolutions": ["quality"]}
+  "marked": {"targets": [1000, 5000], "resolutions": ["quality"]},
+  "guides": {"targets": [1000, 3000], "resolutions": ["quality"]}
  },
  "meshes": [
   {"id": "spot", "file": "downloads/spot.obj", "category": "organic, clean, genus 0"},
@@ -160,6 +161,11 @@
   {"id": "marked_cube_diagonal", "file": "marked/marked_cube_diagonal.obj", "category": "Blender cube bisected by the plane x + y + z = 0, the hexagon marked Sharp, its edges not", "set": "marked"},
   {"id": "marked_cube_bevel", "file": "marked/marked_cube_bevel.obj", "category": "Blender cube + Bevel (1 segment), all 45 deg edges marked Sharp", "set": "marked"},
   {"id": "marked_cube_hole", "file": "marked/marked_cube_hole.obj", "category": "Blender cube minus a cylinder (Boolean), edges of 30 deg and more marked Sharp", "set": "marked"},
-  {"id": "marked_suzanne", "file": "marked/marked_suzanne.obj", "category": "Suzanne, edges of 30 deg and more marked Sharp (553 short lines that meet)", "set": "marked"}
+  {"id": "marked_suzanne", "file": "marked/marked_suzanne.obj", "category": "Suzanne, edges of 30 deg and more marked Sharp (553 short lines that meet)", "set": "marked"},
+  {"id": "guides_uvsphere_tilted", "file": "guides/guides_uvsphere_tilted.obj", "category": "UV sphere 64x32, a guide loop tilted 30 deg across its rings (edge path, zigzags)", "set": "guides"},
+  {"id": "guides_icosphere_ring", "file": "guides/guides_icosphere_ring.obj", "category": "icosphere, 4 subdivisions, a guide loop off the centre", "set": "guides"},
+  {"id": "guides_torus_tube", "file": "guides/guides_torus_tube.obj", "category": "torus 96x48, a tilted guide loop around the tube between grid lines", "set": "guides"},
+  {"id": "guides_capsule_rings", "file": "guides/guides_capsule_rings.obj", "category": "capsule, two tilted guide loops on the body", "set": "guides"},
+  {"id": "guides_blob_eye", "file": "guides/guides_blob_eye.obj", "category": "bumpy icosphere (20k triangles), a small guide loop around a bump and a large one", "set": "guides"}
  ]
 }

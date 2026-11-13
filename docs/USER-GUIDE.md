@@ -57,7 +57,7 @@ under **Assets**, click the zip for your system. No GitHub account is needed.
 | System | Zip on the Releases page | Tested on a real computer? |
 |---|---|---|
 | **Linux** (64-bit Intel/AMD, any distribution with glibc 2.28 or newer: Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL 8+) | `quadami-<version>-linux-x64.zip`. Blender from blender.org or the snap (`/snap/bin/blender`). Or build it yourself ([addon/BEGINNERS.md](../addon/BEGINNERS.md)). | Yes (Ubuntu, Blender 4.5 snap) |
-| **Windows** 10 or 11 (64-bit) | `quadami-<version>-windows-x64.zip` (the program is not signed) | 0.1.0 on one Windows 10 desktop; 0.2.0 only in CI (Blender 5.2, no window) |
+| **Windows** 10 or 11 (64-bit) | `quadami-<version>-windows-x64.zip` (the program is not signed) | 0.1.0 on one Windows 10 desktop; 0.2.x only in CI (Blender 5.2, no window) |
 | **macOS**, Apple silicon (M1 or newer), macOS 11.2 or newer: **experimental, untested** | `quadami-<version>-macos-arm64.zip` (not notarized, so macOS may block it) | No, only in CI |
 | macOS on Intel, Linux on ARM, Windows on ARM | Not built. Intel Macs: build it yourself ([BUILDING.md](BUILDING.md)). | No |
 
@@ -124,7 +124,7 @@ above. Results you already made stay in your files; they are ordinary mesh objec
 
 - **Windows:** [windows-test/quadami-update.ps1](windows-test/quadami-update.ps1), described in the
   [Windows test sheet](windows-test/README.md) §4. Quit Blender, then in PowerShell:
-  `powershell -ExecutionPolicy Bypass -File .\quadami-update.ps1 .\quadami-0.2.0-windows-x64.zip "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"`.
+  `powershell -ExecutionPolicy Bypass -File .\quadami-update.ps1 .\quadami-0.2.1-windows-x64.zip "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"`.
   It only lists what it would do; add `-Apply` to do it. Tried only against a stand-in Blender, not
   on real Windows.
 - **Linux:** `quadami-update.sh`, the same for Linux, comes with the maintainer's test builds (it is not
@@ -144,7 +144,7 @@ Please report what happened either way.
 
 ### Which version do I have? (the build line)
 
-Blender's extension list shows the release version (such as 0.2.0) for every build, so it cannot tell builds apart. Use the
+Blender's extension list shows the release version (such as 0.2.1) for every build, so it cannot tell builds apart. Use the
 **build line** instead: a small grey line at the very bottom of the Quadami panel (and in the add-on's
 preferences), for example `Add-on build 4e9cdc7 2026-10-21`. The first part is the code version (a
 commit), the second its date. Copy that line into every bug report.
@@ -175,7 +175,9 @@ check)*. Target Quads 2000 is a good first try on it.
    vertical tabs; click **Quadami** (scroll the tabs if there are many).
 4. Set **Target Quads** (start with 5000, see [§4](#4-the-settings)), click **Remesh**.
 5. The bottom status bar shows `Quadami: 42% <step> (Esc to cancel)`. Blender stays usable meanwhile.
-   **Esc** or the panel's **Cancel** stops it; nothing is added then.
+   **Esc** or the panel's **Cancel** stops it; nothing is added then. There is no time limit: after
+   30 seconds the panel shows how long the run has taken, and the run goes on until it finishes or you
+   stop it.
 6. When done, a new object **<name>_remesh** appears and is selected, and your original is **hidden, not
    deleted**, in the viewport and in renders (Outliner, top right: click its closed eye icon to show it
    again; to render it again, also click its camera icon, which the Outliner's **Filter** menu can show).
@@ -235,6 +237,57 @@ defaults and change one thing at a time.
 Settings other than these defaults work, but the project's quality targets are checked at the defaults,
 so expect a bit more variation.
 
+### Guides: edge loops where you want them
+
+A guide is a line you draw on the model; the quads keep a row of edges along it. Drawn as a closed loop (around a
+limb, an eye, a belt), it is meant to come out as an edge loop that Alt+click selects whole, instead of a loop that
+spirals over the model.
+
+1. Select the model and stay in **Object Mode** (Tab toggles; Draw Guide does not work in Sculpt or Edit Mode).
+2. In the Quadami panel, under **Guides**, click **Draw Guide**.
+3. Click points on the surface, or hold the left mouse button and drag. The points are joined along the model's
+   own edges (blue line). Middle mouse, the scroll wheel, Alt + left drag and the navigation circles at the top right
+   still turn and zoom the view.
+4. Click the first point again to close the loop (orange line). Enter keeps an open line instead, Backspace takes back
+   the last point, Esc or right click cancels.
+5. Click **Remesh**. The guides are always used, whatever Follow Marks says; the result says how many guide edges were
+   followed.
+
+The guides stay on the model in the .blend file, so you can remesh again with other settings. The eye icon next to
+**Guides** shows or hides them; the **X** next to Draw Guide removes them all. In Edit Mode, **Mark Guide** and
+**Clear Guide** turn the selected edges into a guide or take them out of one (Select > Select Shortest Path helps there).
+
+Known limits (0.3 preview):
+
+- A loop closes only when no pole (a vertex with 3 or 5 edges) lands on it. On the test meshes about two in five
+  guide loops come out fully closed; on a real head sculpt none did yet: the loops follow most of each guide but
+  are broken by 1 to 6 poles. The work continues.
+- Draw guides on the model you remesh, not through modifiers that change its edges (the add-on warns and leaves the
+  guides out then; apply the modifiers first). Subdivision Surface and Mirror pass the guides on (checked in Blender 5.2).
+- On a low-poly model the guide follows the model's own edges, so it zigzags where they don't run along it; the
+  remesher straightens it, but on coarse models a zigzag larger than a quad stays. Draw more points there.
+- If following the guides would fold the quads of a part, that part is remeshed without them and a warning says so.
+
+### Density Preview: pick Target Quads before you remesh
+
+**Preview Density** (in a box under the main settings) shows how big the quads will be, painted on your
+model, without remeshing. It plans the run once (a progress bar; Esc cancels), which takes about half as
+long as a Remesh at the same Target Quads. Then:
+
+- Orange parts get smaller quads, blue parts larger ones; the panel says about how many quads are planned
+  and the quad edge length in scene units. **Checker** draws squares about one quad across, so you can see
+  whether a detail (an ear, a finger, a ridge) gets one quad or several.
+- Drag **Change** (±20 %) or type a new Target Quads within that range: the colours and squares follow
+  at once, nothing is recomputed. Change sets Target Quads, so Remesh then uses the count you settled on.
+- It is a plan, not the result, but a close one: a region's quads usually come out within about 5 % of
+  the shown size, about as close as two Remesh runs of the same model are to each other. Small flat parts
+  (leaves, flower cards) and flat CAD faces can be 10-30 % off, and at low Target Quads two runs of a
+  sculpt can differ by about 10 % anyway. On a low-poly model (a box, a cylinder, a cone) each big face shows
+  about its average size: the result's quads still get smaller toward its corners and rims, by up to about
+  1.4×. It shows size only, never edge loops or poles.
+- Editing the mesh removes the preview. Changing another setting, or Target Quads more than 20 % away from
+  the planned count, asks you to preview again. Click the button again to hide it.
+
 ---
 
 ## 5. Reading the result
@@ -253,9 +306,9 @@ another result object shows that object's own report.
 | **Non-manifold vertices** | Points where surfaces only touch. | 0. |
 | **Winding flips** | Neighbouring faces facing opposite ways. | 0. |
 | **Folded faces** | Faces bent over or twisted ([§1](#1-words-used-here)); `N (T twisted)` says how many of the N are twisted quads. | 0. Up to about 2 per 1,000 quads is a known weakness, mostly where several poles sit close together; Adaptivity 0 gives fewer. |
-| **Input cleanup** | Only shown when the remesher fixed your *input* before starting: open seams welded (pieces that only touched, as after an import without merging or an Edge Split modifier), duplicate faces removed, pinched points (two parts of the surface sharing one vertex) split, paper-thin sliver pieces with no area left out, tiny broken triangles removed, triangles turned to face the same way as their neighbours. Your object itself is never changed. | Information, not a problem. |
+| **Input cleanup** | Only shown when the remesher fixed your *input* before starting: open seams welded (pieces that only touched, as after an import without merging or an Edge Split modifier), duplicate faces and faces that use one vertex twice removed, pinched points (two parts of the surface sharing one vertex) split, paper-thin sliver pieces with no area left out, tiny broken triangles removed, triangles turned to face the same way as their neighbours. Your object itself is never changed. | Information, not a problem. |
 | **Empty islands** | `E of N`: separate pieces of your model that got no quads at all. | 0 of N. |
-| **Missing parts** | How far the farthest point of your model is from the result, counted in quad widths (the planned quad size). Red above 3: a part such as a vine, a limb or a spike did not come out; the warning under the rows says why ([§6](#6-warnings-and-what-to-do)). | none. |
+| **Missing parts** | How far the farthest point of your model is from the result, counted in quad widths (the planned quad size). Red above 3: a part such as a vine, a limb or a spike did not come out; the warning under the rows says why ([§6](#6-warnings-and-what-to-do)). When a tenth or more of the surface is more than one quad width from the result, the row starts with that share ("38 % of the surface, up to 4 quad widths") and is red. | none. |
 | **Time** | Seconds the remesher ran. | — |
 
 To find defects on the result: select it, **Tab** into Edit Mode, press **1** (vertex select) or **3**
@@ -277,21 +330,25 @@ Warnings appear under the rows, with a red icon when they are a problem.
 | Dialog **"Remesh to 200,000+ quads?"** with a memory estimate | The **Target Quads guard**: a big target can use all your memory (about 2 GB per 100,000 quads) and take long. Often a typo (an extra zero). | Press Cancel unless you meant it and have the memory. |
 | **"Output has N holes where the input was closed (E open edges)"**, plus a hint, and a red **Holes** row | The remesh tore the surface open. On sculpts this happens almost only at folded input ([§7](#7-sculpts-what-works-and-what-struggles)). | Try another Target Quads (a few hundred up or down often closes it). Find the holes with the hint (Non Manifold). If they sit at swirls or pinched creases, smooth those in Sculpt Mode and run again. |
 | **"Output has N handles fewer than the input …"**, red **Handles** row | Tunnels or loops only a few quads wide closed up (a ring's hole, a strap's eyelet, a tiny gap in hair). | Raise Target Quads; each step up keeps more of them, but tunnels much narrower than a quad close at any count you would use. If the tunnel should not be there, ignore it. |
+| **"N parts have more holes and handles than their share of Target Quads can hold (chain mail, strung beads): remeshed as a closed shell over them. …"** | Parts with many tiny holes or loops (chain mail, beads on a string, feathers of crossing strands) were asked for fewer quads than their holes need: at least three quads per hole or handle. Quads cannot follow them, and in earlier versions such parts came out as long spikes or almost empty. Now each such part is remeshed as a closed shell a quarter of a quad outside it, which fills the small holes; a flat one-sided part becomes a thin slab. The **Handles** and **Holes** rows can show what was closed. | Fine for a distant or small part. To keep the holes, raise Target Quads until the part gets about three quads per hole (chain mail with a thousand rings needs thousands of quads on its own), or remesh that part separately at its own count. |
 | **"Output has N handles more than the input …"**, red **Handles** row | Two surfaces were joined across a thin gap. Rare; seen only on badly folded or very noisy input. | Try another Target Quads, or smooth the folded spot and run again. |
 | **"Folded input: N faces in K spots. …"** and a **Repair Folds and Re-run** button | Your model's surface is folded over itself in K places, on sculpts usually left by a brush. The quads there may come out messy or with holes. | Press **Repair Folds and Re-run** ([§8](#8-folded-input-and-repair-folds)). |
 | **"N folded faces in K spots could not be repaired safely and were left as they were"** | After a repair: these spots were too steep, too thin or too tangled to fix without changing your shape. | Smooth those spots in Sculpt Mode and run again ([§7](#7-sculpts-what-works-and-what-struggles)). |
 | Red **Non-manifold vertices** or **edges** | Points or edges that are not a clean surface. | Same as holes: another Target Quads, or clean the input at that spot. Report it with the build line if it stays. |
 | **"N of M islands produced no faces"**, red **Empty islands** | A small separate piece (an eyeball, a tiny flower) got nothing. | Raise Target Quads, or remesh that piece on its own: Edit Mode, select it, **P > Selection** to make it its own object *(from memory, check)*, and remesh both. |
+| **"About N % of the input surface is missing from the result (farther than one quad width from it). Check the result before using it."**, red **Missing parts** | A large part of the model did not come out: the result covers only part of it, or collapsed into a much smaller shape. Seen on plates with many small holes, where the hole rims are sharp edges and the holes are only a few quads around. The other warnings say what was lost. | Do not use the result as it is. On a holed plate, raise **Sharp Edge** above 90° (for example 135°) so the hole rims are not treated as sharp, and give it 20 to 40 quads per hole or more: on test plates with 1 to 64 holes that kept the plate and its holes (at most 2 % missing), while with sharp rims part of the plate went missing even at 80 quads per hole. Fill holes you do not need. |
 | **"Parts thinner than one quad are missing (up to N quad widths away). At T target quads there is no room for them: a limit of Target Quads, not a remeshing error. …"**, red **Missing parts** | A part thinner than one quad (a vine, a strap, a finger, a spike) was smoothed away or cut off: the quads are too big to follow it. That is what you asked for with Target Quads, not a bug. The model is still one piece where it was, so no other row shows it. | Raise Target Quads. On 10 test models, 1.5 to 8 times as many brought back the parts lost first on 7 of them and most of them on 2 more; on a flight helmet it depended on tiny changes to the input (2 of 6 tries). Each raise also makes the quads smaller, so finer parts (thinner straps, bristles) can now count as missing and the warning stays: check whether the parts you care about are back. Parts that must survive at a low count need thickening: Edit Mode, select the part, **Alt+S** (Shrink/Fatten) and move the mouse outwards. |
 | **"… N separate pieces came out with no quads at all. Raising Target Quads brought some or all such pieces back …"**, red **Missing parts** | Separate pieces of your model got nothing: specks of a few triangles, or thin wire pieces. | Raise Target Quads: at 8 times as many, all lost pieces of an iron gate came back and half of a mosquito's, while smaller ones went missing instead. Delete specks you do not need; thicken pieces you want to keep. |
 | **"Parts along open edges of single-sided surfaces (leaves, petals, cloth) are missing. …"**, red **Missing parts** | The border of a surface with only one side moved or was cut off. | Raise Target Quads: on a vase of flowers, twice as many brought back 9 in 10 of the missing petal rims; the rest stayed missing at 8 times. Or give the surface some thickness (a **Solidify** modifier, wrench tab > **Add Modifier > Generate > Solidify** *(from memory, check)*) and remesh again, or keep the original border. |
 | **"Parts that are not thinner than a quad are missing … so Target Quads may not be the cause. …"**, red **Missing parts** | A part went missing that the remesher cannot explain by its size. | Try a higher Target Quads once. If the part is still missing, report it with the build line and the model if you can share it. |
+| **"Try N Target Quads (1.5 times). …"** with **Set N** and an **X** button, under a missing-parts warning | The parts this run lost are thin parts, separate pieces or open edges, which more quads can bring back. No count can be worked out in advance (a higher count can even lose parts again), so the hint offers the next step: 1.5 times this run's count, then 1.33 times each further run, up to 8 times. | Press **Set N**, then **Remesh**. After that run the hint says how many of the points missing at the first count are back, measured at the first run's quad size, so finer parts the smaller quads now count as missing do not hide that your parts came back. Press **Set** again for the next step, or the **X** (Keep These Quads) to hide the hint for this object until its mesh or a setting changes. "Back" means within three quad widths of the first run: look at the parts yourself, and check for new folds (the hint says when there are more). The steps are counted per object and per setting: changing Adaptivity, Sharp Edge, Follow Marks, the mesh or Repair Folds starts over. |
 | **"P % of the surface (S spots) is thinner than one quad at T target quads, a limit of Target Quads rather than a remeshing error: expect folds or lost parts there. At least N target quads (an estimate) would fit a quad across about half of it, but each raise also reveals thinner parts, so it can take several raises; thickening those parts also works"** | Parts of your model are thinner than one quad is wide (leaves, vines, a blade edge). A risk, not a defect: most runs it fires on have folds or lost parts there, but some come out clean. N is a first step, not the count that clears the warning: a higher count measures the parts more finely and finds thinner ones (on a vine-covered test sword the estimate was 1.6 to 2.1 times the count asked for at every count from 3,000 to 75,000). When no count fits, it says to thicken those parts. | Raise Target Quads to about N: the thin share shrinks (on that sword from 19 % at 3,000 to 3 % at 35,000), but it can take several raises, each costing more quads. Or thicken the part: Edit Mode, select it, **Alt+S** (Shrink/Fatten) and move the mouse outwards. |
 | **"K islands came out with far fewer quads than planned (smallest: F of P)"** | A separate piece came out as a lump of a few quads instead of its shape, usually because it is thin or small for the target. | Raise Target Quads, or remesh that piece on its own (as for empty islands). |
 | **"Followed N marked edges (Follow Marks). If you don't want quads along them, untick Follow Marks and remesh again."** | Information: the quads keep rows of edges along N edges you marked ([§4](#4-the-settings), Follow Marks). | Nothing, unless you did not mean those marks: untick the mark under **Follow Marks** and remesh. |
-| **"Follow Marks left out Sharp: more than half of the edges carry it, as after an FBX or OBJ import, …"** | On a mesh with over 1,000 edges, that mark is on more than half of them, which looks like an import's marks rather than edges you chose. The remesh ran as if the mark were unticked. | Clear the imported marks (Edit Mode, **A**, **Ctrl+E > Clear Sharp** *(from memory, check)*), mark only the edges to keep, and remesh. |
+| **"Follow Marks left out Sharp: more than half of the edges carry it, as after an FBX or OBJ import, …"** | On a mesh with over 1,000 edges, that mark is on more than half of them, which looks like an import's marks rather than edges you chose. The remesh ran as if the mark were unticked. | Nothing, if you don't need marks: the remesh ran fine without them. To follow edges you choose: show the original (eye icon in the Outliner) and click it, press **Tab** (Edit Mode), **A** (select all), then **Edge > Clear Sharp** in the header; select the edges to keep, **Edge > Mark Sharp**, **Tab**, and remesh. Clearing Sharp can change how the original is shaded. The panel shows these steps too. |
 | **"Marked edges were not used on N parts: they are too dense for the quad count …"** | The marks on those parts are longer than a quarter of their planned quad edges, so the quads cannot follow them all. | Raise Target Quads, or mark fewer edges. |
 | **"Marked edges were not followed on N parts: following them folded the quads there …"** | Those parts were remeshed again without their marks, because the marked run folded (marks that cross other creases at a sharp angle, or each other in many short lines). That part takes about twice as long. | Mark fewer or longer lines there, or untick Follow Marks. |
+| **"Sharp edges were not kept on N parts: keeping them changed the part's shape …"** | Those parts were remeshed again without their sharp edges (the **Sharp Edge** setting), because the run that kept them closed a hole or collapsed the part. The part keeps its shape and holes, but its creases come out rounded, and it takes about twice as long. | Raise Target Quads: creases on parts with few quads are what fails. |
 | **"N marked edges are not an edge of the mesh and were ignored"** | Marked edges with no length or not on the surface (rare; zero-length edges after a merge). | Nothing; **M > By Distance** in Edit Mode clears zero-length edges. |
 | **"Could not copy data from the original: …"** | Copying materials, groups, marks or UVs failed; the result itself is fine. | Report it with the message. Untick the options under **Keep from Original** to remesh without copying. |
 | **"… is scaled unevenly (N : 1), so the quads come out stretched …"** | The object (or its parent) is scaled differently along its axes, and the quads stretch the same way. | Select the original, **Ctrl+A > Scale**, and remesh again ([§3](#3-your-first-remesh)). |
@@ -329,11 +386,11 @@ From the project's measurements on real sculpts and on synthetic brush tests (Oc
 | **Pleats from the Twist/Rotate brush**, creases pinched past themselves | The original surface is folded there. On our two test sculpts, about three quarters of the remaining defects sit within two quads of such spots; most of the rest are on thin parts. | In Sculpt Mode, smooth the spot (**Smooth** brush, or hold **Shift** while sculpting *(from memory, check)*) or voxel-remesh the sculpt (**Remesh** in the Sculpt Mode header, or **Ctrl+R** *(from memory, check)*) and remesh again. Or press **Repair Folds and Re-run** after the remesh ([§8](#8-folded-input-and-repair-folds)). |
 | **Holes in a closed sculpt** at higher counts | On the head test sculpt, before libQEx became the extractor, holes appeared from 6,000 quads up in most runs, all at the pleats above. | As above; and the **Holes** row now shows them. |
 | **Crevices narrower than a quad** (deep pinched grooves, eyelid lines) | Folded quads in the groove; at high counts sometimes an extra tunnel across the groove. | More quads, or soften the groove. |
-| **Sharp tips and spikes** | A cone-like tip is cut off about one quad deep, often with a ring of small, crowded quads around it (Blender's default cone at every count tested). A needle spike gets a non-quad or a crowded pole. | More quads make the cut smaller, since it is about one quad. |
+| **Sharp tips and spikes** | A cone tip keeps its point (Blender's default cone, and cones up to about 2.5 times as tall as their base radius). A sharper spike, or a small spike on a noisy or sculpted surface, is cut off about one quad deep or gets a non-quad or a crowded pole. | More quads make the cut smaller, since it is about one quad. |
 | **Hard edges** (box, cylinder or cone rims) | Slightly rounded. On Blender's cube an edge loop follows about 90 % of the edges at 5,000 quads (about 70 % at 1,000), on the cylinder about 80 % of the rims (about 75 % at 1,000); a cone's base rim is mostly rounded off. Rows of thin quads often line the edge. | Mark the edges Sharp (**Follow Marks** > Sharp is on by default): at 5,000 quads an edge loop then follows 90–99 % of a cube's or cylinder's edges and about 75 % of a cone's base rim (at 1,000 quads the cone's rim still almost none). Without marks, more quads make the rounding smaller. Edges sharper than Sharp Edge (90° by default, exactly 90° included) are kept as creases; lowering it keeps blunter edges too, but on detailed parts it makes more triangles and can change holes or handles, so check the **Holes** and **Handles** rows. |
 | **Small tunnels** (a gap thinner than about 3 quads, e.g. between an arm and the body) | It may close. | Raise Target Quads until the tunnel is several quads wide. |
 | **Very low-poly input** (big flat facets) | The result follows the facets. An icosphere also gets extra poles inside its facets, with or without Subdivision Surface (a UV sphere comes out clean from about 3,000 quads). | Add Subdivision Surface first. Smooth Normal only on rounded shapes: on a box (Blender's default cube) any value above about 55° (on a cylinder, above 45°) tears the result open, with holes, extra handles and hundreds of folded quads, and the run takes about 20 times as long. |
-| **Very many tiny thin pieces** (a wrought-iron gate, wire ornaments) | The run can take many minutes: on an iron-gate test model at 3,300 and 4,000 quads, some runs had not finished after 15 minutes. | Press **Esc** to cancel (Blender stays usable). Merging or deleting the smallest pieces may help (not measured). |
+| **Very many tiny thin pieces** (a wrought-iron gate, wire ornaments, lace) | Some pieces may come out with no quads (red **Missing parts**). Before 0.2.1 such models could run for many minutes or run out of memory; since 0.2.1 a piece that would need far more quads than its share is left out instead, and our iron-gate test model finishes in 9-20 seconds at 3,300 and 4,000 quads (12 of 12 runs). | Raise Target Quads for the lost pieces, or delete the smallest ones. If a run still takes long, press **Esc** to cancel (Blender stays usable). |
 | **A surface pushed through itself** | May fold there. Not measured yet. | Fix in Sculpt Mode. |
 | **Very tiny or huge models** | Measured from 0.0001 to 10,000 times the default size, and up to 1,000,000 units from the origin: it works throughout, with the same quad count from 0.001 times up. | Nothing to do. |
 | **Text or a curve converted to mesh** (Object > Convert > Mesh) | Blender leaves the letters' front, back and sides as separate pieces that only touch. The remesher welds them itself (the **Input cleanup** row), so the letters come out closed; thin strokes then lose area at low counts (about 9–19 % of the text at 1,000 quads on our test, and the thin-part warning fires). | More quads for thin strokes (§6, thin parts). |
@@ -395,6 +452,7 @@ What it does and does not do:
 | **Too few or too many quads** | Within 60–150 % of the target is normal. Thin parts and many small pieces push it around. Adjust Target Quads. |
 | **Folded faces / non-quads in one area** | Look at the input there ([§7](#7-sculpts-what-works-and-what-struggles)): a pleat, a thin part, a narrow groove. Try ±10 % Target Quads; small changes in the count move defects around. |
 | **It takes very long or the computer slows down** | Press Esc. Lower Target Quads or use Fast. Memory is about 2 GB per 100,000 quads. |
+| **Red "No progress for N min in …" under the progress bar** | The remesher has not moved on for far longer than any step took in our tests at that Target Quads: 5 minutes up to about 150,000 quads, 19 minutes at 400,000, longer above. It may be stuck in one step, or only very slow. Nothing is stopped for you. | Press **Cancel** (or Esc) and lower Target Quads. If you wait, it can still finish. If it happens at a normal count, report it with the step name and the build line. |
 | **Blender closed or froze** | The remesher runs as a separate program and cannot crash Blender by itself; report it. |
 
 **Reporting a problem.** Use the [bug report form](https://github.com/KajetanMuczynski/quadami/issues/new?template=bug-report.yml) on GitHub (you need a free

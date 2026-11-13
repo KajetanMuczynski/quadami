@@ -89,6 +89,12 @@ public:
         m_sharpEdgeDegrees = degrees;
     }
 
+    // Positions of conical tips the triangle mesh kept (TODO 2.23).
+    void setConicalTips(const std::vector<Vector3>* conicalTips)
+    {
+        m_conicalTips = conicalTips;
+    }
+
     // The sharp edges of the triangles given (the input's, carried through
     // the remesh): the field locks to them, the singularity simplifier
     // keeps cones from crossing them and the cover puts isolines on them.
@@ -120,6 +126,21 @@ public:
 
     bool parameterize();
 
+    // Makes parameterize() a plan: it stops after the continuous cover solve,
+    // before the rounding, and fills faceEdges with the quad edge the cover
+    // gives each triangle (QuadParameterizer::parameterize).
+    void setPlanFaceEdges(std::vector<double>* faceEdges)
+    {
+        m_planFaceEdges = faceEdges;
+    }
+
+    // The quad edge length the cover asks of each triangle, in input units:
+    // scaling times the base edge times the scaling field (with anisotropy
+    // the geometric mean of the two directions).  The same sizing as
+    // parameterize() uses, without the field and the cover: what a plan
+    // falls back on when the cover solve fails.
+    std::vector<double> plannedFaceEdgeLengths() const;
+
     // Records of the field, simplification and cover solves of the last
     // parameterize(), also after a failure.  Their island is left unset.
     std::vector<DiagnosticRecord> takeDiagnostics()
@@ -139,14 +160,22 @@ private:
     double m_targetQuadCount = 0.0;
     double m_adaptivity = 0.5;
     double m_sharpEdgeDegrees = 90.0;
+    const std::vector<Vector3>* m_conicalTips = nullptr;
     const FeatureEdgeSet* m_featureEdges = nullptr;
     double m_anisotropy = 1.0;
+    std::vector<double>* m_planFaceEdges = nullptr;
     double m_maxAspectRatio = 2.3;
     bool m_singularitySimplification = true;
     size_t m_maximumSingularityPairDistance = 6;
     ProgressHandler m_progressHandler;
     std::vector<DiagnosticRecord> m_diagnostics;
 
+    // Face areas, vertex normals and the scaling field of the triangles.
+    std::vector<double> computeSizing(std::vector<double>* faceAreas,
+        std::vector<Vector3>* vertexNormals) const;
+    // Where the face scaling is 1: the island's share of the requested quads
+    // spread over its area, or `fallback` without a target.
+    double baseEdgeLength(const std::vector<double>& faceAreas, double fallback) const;
     std::vector<double> computeFaceScalingField(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles,
         const std::vector<double>& faceAreas,

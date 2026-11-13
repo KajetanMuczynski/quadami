@@ -17,7 +17,7 @@
  *  SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-// Seam welding and duplicate-triangle removal (TODO 2.7,
+// Seam welding, repeated-corner and duplicate-triangle removal (TODO 2.7,
 // research/input-sanitizer-2026-10-26.md).  A clean mesh must stay as it is,
 // an unwelded one must come back whole, and nothing may become non-manifold.
 
@@ -184,6 +184,66 @@ int main()
         mesh.triangles = { { 0, 1, 2 }, { 4, 3, 5 } };
         const auto stats = AutoRemesher::weldSeams(mesh.vertices, mesh.triangles, tolerance);
         check(0 == stats.weldedEdges, "edge shorter than ten gaps: unchanged");
+    }
+    {
+        Mesh mesh = grid(2);
+        const auto clean = mesh.triangles;
+        check(0 == AutoRemesher::removeRepeatedCornerTriangles(mesh.triangles) && clean == mesh.triangles,
+            "clean grid: no repeated-corner triangle");
+        mesh.triangles.insert(mesh.triangles.begin() + 2, { 0, 0, 1 });
+        mesh.triangles.push_back({ 4, 5, 4 });
+        mesh.triangles.push_back({ 7, 3, 3 });
+        check(3 == AutoRemesher::removeRepeatedCornerTriangles(mesh.triangles) && clean == mesh.triangles,
+            "repeated-corner triangles removed, the rest in order");
+    }
+    {
+        // Through remesh(): a closed UV sphere plus three triangles that use a
+        // vertex twice ("f 1 1 2" in an OBJ).  Before the cleanup, one reached
+        // OpenMesh's add_face() in the QEx extraction and corrupted the heap
+        // ("free(): invalid size") at 1,000 and 3,000 quads.
+        const size_t nu = 30, nv = 20;
+        AutoRemesher::RemeshRequest request;
+        const auto push = [&](double x, double y, double z) {
+            request.positions.insert(request.positions.end(), { x, y, z });
+        };
+        const double pi = std::acos(-1.0);
+        push(0.0, 0.0, 1.0);
+        for (size_t j = 1; j < nv; ++j) {
+            const double t = pi * (double)j / (double)nv;
+            for (size_t i = 0; i < nu; ++i) {
+                const double p = 2.0 * pi * (double)i / (double)nu;
+                push(std::sin(t) * std::cos(p), std::sin(t) * std::sin(p), std::cos(t));
+            }
+        }
+        push(0.0, 0.0, -1.0);
+        const auto at = [&](size_t j, size_t i) { return (uint32_t)(1 + (j - 1) * nu + i % nu); };
+        const uint32_t south = (uint32_t)(1 + (nv - 1) * nu);
+        for (size_t i = 0; i < nu; ++i)
+            request.triangles.insert(request.triangles.end(), { 0, at(1, i), at(1, i + 1) });
+        for (size_t j = 1; j + 1 < nv; ++j) {
+            for (size_t i = 0; i < nu; ++i) {
+                const uint32_t a = at(j, i), b = at(j + 1, i), c = at(j + 1, i + 1), d = at(j, i + 1);
+                request.triangles.insert(request.triangles.end(), { a, b, c, a, c, d });
+            }
+        }
+        for (size_t i = 0; i < nu; ++i)
+            request.triangles.insert(request.triangles.end(), { south, at(nv - 1, i + 1), at(nv - 1, i) });
+        request.triangles.insert(request.triangles.end(), { 0, 0, 1, 4, 5, 4, 6, 8, 6 });
+        for (const size_t target : { 1000, 3000 }) {
+            request.parameters.targetQuadCount = target;
+            const AutoRemesher::RemeshResult result = AutoRemesher::remesh(request);
+            double repeated = -1;
+            for (const auto& item : result.report.diagnostics) {
+                if (item.first == "input_repeated_corner_triangles")
+                    repeated = item.second;
+            }
+            check(AutoRemesher::RemeshStatus::Ok == result.status && 3 == repeated,
+                target == 1000 ? "sphere + repeated-corner faces, 1k: ok, 3 removed"
+                               : "sphere + repeated-corner faces, 3k: ok, 3 removed");
+            check(0 == result.report.boundaryEdgeCount && 0 == result.report.nonManifoldEdgeCount,
+                target == 1000 ? "sphere + repeated-corner faces, 1k: output closed"
+                               : "sphere + repeated-corner faces, 3k: output closed");
+        }
     }
     {
         Mesh mesh = grid(2);

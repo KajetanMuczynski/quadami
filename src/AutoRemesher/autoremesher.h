@@ -131,6 +131,12 @@ public:
     {
         return m_markedEdgesDroppedIslandCount;
     }
+    // Islands remeshed again without their sharp edges: the run with them
+    // changed the island's topology or lost most of its quads.
+    size_t sharpEdgesDroppedIslandCount() const
+    {
+        return m_sharpEdgesDroppedIslandCount;
+    }
     // Islands whose marks were not used: more than a quarter of the planned
     // quad edges would have to lie on them.
     size_t markedEdgesTooDenseIslandCount() const
@@ -204,6 +210,12 @@ public:
     // Islands that went through the pipeline but contributed no faces, either
     // because a stage failed on them or because extraction found nothing.
     // Sliver islands left out before remeshing are not counted.
+    // Islands remeshed on their envelope: more holes and handles than their
+    // quads can hold.
+    size_t envelopedIslandCount() const
+    {
+        return m_envelopedIslandCount;
+    }
     size_t islandsWithoutOutput() const
     {
         return m_islandsWithoutOutput;
@@ -231,6 +243,43 @@ public:
     const std::vector<RemeshedIsland>& remeshedIslands() const
     {
         return m_remeshedIslands;
+    }
+
+    // Stop after the decimation and only plan the run: the quad edge
+    // length each input vertex would get and the quads of each island
+    // (planVertexEdgeLengths() and the like); remesh() then makes no quads.
+    void setPlanOnly(bool planOnly)
+    {
+        m_planOnly = planOnly;
+    }
+
+    // One island of the plan.  Its quads at another target N (same other
+    // settings) are about max(N * areaShare, floorQuads), and its edge
+    // lengths go with the inverse square root of that count.
+    struct PlanIsland {
+        double areaShare = 0.0;
+        double plannedQuads = 0.0;
+        double floorQuads = 0.0;
+        // A sliver: not remeshed, so it gets no quads (see remeshIslands).
+        bool leftOut = false;
+    };
+    static constexpr uint32_t NoPlanIsland = 0xffffffffu;
+
+    // Per vertex given to the constructor: the planned quad edge length at
+    // scaling 1 (0 where there is none), and the island it belongs to
+    // (NoPlanIsland for a vertex no face uses).  A vertex the input cleanup
+    // merged away takes the values of the nearest planned vertex.
+    const std::vector<float>& planVertexEdgeLengths() const
+    {
+        return m_planVertexEdgeLengths;
+    }
+    const std::vector<uint32_t>& planVertexIslands() const
+    {
+        return m_planVertexIslands;
+    }
+    const std::vector<PlanIsland>& planIslands() const
+    {
+        return m_planIslands;
     }
 
     // Input vertices of the sliver islands remeshIslands() left out, so the
@@ -378,6 +427,8 @@ public:
         size_t weldedEdges = 0;
         size_t weldedVertices = 0;
         size_t weldKeptParts = 0;
+        // Triangles of the input that use one vertex twice, removed first.
+        size_t repeatedCornerTriangles = 0;
         // Triangles removed because an earlier one has the same corners.
         size_t duplicateTriangles = 0;
         // Vertices added by splitPinchedVertices(): one per extra fan.
@@ -426,13 +477,16 @@ public:
         size_t decimatedEdges = 0;
         // Edges whose ends both survived decimation but no longer share an edge.
         size_t decimationDropped = 0;
-        // Edges of the remesh that a flip turned into the other diagonal.
-        size_t flipped = 0;
+        // Detected edges left out of the remesher's chains (filterDetectedChains).
+        size_t filtered = 0;
         // Edges of T that still carry an input edge (split halves included),
         // and the edges of T's own set that pass the sharp test on T
         // (reclassifyFeatureEdges).
         size_t carried = 0;
         size_t classified = 0;
+        // Edges of T's set in components shorter than three T edges, left
+        // out of it (dropShortFeatureComponents).
+        size_t tShort = 0;
     };
 
     struct DecimationStats {
@@ -443,6 +497,8 @@ public:
         std::atomic<size_t> islandsConsidered { 0 };
         std::atomic<size_t> trianglesBefore { 0 };
         std::atomic<size_t> trianglesAfter { 0 };
+        // Conical tips the isotropic remesh kept in place (TODO 2.23).
+        std::atomic<size_t> conicalTips { 0 };
     };
 
 private:
@@ -487,6 +543,7 @@ private:
     std::vector<std::pair<size_t, size_t>> m_markedEdges;
     size_t m_ignoredMarkedEdgeCount = 0;
     size_t m_markedEdgesDroppedIslandCount = 0;
+    size_t m_sharpEdgesDroppedIslandCount = 0;
     size_t m_markedEdgesTooDenseIslandCount = 0;
     double m_smoothNormalDegrees = 0.0;
     bool m_useQex = true;
@@ -494,6 +551,10 @@ private:
     bool m_repairInputFolds = false;
     bool m_flattenSpikes = false;
     bool m_tangentialQuadSmoothing = false;
+    bool m_planOnly = false;
+    std::vector<float> m_planVertexEdgeLengths;
+    std::vector<uint32_t> m_planVertexIslands;
+    std::vector<PlanIsland> m_planIslands;
     ModelType m_modelType = ModelType::Organic;
     AutoRemesherProgressHandler m_progressHandler = nullptr;
     void* m_tag = nullptr;
@@ -501,6 +562,7 @@ private:
     bool m_cancelled = false;
     size_t m_islandCount = 0;
     size_t m_islandsWithoutOutput = 0;
+    size_t m_envelopedIslandCount = 0;
 
     bool remeshIslands();
     void throwIfCancelled() const;
@@ -533,7 +595,8 @@ private:
         std::atomic<long long>* adaptiveFieldTimeUs,
         const ProgressHandler* progressHandler,
         std::vector<Vector3>* decimatedVerticesOut,
-        std::vector<std::vector<size_t>>* decimatedTrianglesOut);
+        std::vector<std::vector<size_t>>* decimatedTrianglesOut,
+        std::vector<Vector3>* conicalTipsOut);
     static double calculateMeshArea(const std::vector<Vector3>& vertices,
         const std::vector<std::vector<size_t>>& triangles);
 };

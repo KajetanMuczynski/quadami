@@ -73,7 +73,12 @@ PARAMETER_FLAGS = {
 RUN_FLAGS = {
     "repair_folds": "--fold-repair",
     "flatten_spikes": "--flatten-spikes",
+    "lost_parts_reference": "--lost-parts-reference",
 }
+
+# The interface version that brought --lost-parts-reference; an older
+# configured worker would reject the flag.
+LOST_PARTS_REFERENCE_INTERFACE = (1, 12)
 
 _PROGRESS_LINE = re.compile(r"^(\d+)% done\.(?: (.*))?$")
 
@@ -87,7 +92,7 @@ class Outcome:
     """
 
     def __init__(self, status, message="", report=None, positions=None,
-                 face_sizes=None, face_indices=None, log=""):
+                 face_sizes=None, face_indices=None, log="", plan=None):
         self.status = status
         self.message = message
         self.report = report
@@ -95,10 +100,63 @@ class Outcome:
         self.face_sizes = face_sizes      # uint32 (F,)
         self.face_indices = face_indices  # uint32 (sum of face_sizes,)
         self.log = log                    # last lines the worker printed
+        self.plan = plan                  # Plan, for a plan job only
 
     @property
     def ok(self):
         return self.status == "ok"
+
+
+class Plan:
+    """The core's plan of a run (--plan-only, RemeshPlan in remesh.h).
+
+    edge: float32 (V,) planned quad edge per input vertex, in its units,
+    0 on a left-out island; island: int64 (V,) index into the per-island
+    arrays share, floor and left_out; quads: the target it was planned at.
+    """
+
+    def __init__(self, edge, island, islands, quads, edge_scaling=1.0):
+        self.edge = edge
+        self.island = island
+        self.share = np.array([i["area_share"] for i in islands], dtype=np.float64)
+        self.floor = np.array([i["floor_quads"] for i in islands], dtype=np.float64)
+        self.left_out = np.array([bool(i["left_out"]) for i in islands], dtype=bool)
+        self.quads = int(quads)
+        self.edge_scaling = edge_scaling if edge_scaling > 0 else 1.0
+
+    def island_quads(self, quads):
+        """Planned quads of each island at Target Quads `quads`."""
+        q = np.maximum(quads * self.share, self.floor) / (self.edge_scaling ** 2)
+        return np.where(self.left_out, 0.0, q)
+
+    def planned_quads(self, quads):
+        return float(self.island_quads(quads).sum())
+
+    def edge_at(self, quads):
+        """The planned edge per vertex at another Target Quads: each island's
+        edges go with 1 / sqrt(its quads)."""
+        q0, q = self.island_quads(self.quads), self.island_quads(quads)
+        factor = np.ones(len(q0))
+        ok = (q0 > 0) & (q > 0)
+        factor[ok] = np.sqrt(q0[ok] / q[ok])
+        return self.edge * factor[self.island].astype(np.float32)
+
+
+def read_plan(path, report):
+    """The Plan in path (float32 edges, then uint32 islands, little-endian)
+    with the islands of report["plan"]."""
+    plan = report["plan"]
+    n = int(plan["vertices"])
+    raw = np.fromfile(path, dtype="<u4")
+    if raw.size != 2 * n:
+        raise ValueError("the plan has %d values, the report says 2 x %d" % (raw.size, n))
+    islands = plan["islands"]
+    island = raw[n:].astype(np.int64)
+    if n and (island.max() >= len(islands)):
+        raise ValueError("the plan names an island the report does not have")
+    parameters = report.get("parameters", {})
+    return Plan(raw[:n].view("<f4").copy(), island, islands, parameters.get("target_quads", 0),
+                parameters.get("edge_scaling", 1.0))
 
 
 def write_obj(path, positions, triangles, marked_edges=None):
@@ -170,7 +228,7 @@ def find_executable(configured=""):
 
 
 BUILD_ID_FILE = "build-id.txt"
-_worker_build_ids = {}
+_version_outputs = {}
 
 
 def addon_build_id():
@@ -184,16 +242,15 @@ def addon_build_id():
         return "dev"
 
 
-def worker_build_id(executable):
-    """The build id `executable --version` reports, or None (a build from
-    before build ids, the Qt app, or a program that does not run). Cached per
+def _version_output(executable):
+    """What `executable --version` prints, "" if it does not run. Cached per
     file, so the UI can ask on every redraw and a rebuilt program is asked again."""
     try:
         stat = os.stat(executable)
     except (OSError, TypeError):
-        return None
+        return ""
     key = (executable, stat.st_mtime_ns, stat.st_size)
-    if key not in _worker_build_ids:
+    if key not in _version_outputs:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         try:
             output = subprocess.run([executable, "--version"], capture_output=True, timeout=5,
@@ -201,9 +258,22 @@ def worker_build_id(executable):
                                     text=True, encoding="utf-8", errors="replace").stdout
         except (OSError, subprocess.SubprocessError):
             output = ""
-        match = re.search(r"\(build ([^,)]+)", output)
-        _worker_build_ids[key] = match.group(1).strip() if match else None
-    return _worker_build_ids[key]
+        _version_outputs[key] = output
+    return _version_outputs[key]
+
+
+def worker_build_id(executable):
+    """The build id `executable --version` reports, or None (a build from
+    before build ids, the Qt app, or a program that does not run)."""
+    match = re.search(r"\(build ([^,)]+)", _version_output(executable))
+    return match.group(1).strip() if match else None
+
+
+def worker_interface(executable):
+    """(major, minor) of the remesh interface `executable --version` reports,
+    or None (a build from before it said so, or the Qt app)."""
+    match = re.search(r"remesh interface (\d+)\.(\d+)", _version_output(executable))
+    return (int(match.group(1)), int(match.group(2))) if match else None
 
 
 def worker_environment(environ):
@@ -235,8 +305,10 @@ class RemeshJob:
     then outcome(). cancel() may be called at any time.
     """
 
-    def __init__(self, executable, positions, triangles, parameters, marked_edges=None):
+    def __init__(self, executable, positions, triangles, parameters, marked_edges=None, plan=False):
         self.executable = executable
+        # Only plan the run (--plan-only): the outcome carries a Plan, no mesh.
+        self.plan = plan
         self.positions = positions
         self.triangles = triangles
         self.marked_edges = marked_edges
@@ -246,12 +318,14 @@ class RemeshJob:
         self.cancel_requested = False
         self.killed = False
         self._cancel_time = None
+        self._start_time = None
         self._process = None
         self._reader = None
         self._lines = queue.Queue()
         self._log = collections.deque(maxlen=40)
         self._workdir = None
         self._outcome = None
+        self._progress_time = None
 
     def _path(self, name):
         return os.path.join(self._workdir, name)
@@ -265,9 +339,9 @@ class RemeshJob:
         write_obj(self._path("input.obj"), self.positions, self.triangles, self.marked_edges)
         args = [self.executable,
                 "-i", self._path("input.obj"),
-                "-o", self._path("output.obj"),
+                "-o", self._path("plan.bin" if self.plan else "output.obj"),
                 "--report-json", self._path("report.json"),
-                "--stdin-control"]
+                "--stdin-control"] + (["--plan-only"] if self.plan else [])
         for name, value in self.parameters.items():
             if name == "target_quads":
                 value = int(value)
@@ -280,8 +354,14 @@ class RemeshJob:
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             env=env, cwd=self._workdir, creationflags=creationflags,
             text=True, encoding="utf-8", errors="replace", bufsize=1)
+        self._start_time = time.monotonic()
         self._reader = threading.Thread(target=self._read_output, daemon=True)
         self._reader.start()
+
+    @property
+    def elapsed(self):
+        """Seconds since start() (0 before it)."""
+        return 0.0 if self._start_time is None else time.monotonic() - self._start_time
 
     def _read_output(self):
         try:
@@ -302,6 +382,7 @@ class RemeshJob:
                 continue
             match = _PROGRESS_LINE.match(line)
             if match:
+                self._progress_time = time.monotonic()
                 self.fraction = max(self.fraction, min(int(match.group(1)), 100) / 100.0)
                 if match.group(2):
                     self.step = match.group(2)
@@ -322,6 +403,14 @@ class RemeshJob:
             self._process.stdin.flush()
         except (BrokenPipeError, OSError, ValueError):
             pass  # already exiting
+
+    @property
+    def silent(self):
+        """Seconds since poll() last took in a progress line from the worker,
+        or since start() before the first one (0 before start()).  The CLI
+        prints one whenever the percentage or the step changes."""
+        last = self._progress_time if self._progress_time is not None else self._start_time
+        return 0.0 if last is None else time.monotonic() - last
 
     @property
     def done(self):
@@ -362,6 +451,12 @@ class RemeshJob:
         message = report.get("message", "")
         if status != "ok":
             return Outcome(status, message, report=report, log=log)
+        if self.plan:
+            try:
+                plan = read_plan(self._path("plan.bin"), report)
+            except (OSError, ValueError, KeyError) as error:
+                return Outcome("failed", "no plan: %s" % error, report=report, log=log)
+            return Outcome("ok", message, report, log=log, plan=plan)
         try:
             positions, face_sizes, face_indices = read_obj(self._path("output.obj"))
         except OSError as error:
@@ -387,12 +482,12 @@ class RemeshJob:
 
 
 def remesh(executable, positions, triangles, parameters, on_progress=None, interval=0.05,
-           marked_edges=None):
+           marked_edges=None, plan=False):
     """Blocking convenience wrapper: run a job to the end and return its Outcome.
 
     on_progress(fraction, step) may return True to request a cancel.
     """
-    job = RemeshJob(executable, positions, triangles, parameters, marked_edges)
+    job = RemeshJob(executable, positions, triangles, parameters, marked_edges, plan=plan)
     job.start()
     try:
         while not job.done:

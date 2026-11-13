@@ -20,6 +20,7 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *  SOFTWARE.
  */
+#include "envelope.h"
 #include "inputsanitizer.h"
 #include "measuremesh.h"
 #include "qexextraction.h"
@@ -32,7 +33,10 @@
 #include <AutoRemesher/QuadExtractor>
 #include <AutoRemesher/SurfaceProjector>
 #include <AutoRemesher/ThinParts>
+#include <Eigen/Sparse>
+#include <Eigen/SparseCholesky>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -85,6 +89,10 @@
 
 namespace AutoRemesher {
 
+// C++14 needs the definition of a static constexpr member that is bound to a
+// reference (std::vector::assign takes one); clang links without inlining it.
+constexpr uint32_t AutoRemesher::NoPlanIsland;
+
 namespace {
     const float parallelPhaseBegin = 0.03f;
     const float parallelPhaseEnd = 0.95f;
@@ -100,6 +108,30 @@ namespace {
     const double decimateTargetRatio = 4.0;
 
     const double triangleAreaPerSquaredEdge = 0.86602540378 * 0.5;
+
+    // A conical tip asks the quads for round(deficit / 90 degrees) quarter
+    // turns at its apex; from 135 degrees on that is two, a valence-2 vertex
+    // (Blender's default cone: 199 degrees). Below, a single valence-3 cone
+    // (a box corner, 90 degrees) does not need the apex kept to look right.
+    // The threshold stays off 135 and 150 degrees, which CAD corners hit
+    // exactly (45 and 30 degree prisms), so float noise does not decide.
+    // The deficit is gathered within half a target edge of T, so a tip
+    // rounded off below that scale in a dense input still counts.
+    const double conicalTipDegrees = 140.0;
+    // From 225 degrees on a tip asks for three or more quarter turns, more
+    // than a valence-2 vertex gives: a needle (TODO 2.19). Kept there, a
+    // brush's one-vertex spike split off as its own piece of quads
+    // (brush_box_relief, brush_pits), so needles are left as they were.
+    const double needleTipDegrees = 225.0;
+    const double conicalTipRadius = 0.5;
+    // How far the deficit gathered out to eight edges of T may stray from
+    // the one at half an edge before the tip counts as rounded or ringed
+    // rather than a cone: real cones stay within 1 degree, the false tips
+    // found on the bench sets moved 16 degrees or more (2026-11-01); a
+    // sculpted horn that is a cone for only three quads costs folds and
+    // libQEx fallbacks when pinned (realsculpt cube).
+    const double conicalTipHoldDegrees = 10.0;
+    const double conicalTipHoldShare = 0.05;
 
     // Rounds of tangential smoothing after the surface projection (TODO 2.8),
     // the extractor's own count.
@@ -127,6 +159,63 @@ namespace {
     const double maximumMarkedEdgeDensity = 0.25;
     const size_t maximumIslandRetries = 4;
     const double maximumRetriedIslandTriangleCount = 1024.0;
+
+    // A closed quad mesh of Euler characteristic chi < 0 whose vertices have
+    // valence 6 or less has at least 3|chi| faces: the valences exceed 4 by
+    // 4|chi| in all, so at least 2|chi| vertices are irregular, and such a
+    // mesh has |chi| more faces than vertices.  An island asked for fewer
+    // quads than that (chain mail, strung beads or feathers of crossing
+    // strands at a few dozen quads) cannot keep its holes and handles: its
+    // map breaks and the extraction comes out as spikes at several times the
+    // island's count, or nearly empty (ext_nemetona 3000: research/nemetona-spikes-2026-11-05.md).
+    // Such an island is remeshed on its envelope instead (envelope.h), which
+    // closes gaps narrower than about two quads.  Distances in quad widths
+    // sqrt(area / target quads): the closing radius, how far the envelope lies
+    // outside the input, and the grid cell.  At an offset of half a quad, 16 %
+    // of the output of ext_nemetona 3000 lay more than half a quad off the
+    // input (the back of a single-sided sheet's slab); a quarter gave 1.2-1.6 %
+    // at the same spikes and folds within 5 % (6 replicates, 3000 and 10000).
+    const double minimumQuadsPerNegativeEuler = 3.0;
+    const double envelopeClosingRadius = 1.0;
+    const double envelopeOffset = 0.25;
+    const double envelopeCellSize = 0.25;
+    const size_t maximumEnvelopeGridNodes = (size_t)1 << 22;
+    // On round strands (a net of rods, a lattice of bars) closing by one
+    // quad can leave necks thinner than a cell, and the envelope keeps most
+    // handles.  The closing radius grows by this factor, up to this many
+    // quad widths: for the bound until its envelope's handles fit the
+    // island's quads, for the check below while results stay unfaithful.
+    const double envelopeClosingGrowth = 1.5;
+    const double maximumEnvelopeClosingRadius = 2.25;
+    // The bound is necessary, not sufficient: above it the map of a
+    // perforated plate or a net still breaks, up to about 6|chi|, and its
+    // output can be a handful of quads (research/envelope-disprover-2026-11-05.md).
+    // So every other island with chi < 0 is checked after remeshing: the
+    // share of its input area farther than one quad from the output, plus
+    // the share of the output more than half a quad off the input.  If that
+    // passes maximumUnfaithfulShare, it is remeshed on its envelope at each
+    // closing radius in turn, and a result replaces the kept one if its
+    // share is lower by envelopeShareMargin (a tie keeps the holes), until
+    // the kept one is below the share (the check says which radii run).  An
+    // island the bound enveloped is checked too, and tried without the
+    // envelope and at the other radii if its result is broken.  A
+    // torn result (several pieces, non-manifold edges, a boundary on a
+    // closed input), one with more than maximumUnfaithfulQuadRatio times
+    // its quads (spikes) or one with fewer than minimumFaithfulQuadRatio
+    // times them (collapsed) counts brokenUnfaithfulShare more.  The choice
+    // follows the results, so no target makes the output jump to a broken
+    // one where an envelope would hold.  The share is measured for every
+    // island with chi < 0 except a closed one that came out closed with its
+    // own Euler characteristic.
+    // The check samples at most this many input or output triangles, or
+    // this many per target quad if more (a strided subset of a dense input).
+    const size_t maximumUnfaithfulSamples = 20000;
+    const double unfaithfulSamplesPerQuad = 8.0;
+    const double maximumUnfaithfulShare = 0.05;
+    const double brokenUnfaithfulShare = 0.25;
+    const double maximumUnfaithfulQuadRatio = 2.0;
+    const double minimumFaithfulQuadRatio = 0.5;
+    const double envelopeShareMargin = 0.01;
 
     // A sliver is a strip-shaped island (area below 1e-3 of its bounding
     // diagonal squared) whose mean width, area over diagonal, is under half
@@ -246,6 +335,47 @@ namespace {
         return true;
     }
 
+    // Share of the area of `faces` (triangles or polygons, fanned) farther
+    // than `distance` from the surface of `to`.  Sampled at the centroids of
+    // each triangle cut into n x n, n from its longest edge over `spacing`
+    // (at most 64), each sample weighing its share of the area.  Of more than
+    // `maximumFaces` faces only every k-th is sampled.
+    double fartherAreaShare(const std::vector<Vector3>& vertices, const std::vector<std::vector<size_t>>& faces,
+        const SurfaceProjector& to, double distance, double spacing, size_t maximumFaces)
+    {
+        double total = 0.0, farther = 0.0;
+        const auto sample = [&](const Vector3& a, const Vector3& b, const Vector3& c) {
+            const double area = 0.5 * Vector3::crossProduct(b - a, c - a).length();
+            if (!(area > 0.0))
+                return;
+            const double longest = std::max({ (b - a).length(), (c - b).length(), (a - c).length() });
+            const size_t n = std::max<size_t>(1, std::min<size_t>(64, (size_t)std::ceil(longest / spacing)));
+            const double weight = area / (double)(n * n);
+            const Vector3 u = (b - a) * (1.0 / (double)n), v = (c - a) * (1.0 / (double)n);
+            for (size_t i = 0; i < n; ++i) {
+                for (size_t j = 0; i + j < n; ++j) {
+                    // The upright sub-triangle at (i, j), and the inverted one after it.
+                    for (int inverted = 0; inverted < 2; ++inverted) {
+                        if (inverted && i + j + 2 > n)
+                            break;
+                        const double k = inverted ? 2.0 / 3.0 : 1.0 / 3.0;
+                        const Vector3 p = a + u * ((double)i + k) + v * ((double)j + k);
+                        total += weight;
+                        if (!(to.distance(p, distance * 1.0001) < distance))
+                            farther += weight;
+                    }
+                }
+            }
+        };
+        const size_t stride = std::max<size_t>(1, (faces.size() + maximumFaces - 1) / std::max<size_t>(1, maximumFaces));
+        for (size_t f = 0; f < faces.size(); f += stride) {
+            const auto& face = faces[f];
+            for (size_t k = 2; k < face.size(); ++k)
+                sample(vertices[face[0]], vertices[face[k - 1]], vertices[face[k]]);
+        }
+        return total > 0.0 ? farther / total : 0.0;
+    }
+
     // Thrown from a cancellation point and caught in remesh().  Deliberately not
     // a std::exception, so the per-island error handling doesn't take it for a
     // failed island.
@@ -312,6 +442,471 @@ namespace {
                 ++lengths.nearTheta;
         }
         return lengths;
+    }
+
+    // The index of the nearest site to each query, by a uniform grid of about
+    // two sites per cell (the sites lie on a surface).  `sites` must not be
+    // empty.
+    std::vector<size_t> nearestSites(const std::vector<Vector3>& sites, const std::vector<Vector3>& queries)
+    {
+        Vector3 low = sites[0];
+        Vector3 high = sites[0];
+        for (const Vector3& p : sites) {
+            for (size_t k = 0; k < 3; ++k) {
+                low[k] = std::min(low[k], p[k]);
+                high[k] = std::max(high[k], p[k]);
+            }
+        }
+        const double diagonal = (high - low).length();
+        double cell = diagonal * std::sqrt(2.0 / (double)sites.size());
+        if (!(cell > 0.0))
+            cell = 1.0;
+        const auto cellOf = [&](const Vector3& p, int64_t* c) {
+            for (size_t k = 0; k < 3; ++k)
+                c[k] = (int64_t)std::floor((p[k] - low[k]) / cell);
+        };
+        // 21 bits per axis, enough for the cell counts this grid makes.
+        const auto keyOf = [](int64_t x, int64_t y, int64_t z) {
+            return ((uint64_t)(x & 0x1fffff) << 42) | ((uint64_t)(y & 0x1fffff) << 21) | (uint64_t)(z & 0x1fffff);
+        };
+        std::vector<std::pair<uint64_t, size_t>> keyed(sites.size());
+        for (size_t i = 0; i < sites.size(); ++i) {
+            int64_t c[3];
+            cellOf(sites[i], c);
+            keyed[i] = { keyOf(c[0], c[1], c[2]), i };
+        }
+        std::sort(keyed.begin(), keyed.end());
+        std::unordered_map<uint64_t, std::pair<size_t, size_t>> cells;
+        cells.reserve(keyed.size());
+        for (size_t i = 0; i < keyed.size();) {
+            size_t j = i;
+            while (j < keyed.size() && keyed[j].first == keyed[i].first)
+                ++j;
+            cells[keyed[i].first] = { i, j };
+            i = j;
+        }
+        const int64_t maximumRing = (int64_t)std::ceil(diagonal / cell) + 2;
+        std::vector<size_t> nearest(queries.size(), 0);
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, queries.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t q = range.begin(); q != range.end(); ++q) {
+                    const Vector3& p = queries[q];
+                    int64_t c[3];
+                    cellOf(p, c);
+                    double best = std::numeric_limits<double>::max();
+                    size_t bestSite = 0;
+                    const auto visit = [&](int64_t x, int64_t y, int64_t z) {
+                        const auto found = cells.find(keyOf(x, y, z));
+                        if (found == cells.end())
+                            return;
+                        for (size_t k = found->second.first; k < found->second.second; ++k) {
+                            const double d = (sites[keyed[k].second] - p).lengthSquared();
+                            if (d < best || (d == best && keyed[k].second < bestSite)) {
+                                best = d;
+                                bestSite = keyed[k].second;
+                            }
+                        }
+                    };
+                    // Ring r holds the cells r steps away; the next ring is at
+                    // least r cells from the query.
+                    for (int64_t r = 0; r <= maximumRing; ++r) {
+                        for (int64_t dx = -r; dx <= r; ++dx) {
+                            for (int64_t dy = -r; dy <= r; ++dy) {
+                                const bool shell = std::abs(dx) == r || std::abs(dy) == r;
+                                for (int64_t dz = -r; dz <= r; dz += (shell ? 1 : std::max<int64_t>(1, 2 * r)))
+                                    visit(c[0] + dx, c[1] + dy, c[2] + dz);
+                            }
+                        }
+                        if (best <= (double)(r * r) * cell * cell)
+                            break;
+                    }
+                    if (best == std::numeric_limits<double>::max()) {
+                        for (size_t i = 0; i < sites.size(); ++i) {
+                            const double d = (sites[i] - p).lengthSquared();
+                            if (d < best) {
+                                best = d;
+                                bestSite = i;
+                            }
+                        }
+                    }
+                    nearest[q] = bestSite;
+                }
+            });
+        return nearest;
+    }
+
+    // The plan's sizes come from the continuous cover on T, which already
+    // averages them over a few quads; a light average of the log edge over
+    // T removes the face-to-face noise of the map (8 steps reach about one
+    // quad edge at Quality's 4.5 triangles per quad; 0, 4, 16 and 32 steps
+    // fit the runs' regions worse or the same, docs/PREVIEW.md §4.5).  The
+    // count is kept: sum(area / edge^2) stays as before.  sum and weight hold,
+    // per vertex, the area-weighted sum of its faces' edges and their area;
+    // a vertex with no weight (only degenerate faces) takes no part.
+    const int plannedEdgeSmoothing = 8;
+
+    void smoothPlannedEdges(const std::vector<Vector3>& vertices, const std::vector<std::vector<size_t>>& triangles,
+        const std::vector<double>& faceEdges, std::vector<double>* sum, const std::vector<double>* weight)
+    {
+        std::vector<double> x(vertices.size(), 0.0);
+        for (size_t v = 0; v < x.size(); ++v)
+            x[v] = (*weight)[v] > 0.0 ? std::log((*sum)[v] / (*weight)[v]) : 0.0;
+        std::vector<std::vector<size_t>> ring(vertices.size());
+        for (const auto& t : triangles) {
+            for (size_t k = 0; k < 3; ++k) {
+                ring[t[k]].push_back(t[(k + 1) % 3]);
+                ring[t[k]].push_back(t[(k + 2) % 3]);
+            }
+        }
+        std::vector<double> next(x.size());
+        for (int iteration = 0; iteration < plannedEdgeSmoothing; ++iteration) {
+            for (size_t v = 0; v < x.size(); ++v) {
+                double total = (*weight)[v] > 0.0 ? x[v] : 0.0;
+                double count = (*weight)[v] > 0.0 ? 1.0 : 0.0;
+                for (const size_t u : ring[v]) {
+                    if ((*weight)[u] > 0.0) {
+                        total += x[u];
+                        count += 1.0;
+                    }
+                }
+                next[v] = count > 0.0 ? total / count : x[v];
+            }
+            x.swap(next);
+        }
+        double before = 0.0;
+        double after = 0.0;
+        for (size_t f = 0; f < triangles.size(); ++f) {
+            const auto& t = triangles[f];
+            const double area = Vector3::area(vertices[t[0]], vertices[t[1]], vertices[t[2]]);
+            if (!(faceEdges[f] > 0.0))
+                continue;
+            before += area / (faceEdges[f] * faceEdges[f]);
+            const double edge = std::exp((x[t[0]] + x[t[1]] + x[t[2]]) / 3.0);
+            after += area / (edge * edge);
+        }
+        const double factor = before > 0.0 ? std::sqrt(after / before) : 1.0;
+        for (size_t v = 0; v < x.size(); ++v) {
+            if ((*weight)[v] > 0.0)
+                (*sum)[v] = factor * std::exp(x[v]) * (*weight)[v];
+        }
+    }
+    // The plan's edge at the vertices of one input island, from the edges at
+    // the sites (vertices of T).  Where the input is as fine as T, a vertex
+    // takes its nearest site.  An input triangle wider than T's mean edge
+    // covers many sites, and its corners alone see only the field there (a
+    // box's eight corners, where the run makes its smallest quads, so the
+    // corner value painted every face 2-3x too fine; docs/PREVIEW.md §4.6).
+    // The vertices of such triangles are fitted instead: the overlay
+    // interpolates vertex edges linearly over each triangle, so their values
+    // are the least-squares fit of that interpolation to the plan sampled at
+    // the centres of k x k equal sub-triangles (k = longest side over T's
+    // mean edge, at most 32; 1 = the centre) of every triangle around them,
+    // with the other vertices held at their nearest site.  A cone's fan
+    // keeps its gradient to the tip; a box face shows its mean.  A small
+    // pull to each vertex's area mean keeps the fit unique, a vertex stays
+    // within the range of its samples, and a last scale keeps the quad
+    // count the samples give.  Returns the edge per entry of
+    // `vertexIds`, the island's vertices in first use.
+    std::vector<double> transferPlannedEdges(const std::vector<Vector3>& sites, const std::vector<double>& siteEdges,
+        double tEdge, const std::vector<Vector3>& vertices, const std::vector<std::vector<size_t>>& triangles,
+        std::vector<size_t>* vertexIds)
+    {
+        const int maximumSplit = 32;
+        const double pull = 1e-3;
+        std::unordered_map<size_t, size_t> local;
+        std::vector<std::array<size_t, 3>> corners;
+        corners.reserve(triangles.size());
+        for (const auto& triangle : triangles) {
+            if (triangle.size() != 3)
+                continue;
+            std::array<size_t, 3> c;
+            for (size_t k = 0; k < 3; ++k) {
+                const auto inserted = local.emplace(triangle[k], vertexIds->size());
+                if (inserted.second)
+                    vertexIds->push_back(triangle[k]);
+                c[k] = inserted.first->second;
+            }
+            corners.push_back(c);
+        }
+        const size_t vertexCount = vertexIds->size();
+        const auto position = [&](size_t localVertex) -> const Vector3& { return vertices[(*vertexIds)[localVertex]]; };
+        std::vector<int> split(corners.size(), 1);
+        std::vector<size_t> fitted(vertexCount, std::numeric_limits<size_t>::max());
+        size_t fittedCount = 0;
+        for (size_t t = 0; t < corners.size(); ++t) {
+            const Vector3& a = position(corners[t][0]);
+            const Vector3& b = position(corners[t][1]);
+            const Vector3& c = position(corners[t][2]);
+            const double longest = std::max({ (b - a).length(), (c - b).length(), (a - c).length() });
+            const double ratio = tEdge > 0.0 ? longest / tEdge : 1.0;
+            const int k = std::isfinite(ratio) ? (int)std::min<double>(maximumSplit, std::ceil(ratio)) : 1;
+            if (k < 2)
+                continue;
+            split[t] = k;
+            for (const size_t v : corners[t]) {
+                if (std::numeric_limits<size_t>::max() == fitted[v])
+                    fitted[v] = fittedCount++;
+            }
+        }
+        // Samples: the vertices, then each triangle around a fitted vertex
+        // (barycentric weights of corners 1 and 2 kept for the fit).
+        std::vector<Vector3> queries;
+        queries.reserve(vertexCount);
+        for (size_t v = 0; v < vertexCount; ++v)
+            queries.push_back(position(v));
+        std::vector<size_t> firstSample(corners.size(), 0);
+        std::vector<std::pair<double, double>> weights;
+        for (size_t t = 0; t < corners.size(); ++t) {
+            const auto& c = corners[t];
+            if (std::numeric_limits<size_t>::max() == fitted[c[0]] && std::numeric_limits<size_t>::max() == fitted[c[1]]
+                && std::numeric_limits<size_t>::max() == fitted[c[2]])
+                continue;
+            firstSample[t] = queries.size();
+            const int k = split[t];
+            const Vector3& a = position(c[0]);
+            const Vector3& b = position(c[1]);
+            const Vector3& d = position(c[2]);
+            // Centres of the k x k sub-triangles: k(k+1)/2 upright, k(k-1)/2 upside down.
+            for (int i = 0; i < k; ++i) {
+                for (int j = 0; i + j < k; ++j) {
+                    weights.emplace_back((i + 1.0 / 3.0) / k, (j + 1.0 / 3.0) / k);
+                    if (i + j + 1 < k)
+                        weights.emplace_back((i + 2.0 / 3.0) / k, (j + 2.0 / 3.0) / k);
+                }
+            }
+            for (size_t q = queries.size() - vertexCount; q < weights.size(); ++q)
+                queries.push_back(a + (b - a) * weights[q].first + (d - a) * weights[q].second);
+        }
+        const std::vector<size_t> nearest = nearestSites(sites, queries);
+        std::vector<double> edges(vertexCount);
+        for (size_t v = 0; v < vertexCount; ++v)
+            edges[v] = siteEdges[nearest[v]];
+        if (0 == fittedCount)
+            return edges;
+
+        std::vector<Eigen::Triplet<double>> entries;
+        Eigen::VectorXd rhs = Eigen::VectorXd::Zero((Eigen::Index)fittedCount);
+        std::vector<double> mass(fittedCount, 0.0);
+        std::vector<double> massEdge(fittedCount, 0.0);
+        std::vector<double> lowest(fittedCount, std::numeric_limits<double>::max());
+        std::vector<double> highest(fittedCount, 0.0);
+        for (size_t t = 0; t < corners.size(); ++t) {
+            const auto& c = corners[t];
+            if (std::numeric_limits<size_t>::max() == fitted[c[0]] && std::numeric_limits<size_t>::max() == fitted[c[1]]
+                && std::numeric_limits<size_t>::max() == fitted[c[2]])
+                continue;
+            const size_t count = (size_t)split[t] * (size_t)split[t];
+            const double area = Vector3::area(position(c[0]), position(c[1]), position(c[2])) / (double)count;
+            if (!(area > 0.0) || !std::isfinite(area))
+                continue;
+            for (size_t q = firstSample[t]; q < firstSample[t] + count; ++q) {
+                const auto& w = weights[q - vertexCount];
+                const double phi[3] = { 1.0 - w.first - w.second, w.first, w.second };
+                const double sample = siteEdges[nearest[q]];
+                double target = sample;
+                for (size_t m = 0; m < 3; ++m) {
+                    if (std::numeric_limits<size_t>::max() == fitted[c[m]])
+                        target -= phi[m] * edges[c[m]];
+                }
+                for (size_t m = 0; m < 3; ++m) {
+                    const size_t row = fitted[c[m]];
+                    if (std::numeric_limits<size_t>::max() == row)
+                        continue;
+                    rhs[(Eigen::Index)row] += area * phi[m] * target;
+                    mass[row] += area * phi[m];
+                    massEdge[row] += area * phi[m] * sample;
+                    lowest[row] = std::min(lowest[row], sample);
+                    highest[row] = std::max(highest[row], sample);
+                    for (size_t n = 0; n < 3; ++n) {
+                        const size_t column = fitted[c[n]];
+                        if (std::numeric_limits<size_t>::max() != column)
+                            entries.emplace_back((Eigen::Index)row, (Eigen::Index)column, area * phi[m] * phi[n]);
+                    }
+                }
+            }
+        }
+        for (size_t row = 0; row < fittedCount; ++row) {
+            if (!(mass[row] > 0.0)) {
+                entries.emplace_back((Eigen::Index)row, (Eigen::Index)row, 1.0);
+                continue;
+            }
+            entries.emplace_back((Eigen::Index)row, (Eigen::Index)row, pull * mass[row]);
+            rhs[(Eigen::Index)row] += pull * massEdge[row];
+        }
+        Eigen::SparseMatrix<double> system((Eigen::Index)fittedCount, (Eigen::Index)fittedCount);
+        system.setFromTriplets(entries.begin(), entries.end());
+        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver(system);
+        Eigen::VectorXd solution;
+        const bool solved = Eigen::Success == solver.info() && (solution = solver.solve(rhs), Eigen::Success == solver.info());
+        for (size_t v = 0; v < vertexCount; ++v) {
+            const size_t row = fitted[v];
+            if (std::numeric_limits<size_t>::max() == row || !(mass[row] > 0.0))
+                continue;
+            double value = solved ? solution[(Eigen::Index)row] : massEdge[row] / mass[row];
+            if (!std::isfinite(value))
+                value = massEdge[row] / mass[row];
+            edges[v] = std::min(highest[row], std::max(lowest[row], value));
+        }
+        // An edge fit shows the mean edge, which is larger than the size of
+        // the same quad count (sqrt(area / quads)) where the size varies: scale
+        // the fitted vertices until the interpolation holds the samples' quads.
+        for (int iteration = 0; iteration < 3; ++iteration) {
+            double wanted = 0.0;
+            double shown = 0.0;
+            for (size_t t = 0; t < corners.size(); ++t) {
+                const auto& c = corners[t];
+                if (std::numeric_limits<size_t>::max() == fitted[c[0]] && std::numeric_limits<size_t>::max() == fitted[c[1]]
+                    && std::numeric_limits<size_t>::max() == fitted[c[2]])
+                    continue;
+                const size_t count = (size_t)split[t] * (size_t)split[t];
+                const double area = Vector3::area(position(c[0]), position(c[1]), position(c[2])) / (double)count;
+                if (!(area > 0.0) || !std::isfinite(area))
+                    continue;
+                for (size_t q = firstSample[t]; q < firstSample[t] + count; ++q) {
+                    const auto& w = weights[q - vertexCount];
+                    const double edge = (1.0 - w.first - w.second) * edges[c[0]] + w.first * edges[c[1]] + w.second * edges[c[2]];
+                    const double sample = siteEdges[nearest[q]];
+                    wanted += area / (sample * sample);
+                    if (edge > 0.0)
+                        shown += area / (edge * edge);
+                }
+            }
+            if (!(wanted > 0.0) || !(shown > 0.0))
+                break;
+            const double factor = std::sqrt(shown / wanted);
+            for (size_t v = 0; v < vertexCount; ++v) {
+                if (std::numeric_limits<size_t>::max() != fitted[v])
+                    edges[v] *= factor;
+            }
+        }
+        return edges;
+    }
+
+    // Conical tips (TODO 2.23): interior vertices where the angle deficit
+    // (2 pi minus the angle sum) gathered within `radius` is at least
+    // `minimumDeficit` and below `maximumDeficit`, the apex of a cone. Each
+    // tip is the vertex with the largest own deficit of its cluster, and it
+    // must hold at least half of the gathered deficit: a point, not a rounded
+    // cap smaller than a quad (the fingertips of human_neutral at 10k hold 5
+    // to 27 %, a subdivided cone's apex 75 %). A cluster touching a boundary
+    // is left out, and so is one whose triangles do not form a cap (some
+    // faces away from their mean normal): a corner of sharp edges, which the
+    // feature edges hold, or folded brush input, whose angle sums mean
+    // nothing (brush_box_relief had 18 such "tips"); so is one whose deficit
+    // does not hold out to one and two T edges. The isotropic remesh
+    // keeps tips where they are: it used to collapse and relax the apex away,
+    // so the quads were laid out on a cut cone and their cap sat about one
+    // quad below the tip.
+    std::vector<size_t> conicalTips(const std::vector<Vector3>& vertices,
+        const std::vector<std::vector<size_t>>& triangles, double radius, double minimumDeficit,
+        double maximumDeficit)
+    {
+        const size_t n = vertices.size();
+        std::vector<double> angleSum(n, 0.0);
+        std::vector<std::vector<size_t>> neighbours(n);
+        std::vector<std::vector<size_t>> vertexTriangles(n);
+        std::unordered_map<unsigned long long, int> edgeFaces;
+        const auto key = [](size_t a, size_t b) {
+            return ((unsigned long long)std::min(a, b) << 32) | (unsigned long long)std::max(a, b);
+        };
+        for (size_t i = 0; i < triangles.size(); ++i) {
+            const auto& t = triangles[i];
+            if (t.size() != 3)
+                continue;
+            for (size_t k = 0; k < 3; ++k) {
+                const size_t a = t[k], b = t[(k + 1) % 3], c = t[(k + 2) % 3];
+                const Vector3 u = vertices[b] - vertices[a], w = vertices[c] - vertices[a];
+                angleSum[a] += std::atan2(Vector3::crossProduct(u, w).length(), Vector3::dotProduct(u, w));
+                ++edgeFaces[key(a, b)];
+                neighbours[a].push_back(b);
+                vertexTriangles[a].push_back(i);
+            }
+        }
+        const auto isCap = [&](const std::vector<size_t>& vertexSet) {
+            std::vector<Vector3> normals;
+            Vector3 mean;
+            for (const size_t u : vertexSet)
+                for (const size_t i : vertexTriangles[u]) {
+                    const auto& t = triangles[i];
+                    normals.push_back(Vector3::crossProduct(vertices[t[1]] - vertices[t[0]], vertices[t[2]] - vertices[t[0]]));
+                    mean += normals.back();
+                }
+            for (const Vector3& normal : normals)
+                if (Vector3::dotProduct(normal, mean) <= 0.0)
+                    return false;
+            return true;
+        };
+        std::vector<char> interior(n, 1);
+        for (const auto& it : edgeFaces)
+            if (it.second != 2)
+                interior[(size_t)(it.first >> 32)] = interior[(size_t)(it.first & 0xffffffffu)] = 0;
+        std::vector<double> deficit(n, 0.0);
+        std::vector<size_t> candidates;
+        const double seedDeficit = 5.0 * M_PI / 180.0;
+        for (size_t v = 0; v < n; ++v) {
+            if (!interior[v] || neighbours[v].empty())
+                continue;
+            deficit[v] = 2.0 * M_PI - angleSum[v];
+            if (deficit[v] >= seedDeficit)
+                candidates.push_back(v);
+        }
+        std::sort(candidates.begin(), candidates.end(), [&](size_t a, size_t b) {
+            return deficit[a] != deficit[b] ? deficit[a] > deficit[b] : a < b;
+        });
+        std::vector<char> taken(n, 0);
+        std::vector<size_t> tips, region;
+        std::vector<char> seen(n, 0);
+        // The vertices within `distance` of v, connected through the mesh,
+        // into `region`; returns their deficit, `open` if one is on a boundary.
+        const auto gather = [&](size_t v, double distance, bool* open) {
+            region.assign(1, v);
+            seen[v] = 1;
+            double gathered = 0.0;
+            for (size_t i = 0; i < region.size(); ++i) {
+                const size_t u = region[i];
+                if (!interior[u] && nullptr != open)
+                    *open = true;
+                gathered += deficit[u];
+                for (const size_t w : neighbours[u])
+                    if (!seen[w] && (vertices[w] - vertices[v]).length() <= distance) {
+                        seen[w] = 1;
+                        region.push_back(w);
+                    }
+            }
+            for (const size_t u : region)
+                seen[u] = 0;
+            return gathered;
+        };
+        for (const size_t v : candidates) {
+            if (taken[v])
+                continue;
+            bool open = false;
+            const double gathered = gather(v, radius, &open);
+            if (open || gathered < minimumDeficit || gathered >= maximumDeficit
+                || deficit[v] < 0.5 * gathered || !isCap(region))
+                continue;
+            const std::vector<size_t> cluster = region;
+            // A cone's flanks are developable, so the deficit gathered stays
+            // that of the apex out to eight edges of T (about five quads).
+            // A noise spike or a bump is ringed by negative curvature that
+            // cancels it (spot_noisy, plane), and a rounded end keeps
+            // gathering more (an ellipsoid's end, the sword's guard tips,
+            // a sculpted horn); pinned, both cost folds around them.
+            const double holdTolerance = std::max(conicalTipHoldDegrees * M_PI / 180.0, conicalTipHoldShare * gathered);
+            bool holds = true;
+            for (const double scale : { 2.0, 4.0, 8.0, 16.0 }) {
+                if (std::abs(gather(v, scale * radius, nullptr) - gathered) > holdTolerance) {
+                    holds = false;
+                    break;
+                }
+            }
+            if (!holds)
+                continue;
+            tips.push_back(v);
+            for (const size_t u : cluster)
+                taken[u] = 1;
+        }
+        return tips;
     }
 }
 
@@ -800,7 +1395,8 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     std::atomic<long long>* adaptiveFieldTimeUs,
     const ProgressHandler* progressHandler,
     std::vector<Vector3>* decimatedVerticesOut,
-    std::vector<std::vector<size_t>>* decimatedTrianglesOut)
+    std::vector<std::vector<size_t>>* decimatedTrianglesOut,
+    std::vector<Vector3>* conicalTipsOut)
 {
     auto t_decimateStart = std::chrono::high_resolution_clock::now();
     decimateIfTooDense(vertices, triangles, topology, voxelSize, sharpEdgeDegrees, featureEdges,
@@ -952,9 +1548,22 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     IsotropicRemesher isotropicRemesher(vertices, triangles);
     if (nullptr != progressHandler && *progressHandler)
         isotropicRemesher.setProgressHandler(*progressHandler);
+    const std::vector<size_t> tips = conicalTips(vertices, triangles,
+        conicalTipRadius * voxelSize, conicalTipDegrees * M_PI / 180.0, needleTipDegrees * M_PI / 180.0);
+    if (nullptr != decimationStats)
+        decimationStats->conicalTips += tips.size();
+    if (nullptr != conicalTipsOut) {
+        conicalTipsOut->clear();
+        for (const size_t v : tips)
+            conicalTipsOut->push_back(vertices[v]);
+    }
+    if (!tips.empty())
+        isotropicRemesher.setPinnedVertices(&tips);
     isotropicRemesher.setTargetEdgeLength(voxelSize);
     if (!vertexTargetLengths.empty())
         isotropicRemesher.setVertexTargetEdgeLengths(&vertexTargetLengths);
+    featureEdges = filterDetectedChains(featureEdges, vertices, triangles, voxelSize,
+        nullptr != sharpEdgeStats ? &sharpEdgeStats->filtered : nullptr);
     isotropicRemesher.setFeatureEdges(featureEdges);
     isotropicRemesher.setSmoothNormalDegrees(smoothNormalDegrees);
     isotropicRemesher.remesh();
@@ -962,9 +1571,14 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     triangles = isotropicRemesher.remeshedTriangles();
     featureEdges = reclassifyFeatureEdges(isotropicRemesher.featureEdges(), vertices, triangles,
         sharpEdgeDegrees, nullptr != sharpEdgeStats ? &sharpEdgeStats->classified : nullptr);
+    // Three edges, not one: on the sculpt set pieces of one to three edges
+    // still cost the map (sculpt_decimated 2k Hausdorff x2.8 at one edge,
+    // x1.3 at three) and no cad or primitives crease is that short.
+    constexpr double kMinFeatureComponentEdges = 3.0;
+    featureEdges = dropShortFeatureComponents(featureEdges, vertices, kMinFeatureComponentEdges * voxelSize,
+        nullptr != sharpEdgeStats ? &sharpEdgeStats->tShort : nullptr);
     if (nullptr != sharpEdgeStats) {
         sharpEdgeStats->carried = isotropicRemesher.featureEdges().size();
-        sharpEdgeStats->flipped = isotropicRemesher.clearedFeatureEdges();
     }
 #if AUTO_REMESHER_DEBUG
     std::cerr << "Island[" << islandIndex << "]: Uniformly remesh done, vertex count: " << vertices.size() << " triangle count: " << triangles.size() << std::endl;
@@ -1093,6 +1707,15 @@ bool AutoRemesher::remeshIslands()
     throwIfCancelled();
     auto t_start = std::chrono::high_resolution_clock::now();
     const double cpuStart = processCpuSeconds();
+    // The plan reports on these; the pinch split appends vertices after them.
+    const size_t givenVertexCount = m_vertices.size();
+
+    // Triangles that use a vertex twice go before anything reads edges: they
+    // have no third edge, and every later step assumes three.
+    const size_t repeatedCornerTriangles = removeRepeatedCornerTriangles(m_triangles);
+    if (0 != repeatedCornerTriangles)
+        std::cerr << "Input cleanup: removed " << repeatedCornerTriangles
+                  << " faces that use a vertex twice" << std::endl;
 
     // Open seams first: welding can leave zero-length edges and duplicate
     // triangles, which the next two steps remove.  Pinched vertices are split
@@ -1107,6 +1730,7 @@ bool AutoRemesher::remeshIslands()
     if (!m_markedEdges.empty() && 0 != seams.weldedVertices)
         followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
     InputCleanupStats cleanup = cleanInput(m_vertices, m_triangles, inputCleanupTolerance(m_vertices));
+    cleanup.repeatedCornerTriangles = repeatedCornerTriangles;
     cleanup.weldedEdges = seams.weldedEdges;
     cleanup.weldedVertices = seams.weldedVertices;
     cleanup.weldKeptParts = seams.keptParts;
@@ -1138,9 +1762,10 @@ bool AutoRemesher::remeshIslands()
         m_progressHandler(m_tag, 0.0f, m_repairInputFolds ? "Repairing folded input" : "Checking for folded input");
     FoldRepair::Options foldOptions;
     foldOptions.flattenSpikes = m_flattenSpikes;
+    // A plan has no report to put the survey in (5.6 s of a 2M-triangle plan).
     const FoldRepair::Stats folds = m_repairInputFolds
         ? FoldRepair::repair(&m_vertices, m_triangles, foldOptions)
-        : FoldRepair::survey(m_vertices, m_triangles, foldOptions);
+        : (m_planOnly ? FoldRepair::Stats() : FoldRepair::survey(m_vertices, m_triangles, foldOptions));
     // The spikes' largest drop in quad edges: sqrt(area per target quad).
     double spikeDropQuads = 0.0;
     if (folds.flattenedSpikes > 0 && m_targetTriangleCount > 0) {
@@ -1184,8 +1809,26 @@ bool AutoRemesher::remeshIslands()
         std::vector<std::vector<size_t>> triangles;
         // Taken before resampling replaces vertices and triangles.
         QuadExtractor::Boundary inputBoundary;
+        // Of the surface the island is remeshed from: its input, or its
+        // envelope (enveloped below).
         SurfaceTopology inputTopology;
         long long inputTwiceHandles = -1;
+        // Of the input itself, which the report compares the output with.
+        SurfaceTopology originalTopology;
+        long long originalTwiceHandles = -1;
+        // Remeshed on its envelope, which the quads are then projected onto
+        // instead of the input.
+        bool enveloped = false;
+        std::vector<Vector3> envelopeVertices;
+        std::vector<std::vector<size_t>> envelopeTriangles;
+        double envelopeCellSize = 0.0;
+        // Closing radius used, in quad widths.
+        double envelopeRadius = 0.0;
+        size_t envelopeDroppedTriangles = 0;
+        // Shares checked after remeshing (maximumUnfaithfulShare): of the
+        // first result, and of the envelope's if it was tried; -1 if not.
+        double firstUnfaithfulShare = -1.0;
+        double envelopeUnfaithfulShare = -1.0;
         double voxelSize;
         double area;
         // Of the island's bounding box.
@@ -1245,6 +1888,8 @@ bool AutoRemesher::remeshIslands()
         context.inputTwiceHandles = 0 == context.inputTopology.nonManifoldEdges
             ? twiceHandleCount(context.vertices.size(), context.triangles)
             : -1;
+        context.originalTopology = context.inputTopology;
+        context.originalTwiceHandles = context.inputTwiceHandles;
         context.inputBoundary = QuadExtractor::findBoundary(context.vertices, context.triangles);
         context.markedEdges = islandMarkedEdges(island, oldToNewVertexMap, m_markedEdges);
         context.inputMarkedEdgeCount = context.markedEdges.size();
@@ -1274,6 +1919,71 @@ bool AutoRemesher::remeshIslands()
             context.followMarks = false;
             context.markedEdgesTooDense = true;
         }
+    };
+
+    // Whether the island's holes and handles need more quads than it is
+    // asked for (minimumQuadsPerNegativeEuler).
+    const auto needsEnvelope = [&](const IslandContext& context) {
+        return !context.leftOut && context.targetQuadCount > 0.0 && context.area > 0.0
+            && context.originalTopology.eulerCharacteristic < 0
+            && context.targetQuadCount < minimumQuadsPerNegativeEuler * (double)(-context.originalTopology.eulerCharacteristic);
+    };
+
+    // Replaces the island's surface by its envelope at the island's quad
+    // width.  The envelope has no sharp edges (its cell steps are not
+    // creases) and no marks (they lie on the input), and the report still
+    // compares the output with the input.  Left as it was if no envelope
+    // comes out.
+    // The island's envelope at a closing radius of `radius` quad widths;
+    // false if the grid cannot hold it (a grid capped at
+    // maximumEnvelopeGridNodes may be too coarse for one radius and fine for
+    // a larger one).
+    const auto envelopeAt = [&](const IslandContext& context, double radius, EnvelopeResult* envelope) {
+        const double quadWidth = std::sqrt(context.area / context.targetQuadCount);
+        return buildEnvelope(context.vertices, context.triangles, radius * quadWidth,
+            envelopeOffset * quadWidth, envelopeCellSize * quadWidth, maximumEnvelopeGridNodes, envelope);
+    };
+    const auto useEnvelope = [&](IslandContext& context, EnvelopeResult&& envelope, double radius) {
+        context.enveloped = true;
+        context.envelopeRadius = radius;
+        context.envelopeCellSize = envelope.cellSize;
+        context.envelopeDroppedTriangles = envelope.droppedTriangles;
+        context.vertices = envelope.vertices;
+        context.triangles = envelope.triangles;
+        context.envelopeVertices = std::move(envelope.vertices);
+        context.envelopeTriangles = std::move(envelope.triangles);
+        context.inputVertices.clear();
+        context.inputTopology = surfaceTopology(context.triangles, context.vertices.size());
+        context.inputTwiceHandles = 0 == context.inputTopology.nonManifoldEdges
+            ? twiceHandleCount(context.vertices.size(), context.triangles)
+            : -1;
+        context.inputBoundary = QuadExtractor::findBoundary(context.vertices, context.triangles);
+        context.featureEdges = FeatureEdgeSet();
+        context.markedEdges.clear();
+        context.followMarks = false;
+    };
+    const auto envelopeEuler = [&](const EnvelopeResult& envelope) {
+        return surfaceTopology(envelope.triangles, envelope.vertices.size()).eulerCharacteristic;
+    };
+    // The bound's envelope: the smallest closing radius whose envelope the
+    // island's quads can hold, else the largest that builds.
+    const auto applyEnvelope = [&](IslandContext& context) {
+        EnvelopeResult envelope;
+        double used = 0.0;
+        for (double radius = envelopeClosingRadius; radius <= maximumEnvelopeClosingRadius * 1.0001; radius *= envelopeClosingGrowth) {
+            EnvelopeResult attempt;
+            if (!envelopeAt(context, radius, &attempt))
+                continue;
+            envelope = std::move(attempt);
+            used = radius;
+            const long long euler = envelopeEuler(envelope);
+            if (euler >= 0 || context.targetQuadCount >= minimumQuadsPerNegativeEuler * (double)(-euler))
+                break;
+        }
+        if (!(used > 0.0))
+            return false;
+        useEnvelope(context, std::move(envelope), used);
+        return true;
     };
 
     // The island's sharp edges with its followed marks as hard edges
@@ -1339,6 +2049,13 @@ bool AutoRemesher::remeshIslands()
         context.followMarks = false;
         ++sliverIslands;
     }
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                if (needsEnvelope(islandContexes[i]))
+                    applyEnvelope(islandContexes[i]);
+            }
+        });
     for (auto& context : islandContexes)
         applyMarkedEdgeDensity(context);
     auto t_buildEnd = std::chrono::high_resolution_clock::now();
@@ -1368,6 +2085,8 @@ bool AutoRemesher::remeshIslands()
     struct IslandRun {
         std::vector<Vector3> decimatedVertices;
         std::vector<std::vector<size_t>> decimatedTriangles;
+        // Where the isotropic remesh kept conical tips (TODO 2.23).
+        std::vector<Vector3> conicalTips;
         std::vector<std::vector<Vector2>> capturedUvs;
         std::vector<std::vector<Vector2>> capturedOriginalUvs;
         std::vector<uint8_t> capturedExtractedConnectionMoved;
@@ -1406,7 +2125,7 @@ bool AutoRemesher::remeshIslands()
         resample(ctx.vertices, ctx.triangles, ctx.inputTopology, ctx.voxelSize, ctx.adaptivity,
             ctx.sharpEdgeDegrees, run.isotropicFeatureEdges, &sharpEdgeStats, ctx.smoothNormalDegrees, islandIndex, stats,
             &adaptiveFieldTime, &isotropicProgress,
-            &run.decimatedVertices, &run.decimatedTriangles);
+            &run.decimatedVertices, &run.decimatedTriangles, &run.conicalTips);
         auto t1 = std::chrono::high_resolution_clock::now();
         run.resampleUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
         resampleTime += run.resampleUs;
@@ -1439,9 +2158,10 @@ bool AutoRemesher::remeshIslands()
         run.features.set("set_input_edges", (double)ctx.featureEdges.size());
         run.features.set("set_decimated_edges", (double)sharpEdgeStats.decimatedEdges);
         run.features.set("set_decimation_dropped", (double)sharpEdgeStats.decimationDropped);
-        run.features.set("set_flipped", (double)sharpEdgeStats.flipped);
+        run.features.set("set_filtered", (double)sharpEdgeStats.filtered);
         run.features.set("set_t_carried", (double)sharpEdgeStats.carried);
         run.features.set("set_t_classified", (double)sharpEdgeStats.classified);
+        run.features.set("set_t_short", (double)sharpEdgeStats.tShort);
         run.features.set("set_t_edges", (double)run.isotropicFeatureEdges.size());
         run.features.set("set_t_length_rel_h", featureEdgeLength(run.isotropicFeatureEdges, ctx.vertices) / h);
         ctx.isotropicMarkedEdgeCount = (size_t)std::count_if(run.isotropicFeatureEdges.flags.begin(),
@@ -1475,6 +2195,7 @@ bool AutoRemesher::remeshIslands()
         parameterizer.setGradientAdaptivity(ctx.adaptivity);
         parameterizer.setAnisotropy(ctx.anisotropy);
         parameterizer.setSharpEdgeDegrees(ctx.sharpEdgeDegrees);
+        parameterizer.setConicalTips(&run.conicalTips);
         parameterizer.setFeatureEdges(&run.isotropicFeatureEdges);
         bool parameterizeSucceeded = true;
         try {
@@ -1517,6 +2238,8 @@ bool AutoRemesher::remeshIslands()
             QuadExtractor extractor(&vertices, &triangles, uvs.get());
             extractor.setOriginalTriangleUvs(&run.capturedOriginalUvs);
             extractor.setSingularVertices(&run.capturedSingularVertexIndices);
+            extractor.setFeatureEdges(&run.isotropicFeatureEdges);
+            extractor.setConicalTips(&run.conicalTips);
             extractor.setInputBoundary(&ctx.inputBoundary);
             extractor.setUseQex(m_useQex);
             extractor.setTangentialSmoothing(m_tangentialQuadSmoothing);
@@ -1554,6 +2277,15 @@ bool AutoRemesher::remeshIslands()
                 }
                 run.remeshedVertices = extractor.remeshedVertices();
                 run.remeshedQuads = extractor.remeshedQuads();
+                // The quad vertices on T's hard edges (guides, marks) before
+                // projection moves them: relax() keeps them (TODO 5.7).
+                std::vector<char> pinned;
+                if (!run.isotropicFeatureEdges.empty()) {
+                    const double meanLength = featureEdgeLength(run.isotropicFeatureEdges, vertices)
+                        / run.isotropicFeatureEdges.size();
+                    pinned = pointsOnFeatureEdges(run.remeshedVertices, run.isotropicFeatureEdges, vertices,
+                        FeatureEdgeSet::Hard, QuadExtractor::kPinnedToleranceOfEdge * meanLength);
+                }
                 // The extractor leaves the output on T; this puts it on the
                 // island's own input faces (TODO 2.8).
                 const auto projectStart = std::chrono::high_resolution_clock::now();
@@ -1563,7 +2295,8 @@ bool AutoRemesher::remeshIslands()
                     creases.edges.emplace_back(ctx.inputVertices[edge.first], ctx.inputVertices[edge.second]);
                 creases.flags = islandCreases.flags;
                 creases.normalize();
-                SurfaceProjector projector(&m_vertices, &trianglesIslands[islandIndex], &creases);
+                SurfaceProjector projector(ctx.enveloped ? &ctx.envelopeVertices : &m_vertices,
+                    ctx.enveloped ? &ctx.envelopeTriangles : &trianglesIslands[islandIndex], &creases);
                 const auto projection = projector.project(&run.remeshedVertices, run.remeshedQuads);
                 DiagnosticRecord record("surface_projection");
                 record.set("vertices", (double)projection.vertices);
@@ -1579,7 +2312,8 @@ bool AutoRemesher::remeshIslands()
                 // uneven; even the quads out again along M, with the
                 // vertices next to creases put onto them.
                 const auto relaxStart = std::chrono::high_resolution_clock::now();
-                const auto relaxation = projector.relax(&run.remeshedVertices, run.remeshedQuads, surfaceRelaxIterations);
+                const auto relaxation = projector.relax(&run.remeshedVertices, run.remeshedQuads, surfaceRelaxIterations,
+                    &pinned);
                 DiagnosticRecord relaxRecord("surface_relax");
                 relaxRecord.set("snapped", (double)relaxation.snapped);
                 relaxRecord.set("snap_folding", (double)relaxation.snapFolding);
@@ -1588,6 +2322,20 @@ bool AutoRemesher::remeshIslands()
                 relaxRecord.set("kept_folding", (double)relaxation.keptFolding);
                 relaxRecord.set("seconds", std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - relaxStart).count());
                 run.diagnostics.push_back(std::move(relaxRecord));
+                if (ctx.enveloped) {
+                    // The envelope lies a quarter quad outside the input;
+                    // where the input faces the same way within reach (not
+                    // the back of a single-sided sheet's slab, not a closed
+                    // gap) the vertices go back onto it.
+                    const SurfaceProjector input(&m_vertices, &trianglesIslands[islandIndex]);
+                    const auto onInput = input.project(&run.remeshedVertices, run.remeshedQuads);
+                    DiagnosticRecord inputRecord("input_projection");
+                    inputRecord.set("projected", (double)onInput.projected);
+                    inputRecord.set("kept_unmatched", (double)onInput.keptUnmatched);
+                    inputRecord.set("kept_far", (double)onInput.keptFar);
+                    inputRecord.set("kept_folding", (double)onInput.keptFolding);
+                    run.diagnostics.push_back(std::move(inputRecord));
+                }
             }
         }
         updateProgress(islandIndex, 1.0f);
@@ -1605,6 +2353,158 @@ bool AutoRemesher::remeshIslands()
         });
     auto t_isotropicEnd = std::chrono::high_resolution_clock::now();
     throwIfCancelled();
+
+    // The plan: each island is parameterized as in a run up to the
+    // continuous cover solve, whose map gives the quad edge of every face of
+    // T (the cover realises only part of the size field it is asked for, so
+    // the field alone mispredicts, docs/PREVIEW.md §4.5).  Smoothed, and
+    // carried to the input vertices by the nearest vertex of T (which lies on
+    // the input within its own edge length), or fitted where the input is
+    // coarser than T (transferPlannedEdges()).
+    if (m_planOnly) {
+        m_planIslands.assign(islandContexes.size(), PlanIsland());
+        m_planVertexEdgeLengths.assign(givenVertexCount, 0.0f);
+        m_planVertexIslands.assign(givenVertexCount, NoPlanIsland);
+        for (size_t i = 0; i < islandContexes.size(); ++i) {
+            const auto& ctx = islandContexes[i];
+            auto& island = m_planIslands[i];
+            island.areaShare = totalIslandArea > 0.0 ? ctx.area / totalIslandArea : 0.0;
+            island.plannedQuads = ctx.targetQuadCount;
+            island.floorQuads = 0.5 * std::min(minimumIslandTriangleCount, (double)trianglesIslands[i].size());
+            island.leftOut = ctx.leftOut;
+        }
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t i = range.begin(); i != range.end(); ++i) {
+                    const auto& ctx = islandContexes[i];
+                    const auto& island = trianglesIslands[i];
+                    if (ctx.leftOut || ctx.vertices.empty() || ctx.triangles.empty()) {
+                        for (const auto& triangle : island) {
+                            for (const size_t v : triangle) {
+                                if (v < givenVertexCount)
+                                    m_planVertexIslands[v] = (uint32_t)i;
+                            }
+                        }
+                        continue;
+                    }
+                    Parameterizer parameterizer(&ctx.vertices, &ctx.triangles, nullptr);
+                    if (ctx.scaling > 0.0)
+                        parameterizer.setScaling(ctx.scaling);
+                    parameterizer.setTargetQuadCount(ctx.targetQuadCount);
+                    parameterizer.setGradientAdaptivity(ctx.adaptivity);
+                    parameterizer.setAnisotropy(ctx.anisotropy);
+                    parameterizer.setSharpEdgeDegrees(ctx.sharpEdgeDegrees);
+                    parameterizer.setFeatureEdges(&islandRuns[i].isotropicFeatureEdges);
+                    // A plan has no extraction: the solve fills the rest of the bar.
+                    parameterizer.setProgressHandler(makeStageProgress(i, islandResampleEnd, 1.0f, 0.0f));
+                    std::vector<double> faceEdges;
+                    parameterizer.setPlanFaceEdges(&faceEdges);
+                    bool solved = false;
+                    try {
+                        solved = parameterizer.parameterize();
+                    } catch (const RemeshCancelled&) {
+                        throw;
+                    } catch (const std::exception&) {
+                        // As in a run: the island falls back, the plan goes on.
+                    }
+                    // Without a cover, what the cover is asked for.
+                    if (!solved || faceEdges.size() != ctx.triangles.size())
+                        faceEdges = parameterizer.plannedFaceEdgeLengths();
+                    for (auto& edge : faceEdges) {
+                        // Faces the map degenerates on take their neighbours' value.
+                        if (!(edge > 0.0) || !std::isfinite(edge))
+                            edge = 0.0;
+                    }
+                    // Area-weighted mean of the faces around each vertex of T.
+                    std::vector<double> sum(ctx.vertices.size(), 0.0);
+                    std::vector<double> weight(ctx.vertices.size(), 0.0);
+                    for (size_t f = 0; f < ctx.triangles.size(); ++f) {
+                        const auto& t = ctx.triangles[f];
+                        const double area = Vector3::area(ctx.vertices[t[0]], ctx.vertices[t[1]], ctx.vertices[t[2]]);
+                        if (!(faceEdges[f] > 0.0))
+                            continue;
+                        for (const size_t v : t) {
+                            sum[v] += area * faceEdges[f];
+                            weight[v] += area;
+                        }
+                    }
+                    smoothPlannedEdges(ctx.vertices, ctx.triangles, faceEdges, &sum, &weight);
+                    std::vector<Vector3> sites;
+                    std::vector<double> siteEdges;
+                    sites.reserve(ctx.vertices.size());
+                    siteEdges.reserve(ctx.vertices.size());
+                    for (size_t v = 0; v < ctx.vertices.size(); ++v) {
+                        if (weight[v] > 0.0) {
+                            sites.push_back(ctx.vertices[v]);
+                            siteEdges.push_back(sum[v] / weight[v]);
+                        }
+                    }
+                    if (sites.empty()) {
+                        for (const auto& triangle : island) {
+                            for (const size_t v : triangle) {
+                                if (v < givenVertexCount && NoPlanIsland == m_planVertexIslands[v])
+                                    m_planVertexIslands[v] = (uint32_t)i;
+                            }
+                        }
+                        continue;
+                    }
+                    double tEdgeSum = 0.0;
+                    for (const auto& t : ctx.triangles) {
+                        for (size_t k = 0; k < 3; ++k)
+                            tEdgeSum += (ctx.vertices[t[k]] - ctx.vertices[t[(k + 1) % 3]]).length();
+                    }
+                    const double tEdge = tEdgeSum / (3.0 * (double)ctx.triangles.size());
+                    std::vector<size_t> vertexIds;
+                    const std::vector<double> edges = transferPlannedEdges(sites, siteEdges, tEdge, m_vertices, island, &vertexIds);
+                    for (size_t k = 0; k < vertexIds.size(); ++k) {
+                        const size_t v = vertexIds[k];
+                        if (v < givenVertexCount && NoPlanIsland == m_planVertexIslands[v]) {
+                            m_planVertexIslands[v] = (uint32_t)i;
+                            m_planVertexEdgeLengths[v] = (float)edges[k];
+                        }
+                    }
+                }
+            });
+        // Vertices no face uses any more (the cleanup merged them, or they
+        // never had one) take the values of the nearest planned vertex.
+        std::vector<Vector3> sites;
+        std::vector<size_t> siteIndices;
+        std::vector<Vector3> queries;
+        std::vector<size_t> queryIndices;
+        for (size_t v = 0; v < givenVertexCount; ++v) {
+            if (NoPlanIsland != m_planVertexIslands[v]) {
+                sites.push_back(m_vertices[v]);
+                siteIndices.push_back(v);
+            } else {
+                queries.push_back(m_vertices[v]);
+                queryIndices.push_back(v);
+            }
+        }
+        if (!sites.empty() && !queries.empty()) {
+            const std::vector<size_t> nearest = nearestSites(sites, queries);
+            for (size_t k = 0; k < queries.size(); ++k) {
+                m_planVertexEdgeLengths[queryIndices[k]] = m_planVertexEdgeLengths[siteIndices[nearest[k]]];
+                m_planVertexIslands[queryIndices[k]] = m_planVertexIslands[siteIndices[nearest[k]]];
+            }
+        }
+        m_islandCount = islandContexes.size();
+        DiagnosticRecord record("plan");
+        double plannedQuads = 0.0;
+        for (const auto& island : m_planIslands)
+            plannedQuads += island.plannedQuads;
+        record.set("islands", (double)islandContexes.size());
+        record.set("sliver_islands", (double)sliverIslands);
+        record.set("planned_quads", plannedQuads);
+        record.set("input_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(t_voxelStart - t_start).count());
+        record.set("islands_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(t_buildEnd - t_voxelStart).count());
+        record.set("transfer_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - t_isotropicEnd).count());
+        record.set("resample_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(t_isotropicEnd - t_buildEnd).count());
+        record.set("total_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - t_start).count());
+        m_diagnostics.push_back(std::move(record));
+        if (nullptr != m_progressHandler)
+            m_progressHandler(m_tag, 1.0f, "");
+        return true;
+    }
     const size_t isotropicPeakRss = peakResidentSetBytes();
 
     // Parts thinner than one quad at the requested count, on each island's
@@ -1637,6 +2537,11 @@ bool AutoRemesher::remeshIslands()
     // even at the minimum size above. Such an island is run again at a
     // slightly higher count, a few times; it is small, so this costs little.
     auto t_retryStart = std::chrono::high_resolution_clock::now();
+    // The check below measures at the quad width the island was planned
+    // with, not at the finer one a retry grew it to.
+    std::vector<double> plannedQuadCounts(islandContexes.size());
+    for (size_t i = 0; i < islandContexes.size(); ++i)
+        plannedQuadCounts[i] = islandContexes[i].targetQuadCount;
     std::vector<size_t> islandsToRetry;
     for (size_t i = 0; i < islandContexes.size(); ++i) {
         const auto& ctx = islandContexes[i];
@@ -1664,6 +2569,11 @@ bool AutoRemesher::remeshIslands()
                     buildIslandContext(i, ctx);
                     ctx.voxelSize = voxelSize;
                     ctx.targetQuadCount = targetQuadCount;
+                    if (islandContexes[i].enveloped) {
+                        EnvelopeResult envelope;
+                        if (envelopeAt(ctx, islandContexes[i].envelopeRadius, &envelope))
+                            useEnvelope(ctx, std::move(envelope), islandContexes[i].envelopeRadius);
+                    }
                     applyMarkedEdgeDensity(ctx);
                     IslandRun run;
                     resampleIsland(i, ctx, run, &retryDecimationStats);
@@ -1691,35 +2601,41 @@ bool AutoRemesher::remeshIslands()
             }
         });
 
+    // A run is faithful if it is healthy, keeps the island's Euler
+    // characteristic (no hole closed or cut) and has at least half the
+    // planned quads (a collapsed island leaves a 2-quad pillow).
+    const auto isFaithful = [](const IslandRun& run, const IslandContext& ctx) {
+        const size_t quads = (size_t)std::count_if(run.remeshedQuads.begin(), run.remeshedQuads.end(),
+            [](const std::vector<size_t>& face) { return 4 == face.size(); });
+        return isHealthyIslandResult(ctx.inputTopology, run.remeshedVertices, run.remeshedQuads)
+            && surfaceTopology(run.remeshedQuads, run.remeshedVertices.size()).eulerCharacteristic == ctx.inputTopology.eulerCharacteristic
+            && (double)quads >= 0.5 * ctx.targetQuadCount;
+    };
+    const auto badFaces = [&isFaithful](const IslandRun& run, bool* faithful, const IslandContext& ctx) {
+        RemeshMesh mesh;
+        for (const auto& v : run.remeshedVertices) {
+            mesh.positions.push_back(v.x());
+            mesh.positions.push_back(v.y());
+            mesh.positions.push_back(v.z());
+        }
+        for (const auto& face : run.remeshedQuads) {
+            mesh.faceSizes.push_back((uint32_t)face.size());
+            for (size_t v : face)
+                mesh.faceIndices.push_back((uint32_t)v);
+        }
+        QualityReport report;
+        measureMesh(mesh, &report);
+        *faithful = isFaithful(run, ctx);
+        return report.foldedFaceCount + report.nonQuadCount + report.degenerateFaceCount;
+    };
     // Marked edges the quads cannot follow (a mark across the field that
     // creases set, many short lines that cross; TODO 5.2) fold the result.
-    // Such an island is run again without its marks.  A run is faithful if
-    // it is healthy, keeps the island's Euler characteristic (no hole closed
-    // or cut) and has at least half the planned quads.  A faithful run beats
+    // Such an island is run again without its marks.  A faithful run beats
     // one that is not; between two alike the one with fewer folded faces and
     // non-quads is kept, and a tie, or 2 faces more, keeps the marks.  Only
     // islands with marks and such a defect pay for the second run.
     std::vector<char> markedEdgesDropped(islandContexes.size(), 0);
     if (!m_markedEdges.empty()) {
-        const auto badFaces = [](const IslandRun& run, bool* faithful, const IslandContext& ctx) {
-            RemeshMesh mesh;
-            for (const auto& v : run.remeshedVertices) {
-                mesh.positions.push_back(v.x());
-                mesh.positions.push_back(v.y());
-                mesh.positions.push_back(v.z());
-            }
-            for (const auto& face : run.remeshedQuads) {
-                mesh.faceSizes.push_back((uint32_t)face.size());
-                for (size_t v : face)
-                    mesh.faceIndices.push_back((uint32_t)v);
-            }
-            QualityReport report;
-            measureMesh(mesh, &report);
-            *faithful = isHealthyIslandResult(ctx.inputTopology, run.remeshedVertices, run.remeshedQuads)
-                && surfaceTopology(run.remeshedQuads, run.remeshedVertices.size()).eulerCharacteristic == ctx.inputTopology.eulerCharacteristic
-                && (double)report.quadCount >= 0.5 * ctx.targetQuadCount;
-            return report.foldedFaceCount + report.nonQuadCount + report.degenerateFaceCount;
-        };
         tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
             [&](const tbb::blocked_range<size_t>& range) {
                 for (size_t i = range.begin(); i != range.end(); ++i) {
@@ -1757,6 +2673,260 @@ bool AutoRemesher::remeshIslands()
             });
     }
     m_markedEdgesDroppedIslandCount = (size_t)std::count(markedEdgesDropped.begin(), markedEdgesDropped.end(), 1);
+
+    // Sharp edges classified on T lock the cross field to their direction.
+    // Where T bevels a crease into a zigzag, the locked directions disagree a
+    // little with each other, every disagreement is a cone pair, and on a
+    // coarse island the map can collapse a handle or the whole island
+    // (csg_bracket at 1k quads: handles lost in 7 of 10 runs, none without
+    // the locks; research/why-behind-2026-10-31.md section 3).  An island
+    // whose run is not faithful (as for marks above) is run again without
+    // its sharp edges; its marks, if still followed, stay hard edges.  The
+    // run without them is kept only if it is faithful, so a guard that
+    // does not help changes nothing.  Islands without sharp edges on T, or
+    // with a faithful run, pay nothing; nor do islands with a non-manifold
+    // input (below).
+    std::vector<char> sharpEdgesDropped(islandContexes.size(), 0);
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                // On a non-manifold input the Euler characteristic says nothing
+                // about the output's holes or handles (isHealthyIslandResult
+                // skips it too), so the test would trade creases for nothing
+                // (sculpt_dirty: crease coverage 0.58 -> 0.06, no topology gain).
+                // An enveloped island is remeshed from its envelope, which has
+                // no sharp edges, and its holes and handles are the
+                // envelope's, not the input's.
+                if (islandContexes[i].leftOut || islandContexes[i].enveloped
+                    || !sharpEdgesEnabled(islandContexes[i].sharpEdgeDegrees)
+                    || 0 != islandContexes[i].inputTopology.nonManifoldEdges)
+                    continue;
+                const auto& flags = islandRuns[i].isotropicFeatureEdges.flags;
+                if (std::none_of(flags.begin(), flags.end(),
+                        [](unsigned char f) { return 0 == (f & FeatureEdgeSet::Hard); }))
+                    continue;
+                if (isFaithful(islandRuns[i], islandContexes[i]))
+                    continue;
+                IslandContext ctx;
+                buildIslandContext(i, ctx);
+                ctx.voxelSize = islandContexes[i].voxelSize;
+                ctx.targetQuadCount = islandContexes[i].targetQuadCount;
+                ctx.markedEdges = islandContexes[i].markedEdges;
+                ctx.followMarks = islandContexes[i].followMarks;
+                ctx.markedEdgeDensity = islandContexes[i].markedEdgeDensity;
+                ctx.markedEdgesTooDense = islandContexes[i].markedEdgesTooDense;
+                ctx.sharpEdgeDegrees = 180.0;
+                ctx.featureEdges = FeatureEdgeSet();
+                IslandRun run;
+                resampleIsland(i, ctx, run, &retryDecimationStats);
+                parameterizeIsland(i, ctx, run);
+                const bool drop = isFaithful(run, ctx);
+                IslandRun& dropped = drop ? islandRuns[i] : run;
+                IslandRun& kept = drop ? run : islandRuns[i];
+                for (auto& record : dropped.diagnostics) {
+                    if (record.stage == "extractor")
+                        kept.diagnostics.push_back(std::move(record.label("superseded", "yes")));
+                }
+                if (drop) {
+                    ctx.inputMarkedEdgeCount = islandContexes[i].inputMarkedEdgeCount;
+                    islandContexes[i] = std::move(ctx);
+                    islandRuns[i] = std::move(run);
+                    sharpEdgesDropped[i] = 1;
+                } else {
+                    sharpEdgesDropped[i] = 2;
+                }
+            }
+        });
+    // Runs after the passes without marks and without sharp edges: those
+    // remesh the input itself, so an island they make faithful keeps its
+    // exact surface and skips the check below (a closed input that comes
+    // out closed with its own Euler characteristic), and one they leave
+    // unfaithful is still checked here.  The envelope costs up to three
+    // runs and moves output off the input (slab backs, closed gaps).
+    // Islands with holes or handles that came out unfaithful are tried on
+    // their envelope (maximumUnfaithfulShare).  A result's share is the
+    // input farther than a quad from it plus its area more than half a quad
+    // off the input; a torn result (several pieces, non-manifold edges, a
+    // boundary on a closed input) or one with more than
+    // maximumUnfaithfulQuadRatio or fewer than minimumFaithfulQuadRatio times
+    // its quads counts brokenUnfaithfulShare more, and an empty one counts 1.
+    const auto unfaithfulShare = [&](size_t i, const IslandContext& ctx, const IslandRun& run, bool* broken, double* lost) {
+        *broken = true;
+        *lost = 1.0;
+        if (run.remeshedQuads.empty())
+            return 1.0;
+        *broken = false;
+        const double quadWidth = std::sqrt(ctx.area / std::min(ctx.targetQuadCount, plannedQuadCounts[i]));
+        std::vector<std::vector<size_t>> outputTriangles;
+        outputTriangles.reserve(2 * run.remeshedQuads.size());
+        size_t quads = 0;
+        for (const auto& face : run.remeshedQuads) {
+            quads += 4 == face.size() ? 1 : 0;
+            for (size_t k = 2; k < face.size(); ++k)
+                outputTriangles.push_back({ face[0], face[k - 1], face[k] });
+        }
+        const size_t maximumSamples = std::max<size_t>(maximumUnfaithfulSamples,
+            (size_t)(unfaithfulSamplesPerQuad * ctx.targetQuadCount));
+        const SurfaceProjector output(&run.remeshedVertices, &outputTriangles);
+        const SurfaceProjector input(&m_vertices, &trianglesIslands[i]);
+        *lost = fartherAreaShare(m_vertices, trianglesIslands[i], output, quadWidth, 0.5 * quadWidth, maximumSamples);
+        double share = *lost
+            + fartherAreaShare(run.remeshedVertices, outputTriangles, input, 0.5 * quadWidth, 0.5 * quadWidth, maximumSamples);
+        const SurfaceTopology topology = surfaceTopology(run.remeshedQuads, run.remeshedVertices.size());
+        const bool closedInput = 0 == ctx.originalTopology.boundaryEdges && 0 == ctx.originalTopology.nonManifoldEdges;
+        if (1 != topology.components || 0 != topology.nonManifoldEdges || (closedInput && 0 != topology.boundaryEdges)) {
+            share += brokenUnfaithfulShare;
+            *broken = true;
+        }
+        if ((double)quads > maximumUnfaithfulQuadRatio * ctx.targetQuadCount
+            || (double)quads < minimumFaithfulQuadRatio * ctx.targetQuadCount) {
+            share += brokenUnfaithfulShare;
+            *broken = true;
+        }
+        return share;
+    };
+    std::atomic<size_t> islandsEnvelopedAfterCheck(0);
+    std::atomic<long long> envelopeCheckUs(0);
+    std::atomic<size_t> envelopeCheckRuns(0);
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t i = range.begin(); i != range.end(); ++i) {
+                if (islandContexes[i].leftOut || !(islandContexes[i].targetQuadCount > 0.0) || !(islandContexes[i].area > 0.0)
+                    || islandContexes[i].originalTopology.eulerCharacteristic >= 0)
+                    continue;
+                throwIfCancelled();
+                const auto checkStart = std::chrono::high_resolution_clock::now();
+                // A closed input whose result is one closed piece of the same
+                // Euler characteristic, at no more than twice its quads, kept
+                // its holes and handles; measuring it would only cost time.
+                const SurfaceTopology original = islandContexes[i].originalTopology;
+                if (!islandContexes[i].enveloped && 0 == original.boundaryEdges && 0 == original.nonManifoldEdges
+                    && isHealthyIslandResult(original, islandRuns[i].remeshedVertices, islandRuns[i].remeshedQuads)) {
+                    size_t quads = 0;
+                    for (const auto& face : islandRuns[i].remeshedQuads)
+                        quads += 4 == face.size() ? 1 : 0;
+                    if ((double)quads <= maximumUnfaithfulQuadRatio * islandContexes[i].targetQuadCount)
+                        continue;
+                }
+                bool broken = false;
+                double firstLost = 0.0;
+                const double first = unfaithfulShare(i, islandContexes[i], islandRuns[i], &broken, &firstLost);
+                islandContexes[i].firstUnfaithfulShare = first;
+                double lastEnvelopeShare = -1.0;
+                // Other ways to remesh the island are tried while the kept
+                // result is unfaithful, and the most faithful one is kept:
+                // its envelope at each closing radius and, for an island the
+                // bound enveloped, the island itself.  On a closed input an
+                // envelope that closes nothing still helps (it thickens
+                // strands thinner than a quad), so every radius is tried
+                // except one whose envelope has the topology of the last one
+                // tried.  On an open input an envelope that closes nothing
+                // is a slab over the sheet (twice its Euler characteristic)
+                // and breaks as the input did, so only radii that close more
+                // than the last one tried are run.  Closing grows with the
+                // radius: if the largest closes nothing on an open input, no
+                // radius is tried.  An open input whose result is whole and
+                // loses at most maximumUnfaithfulShare of the input (its
+                // share is mostly output off the input) is not tried at all:
+                // a slab's run there can cost 20-30 times the input's and
+                // only moves output around (an open tube with 128 holes:
+                // 45-60 s against 1-3 s, 0.2-0.8 % lost either way;
+                // research/handle-heavy-check-disprover-4-2026-11-07.md).
+                // An island the bound enveloped is tried other ways only if
+                // its result is broken: the bound already says its own quads
+                // cannot hold its handles.
+                const bool openInput = 0 != original.boundaryEdges || 0 != original.nonManifoldEdges;
+                if (first > maximumUnfaithfulShare && (!islandContexes[i].enveloped || broken)
+                    && !(openInput && !broken && firstLost <= maximumUnfaithfulShare)) {
+                    const bool closedInput = 0 == original.boundaryEdges && 0 == original.nonManifoldEdges;
+                    const bool boundEnveloped = islandContexes[i].enveloped;
+                    const double boundRadius = boundEnveloped ? islandContexes[i].envelopeRadius : 0.0;
+                    IslandContext base;
+                    buildIslandContext(i, base);
+                    base.voxelSize = islandContexes[i].voxelSize;
+                    base.targetQuadCount = islandContexes[i].targetQuadCount;
+                    std::vector<double> radii;
+                    for (double radius = envelopeClosingRadius; radius <= maximumEnvelopeClosingRadius * 1.0001; radius *= envelopeClosingGrowth)
+                        radii.push_back(radius);
+                    EnvelopeResult largest;
+                    const bool haveLargest = envelopeAt(base, radii.back(), &largest);
+                    long long lastRunEuler = closedInput ? std::numeric_limits<long long>::min() : 2 * original.eulerCharacteristic;
+                    double best = first;
+                    // Runs one way (radius 0: the island itself) and keeps
+                    // it if it is more faithful by envelopeShareMargin.
+                    const auto tryRun = [&](IslandContext&& ctx) {
+                        applyMarkedEdgeDensity(ctx);
+                        IslandRun run;
+                        resampleIsland(i, ctx, run, &retryDecimationStats);
+                        parameterizeIsland(i, ctx, run);
+                        ++envelopeCheckRuns;
+                        bool runBroken = false;
+                        double runLost = 0.0;
+                        const double share = unfaithfulShare(i, ctx, run, &runBroken, &runLost);
+                        if (ctx.enveloped)
+                            lastEnvelopeShare = share;
+                        const bool replace = share + envelopeShareMargin < best;
+                        IslandRun& dropped = replace ? islandRuns[i] : run;
+                        IslandRun& kept = replace ? run : islandRuns[i];
+                        for (auto& record : dropped.diagnostics) {
+                            if (record.stage == "extractor")
+                                kept.diagnostics.push_back(std::move(record.label("superseded", "yes")));
+                        }
+                        if (!replace)
+                            return;
+                        if (ctx.enveloped && !islandContexes[i].enveloped)
+                            ++islandsEnvelopedAfterCheck;
+                        // The run without sharp edges kept above is replaced.
+                        if (1 == sharpEdgesDropped[i])
+                            sharpEdgesDropped[i] = 2;
+                        ctx.inputMarkedEdgeCount = islandContexes[i].inputMarkedEdgeCount;
+                        ctx.firstUnfaithfulShare = first;
+                        islandContexes[i] = std::move(ctx);
+                        islandRuns[i] = std::move(run);
+                        best = share;
+                    };
+                    if (boundEnveloped) {
+                        IslandContext ctx;
+                        buildIslandContext(i, ctx);
+                        ctx.voxelSize = base.voxelSize;
+                        ctx.targetQuadCount = base.targetQuadCount;
+                        tryRun(std::move(ctx));
+                    }
+                    const bool anyClosed = closedInput || (haveLargest && envelopeEuler(largest) > lastRunEuler);
+                    for (size_t k = 0; k < radii.size() && anyClosed && best > maximumUnfaithfulShare; ++k) {
+                        EnvelopeResult envelope;
+                        if (k + 1 == radii.size()) {
+                            if (!haveLargest)
+                                break;
+                            envelope = std::move(largest);
+                        } else if (!envelopeAt(base, radii[k], &envelope)) {
+                            continue;
+                        }
+                        const long long euler = envelopeEuler(envelope);
+                        const bool alreadyRun = boundEnveloped && std::abs(radii[k] - boundRadius) < 1e-6 * boundRadius;
+                        if (alreadyRun || !(euler > lastRunEuler)) {
+                            lastRunEuler = std::max(lastRunEuler, euler);
+                            continue;
+                        }
+                        lastRunEuler = euler;
+                        IslandContext ctx;
+                        buildIslandContext(i, ctx);
+                        ctx.voxelSize = base.voxelSize;
+                        ctx.targetQuadCount = base.targetQuadCount;
+                        useEnvelope(ctx, std::move(envelope), radii[k]);
+                        tryRun(std::move(ctx));
+                    }
+                }
+                islandContexes[i].envelopeUnfaithfulShare = lastEnvelopeShare;
+                envelopeCheckUs += std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::high_resolution_clock::now() - checkStart)
+                                       .count();
+            }
+        });
+    m_sharpEdgesDroppedIslandCount = (size_t)std::count(sharpEdgesDropped.begin(), sharpEdgesDropped.end(), 1);
+    m_envelopedIslandCount = 0;
+    for (const auto& ctx : islandContexes)
+        m_envelopedIslandCount += ctx.enveloped ? 1 : 0;
     m_markedEdgesTooDenseIslandCount = 0;
     for (const auto& ctx : islandContexes)
         m_markedEdgesTooDenseIslandCount += ctx.markedEdgesTooDense ? 1 : 0;
@@ -1842,14 +3012,14 @@ bool AutoRemesher::remeshIslands()
     m_remeshedIslands.reserve(islandRuns.size());
     for (size_t i = 0; i < islandRuns.size(); ++i) {
         const auto& run = islandRuns[i];
-        const auto& input = islandContexes[i].inputTopology;
+        const auto& input = islandContexes[i].originalTopology;
         RemeshedIsland island;
         island.closedInput = 0 == input.boundaryEdges && 0 == input.nonManifoldEdges;
         island.targetQuads = islandContexes[i].targetQuadCount;
         if (!run.remeshedQuads.empty()) {
             island.vertexCount = run.remeshedVertices.size();
             island.faceCount = run.remeshedQuads.size();
-            island.inputTwiceHandles = islandContexes[i].inputTwiceHandles;
+            island.inputTwiceHandles = islandContexes[i].originalTwiceHandles;
             if (island.inputTwiceHandles >= 0)
                 island.outputTwiceHandles = twiceHandleCount(run.remeshedVertices.size(), run.remeshedQuads);
         }
@@ -2022,6 +3192,7 @@ bool AutoRemesher::remeshIslands()
         run.set("decimated_triangles_before", (double)decimationStats.trianglesBefore.load());
         run.set("decimated_triangles_after", (double)decimationStats.trianglesAfter.load());
         run.set("undecimated_islands", (double)decimationStats.islandsKeptUndecimated.load());
+        run.set("conical_tips", (double)decimationStats.conicalTips.load());
         run.set("input_merged_vertices", (double)cleanup.mergedVertices);
         run.set("input_dropped_triangles", (double)cleanup.droppedTriangles);
         run.set("input_cleanup_kept_parts", (double)cleanup.keptParts);
@@ -2031,6 +3202,7 @@ bool AutoRemesher::remeshIslands()
         run.set("input_welded_edges", (double)cleanup.weldedEdges);
         run.set("input_welded_vertices", (double)cleanup.weldedVertices);
         run.set("input_weld_kept_parts", (double)cleanup.weldKeptParts);
+        run.set("input_repeated_corner_triangles", (double)cleanup.repeatedCornerTriangles);
         run.set("input_duplicate_triangles", (double)cleanup.duplicateTriangles);
         run.set("input_split_vertices", (double)cleanup.splitVertices);
         run.set("input_sliver_islands", (double)sliverIslands);
@@ -2087,6 +3259,10 @@ bool AutoRemesher::remeshIslands()
             run.set("thin_parts_ms", milliseconds(std::chrono::duration_cast<std::chrono::microseconds>(t_thinPartsEnd - t_isotropicEnd).count()));
         }
         run.set("retried_islands", (double)islandsToRetry.size());
+        run.set("enveloped_islands", (double)m_envelopedIslandCount);
+        run.set("enveloped_after_check_islands", (double)islandsEnvelopedAfterCheck.load());
+        run.set("envelope_check_runs", (double)envelopeCheckRuns.load());
+        run.set("envelope_check_ms", milliseconds(envelopeCheckUs.load()));
         run.set("repaired_islands", (double)islandsRepaired.load());
         m_diagnostics.push_back(std::move(run));
 
@@ -2114,8 +3290,20 @@ bool AutoRemesher::remeshIslands()
             record.set("input_triangles", (double)trianglesIslands[i].size());
             record.set("target_quads", islandContexes[i].targetQuadCount);
             record.set("isotropic_triangles", (double)islandContexes[i].triangles.size());
-            record.set("input_boundary_edges", (double)islandContexes[i].inputTopology.boundaryEdges);
-            record.set("input_non_manifold_edges", (double)islandContexes[i].inputTopology.nonManifoldEdges);
+            record.set("input_boundary_edges", (double)islandContexes[i].originalTopology.boundaryEdges);
+            record.set("input_non_manifold_edges", (double)islandContexes[i].originalTopology.nonManifoldEdges);
+            record.set("input_euler_characteristic", (double)islandContexes[i].originalTopology.eulerCharacteristic);
+            record.set("enveloped", islandContexes[i].enveloped ? 1.0 : 0.0);
+            if (islandContexes[i].firstUnfaithfulShare >= 0.0)
+                record.set("unfaithful_share", islandContexes[i].firstUnfaithfulShare);
+            if (islandContexes[i].envelopeUnfaithfulShare >= 0.0)
+                record.set("envelope_unfaithful_share", islandContexes[i].envelopeUnfaithfulShare);
+            if (islandContexes[i].enveloped) {
+                record.set("envelope_closing_radius", islandContexes[i].envelopeRadius);
+                record.set("envelope_cell_size", islandContexes[i].envelopeCellSize);
+                record.set("envelope_triangles", (double)islandContexes[i].envelopeTriangles.size());
+                record.set("envelope_dropped_triangles", (double)islandContexes[i].envelopeDroppedTriangles);
+            }
             record.set("decimated_boundary_edges", (double)islandRun.decimatedTopology.boundaryEdges);
             record.set("decimated_non_manifold_edges", (double)islandRun.decimatedTopology.nonManifoldEdges);
             record.set("isotropic_boundary_edges", (double)islandRun.isotropicTopology.boundaryEdges);
@@ -2131,6 +3319,8 @@ bool AutoRemesher::remeshIslands()
             record.set("output_quads", (double)quads);
             record.set("thin_area_share", thinParts[i].area > 0.0 ? thinParts[i].thinArea / thinParts[i].area : 0.0);
             record.set("thin_spots", (double)thinParts[i].spots);
+            // 0: not tried, 1: run without sharp edges kept, 2: tried, not faithful either.
+            record.set("sharp_edges_dropped", (double)sharpEdgesDropped[i]);
             if (!m_markedEdges.empty()) {
                 record.set("marked_edges", (double)islandContexes[i].inputMarkedEdgeCount);
                 record.set("isotropic_marked_edges", (double)islandContexes[i].isotropicMarkedEdgeCount);

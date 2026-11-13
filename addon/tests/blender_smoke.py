@@ -38,6 +38,9 @@ import types
 import addon_utils
 import bpy
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blender_checks  # noqa: E402
+
 installed = "--installed" in (sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
 if installed:
     # The id is the extension's folder name; read it from the source tree.
@@ -47,12 +50,15 @@ if installed:
     addon_utils.enable(module_name, default_set=True, handle_error=None)
     addon = sys.modules[module_name]
     names = importlib.import_module(module_name + ".names")
+    density_module = importlib.import_module(module_name + ".density")
     report = importlib.import_module(module_name + ".report")
     worker = importlib.import_module(module_name + ".worker")
+    guide_tool = importlib.import_module(module_name + ".guide_tool")
 else:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     import quadami as addon  # noqa: E402
-    from quadami import names, report, worker  # noqa: E402
+    from quadami import density as density_module  # noqa: E402
+    from quadami import guide_tool, names, report, worker  # noqa: E402
 
     addon.register()
 try:
@@ -101,7 +107,7 @@ try:
     mesh.attributes.new("crease_edge", "FLOAT", "EDGE").data.foreach_set("value", [0.5 * e for e in equator])
     bpy.context.view_layer.update()
 
-    positions, triangles, smooth, marked, flooded = addon._mesh_arrays(bpy.context, source, {"SHARP"})
+    positions, triangles, smooth, marked, flooded, _guide_edges = addon._mesh_arrays(bpy.context, source, {"SHARP"})
     assert positions.shape[1] == 3 and triangles.shape[1] == 3, (positions.shape, triangles.shape)
     assert len(triangles) == 128 * 2 + 128 * 62 * 2, len(triangles)
     assert smooth
@@ -119,6 +125,14 @@ try:
     flood.attributes.new("sharp_edge", "BOOLEAN", "EDGE").data.foreach_set("value", [True] * len(flood.edges))
     assert addon._flooded_marks(flood, addon._mark_counts(flood), {"SHARP"}) == ["SHARP"], len(flood.edges)
     assert addon._flood_warning(["SHARP"]).startswith("Follow Marks left out Sharp")
+    # Both the panel line and the warning say how to clear the imported marks.
+    assert "Edge > Clear Sharp" in addon._flood_warning(["SHARP"]) and "Outliner" in addon._flood_warning(["SHARP"])
+    hint = addon._flood_hint(["SHARP", "SEAM"])
+    assert "Clear Sharp and Edge > Clear Seam" in hint and "Outliner" not in hint, hint
+    flooded_object = bpy.data.objects.new("Flood", flood)
+    line = addon._mark_line(flooded_object, {"SHARP"})
+    assert "not followed" in line[0] and "Edge > Mark Sharp" in line[1], line
+    bpy.data.objects.remove(flooded_object)
     # Nor are such marks copied onto the result (zigzag paths all over it).
     assert "sharp" in addon.transfer.marked_edges(flood) and "sharp" not in addon.transfer.copied_marks(flood)
     assert "sharp" in addon.transfer.copied_marks(mesh)
@@ -145,6 +159,8 @@ try:
     if installed:
         # package.py copies the bundled program's id, so the panel shows no mismatch.
         assert build != "dev" and worker.worker_build_id(executable) == build, build
+        # And it is the commit CI checked out, with nothing uncommitted.
+        blender_checks.check_build(build)
     outcome = worker.remesh(executable, positions, triangles, settings.parameters(), marked_edges=marked)
     assert outcome.ok, (outcome.status, outcome.message, outcome.log)
     assert outcome.report["input"]["feature_edges"] == 128, outcome.report["input"]
@@ -159,6 +175,7 @@ try:
     assert len(obj.data.polygons) == output["faces"], (len(obj.data.polygons), output)
     assert quads == output["quads"], (quads, output)
     assert len(obj.data.vertices) == output["vertices"]
+    blender_checks.check_quad_count(output, settings.target_quads)
     assert all(polygon.use_smooth for polygon in obj.data.polygons)
     assert obj.parent == rig and obj.users_collection == source.users_collection == (parts,)
     assert max(abs(a - b) for row_a, row_b in zip(obj.matrix_world, source.matrix_world)
@@ -243,11 +260,112 @@ try:
     assert copied.startswith("Quadami report\nResult: Done\n"), copied
     assert "follow_marks=SHARP" in copied and "target_quads=2000" in copied and "test warning" in copied, copied
     assert "Blender: " + bpy.app.version_string in copied and "Full report: " in copied, copied
+    assert "Add-on build: %s\n" % build in copied, copied
+    assert not installed or "Remesher build: same\n" in copied, copied
+    blender_checks.check_copy_report(copied, final_report)
     assert addon.OBJECT_OT_copy_report.poll(bpy.context)
     bpy.context.view_layer.objects.active = source
     source.scale = (1.0, 1.0, 3.0)
     bpy.context.view_layer.update()
     assert "scaled unevenly" in panel_labels()
+    source.scale = (1.0, 1.0, 1.0)
+    bpy.context.view_layer.update()
+
+    # Density preview: the source planned, shown, and Change sets Target Quads
+    # within the plan's range; another setting or a mesh edit takes it down.
+    positions, triangles, smooth, marked, flooded, _guide_edges = addon._mesh_arrays(bpy.context, source, settings.follow_marks)
+    planned = worker.remesh(executable, positions, triangles, settings.parameters(), marked_edges=marked, plan=True)
+    assert planned.ok and len(planned.plan.edge) == len(positions), (planned.status, planned.message, planned.log)
+    assert planned.plan.quads == settings.target_quads == 2000
+    density_module.show(density_module.Preview(source.name, density_module.settings_key(settings), planned.plan,
+                                               positions, triangles, planned.report))
+    settings.preview_change = 10.0
+    assert settings.target_quads == 2200, settings.target_quads
+    labels = panel_labels()
+    assert "quads planned" in labels and "Quad edge" in labels, labels
+    assert addon._overlay_state() == (2200, True)
+    settings.target_quads = 1800
+    assert abs(settings.preview_change + 10.0) < 1e-6, settings.preview_change
+    settings.target_quads = 4500
+    assert addon._overlay_state() is None and "outside the preview" in panel_labels()
+    settings.target_quads = 2000
+    adaptivity = settings.adaptivity
+    settings.adaptivity = 0.7 if adaptivity != 0.7 else 0.3
+    assert addon._overlay_state() is None and "Settings changed" in panel_labels()
+    settings.adaptivity = adaptivity
+    assert addon._overlay_state() == (2000, True)
+    mesh.vertices[0].co.x += 0.01
+    mesh.update()
+    bpy.context.view_layer.update()
+    assert density_module.current() is None, "a mesh edit drops the plan"
+
+    # Guides (guide_tool.py). Draw Guide's modal handler, driven with
+    # stand-ins for the viewport: each click picks the next vertex of a ring
+    # tilted across the sphere's rings, and the last click lands on the
+    # first point, which closes the loop.
+    import numpy as np
+    from mathutils import Vector
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=64, ring_count=32, location=(5.0, 0.0, 0.0))
+    sphere = bpy.context.active_object
+    assert guide_tool.OBJECT_OT_quadami_draw_guide.poll(bpy.context)
+    coordinates = np.empty(len(sphere.data.vertices) * 3)
+    sphere.data.vertices.foreach_get("co", coordinates)
+    coordinates = coordinates.reshape(-1, 3)
+    normal = np.array([0.0, 0.5, 0.866])
+    across = np.cross(normal, [1.0, 0.0, 0.0])
+    clicks = []
+    for angle in np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False):
+        point = np.cos(angle) * np.array([1.0, 0.0, 0.0]) + np.sin(angle) * across
+        clicks.append(int(np.argmin(np.linalg.norm(coordinates - point, axis=1))))
+    tool_class = guide_tool.OBJECT_OT_quadami_draw_guide
+
+    class Stroke:
+        pass
+
+    for name in ("modal", "_add_point", "_near_first", "_finish", "_cancel", "_end", "_world",
+                 "draft_points", "draft_lines", "_over_controls"):
+        setattr(Stroke, name, tool_class.__dict__[name])
+    stroke = Stroke()
+    messages = []
+    stroke.report = lambda kind, text: messages.append(text)
+    stroke._object = sphere
+    stroke._positions = coordinates
+    stroke._edges = guide_tool._edge_vertices(sphere.data)
+    stroke._graph = guide_tool.guides.EdgeGraph(coordinates, stroke._edges)
+    stroke._lifted = coordinates
+    stroke._matrix = sphere.matrix_world.copy()
+    stroke._points, stroke._legs, stroke._last_mouse, stroke._dragging = [], [], None, False
+    pending = iter(clicks)
+    stroke._vertex_under = lambda context, event: next(pending)
+    stroke._screen = lambda context, vertex: Vector((10.0, 10.0)) if vertex == clicks[0] else Vector((500.0, 500.0))
+    area = types.SimpleNamespace(header_text_set=lambda text: None, tag_redraw=lambda: None)
+    viewport = types.SimpleNamespace(area=area, view_layer=bpy.context.view_layer, space_data=None,
+                                     region=types.SimpleNamespace(width=1000, height=800),
+                                     preferences=bpy.context.preferences)
+
+    def event(kind, value, x=300, y=300):
+        return types.SimpleNamespace(type=kind, value=value, alt=False, ctrl=False, mouse_region_x=x, mouse_region_y=y)
+
+    for _ in clicks:
+        assert stroke.modal(viewport, event("LEFTMOUSE", "PRESS")) == {"RUNNING_MODAL"}
+        stroke.modal(viewport, event("LEFTMOUSE", "RELEASE"))
+    assert len(stroke._points) == len(clicks) and len(stroke.draft_lines()) == 2 * sum(map(len, stroke._legs))
+    assert stroke.modal(viewport, event("LEFTMOUSE", "PRESS", 12, 9)) == {"FINISHED"}, messages
+    assert guide_tool.guide_counts(sphere.data) == (1, 0), guide_tool.guide_counts(sphere.data)
+    # Remesh sends the guide whatever Follow Marks says.
+    sent = addon._mesh_arrays(bpy.context, sphere, set())
+    assert len(sent[3]) == len(guide_tool.guide_pairs(sphere.data)) == sent[5] > 0
+    labels = panel_labels()
+    assert "Guides: 1 loop" in labels, labels
+    # Edit Mode: Clear Guide on every selected edge removes it, Mark Guide adds them back.
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    assert bpy.ops.object.quadami_mark_guide(clear=True) == {"FINISHED"}
+    bpy.ops.object.mode_set(mode="OBJECT")
+    assert guide_tool.guide_counts(sphere.data) == (0, 0)
+    assert bpy.ops.object.quadami_clear_guides.poll()
+    assert bpy.ops.object.quadami_clear_guides() == {"FINISHED"}
+    assert sphere.data.attributes.get(guide_tool.GUIDE) is None
     print("blender_smoke: OK, Blender %s" % bpy.app.version_string)
 finally:
     if installed:
