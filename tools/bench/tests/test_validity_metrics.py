@@ -279,6 +279,13 @@ class Validity(unittest.TestCase):
         v = self.run_metrics(self.torus_in(), join(self.torus_out(), crumb))["validity"]
         self.assertEqual((v["islands_split"], v["handles_lost"], v["handles_added"]), (1, 0.0, 0.0))
 
+    def test_extra_piece_with_a_handle_adds_none(self):
+        # A second, tiny ring on the torus: a split island can hold another island's output piece, so
+        # handles are added only on islands kept in one piece.
+        ring = grid(12, 6, True, True, lambda u, v: torus_point(u, v, R=0.02, r=0.005, shift=1.3))
+        v = self.run_metrics(self.torus_in(), join(self.torus_out(), ring))["validity"]
+        self.assertEqual((v["islands_split"], v["handles_lost"], v["handles_added"]), (1, 0.0, 0.0))
+
     def pinched_tori_in(self):
         # Two tori sharing one vertex: A's outer equator point (u = 0, v = 0) is B's inner one.
         A = self.torus_in()

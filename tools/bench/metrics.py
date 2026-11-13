@@ -53,8 +53,9 @@ named *_rel_edge, which are relative to the output mean edge length):
               changed, output manifold). The input's topology is taken
               after splitting pinched vertices per fan, as the core's input
               cleanup does (input_split_pinched_vertices; also for the global
-              *_input numbers). Handles count over all output pieces of an
-              island, so a split that cuts a handle loses it. Input islands
+              *_input numbers). Handles lost count over all output pieces of
+              an island, so a split that cuts a handle loses it; handles
+              added only on islands kept in one piece. Input islands
               with an edge of three or more triangles have no right topology:
               they are counted in islands_input_non_manifold and left out of
               the topology counts (a dropped one still counts as dropped)
@@ -664,9 +665,11 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
            "islands_topology_changed": int(changed.sum()),
            "holes_added": int(np.sum(np.maximum(loops_sum - in_loops, 0)[kept])),
            "holes_closed": int(np.sum(np.maximum(in_loops - loops_sum, 0)[kept])),
-           # Genus summed over the island's output pieces: a split that cuts a handle loses it.
+           # Lost: genus summed over all of the island's output pieces, so a split that cuts a handle
+           # loses it. Added: only islands kept in one piece, since a split island can also hold
+           # pieces of a neighbour's output (majority vote), which add genus but never remove it.
            "handles_lost": float(np.sum(np.maximum(g2_in - g2_out, 0)[kept]) / 2),
-           "handles_added": float(np.sum(np.maximum(g2_out - g2_in, 0)[kept]) / 2),
+           "handles_added": float(np.sum(np.maximum(g2_out - g2_in, 0)[kept & (k == 1)]) / 2),
            "area_uncovered": uncovered, "area_uncovered_any_island": uncovered_any, "area_wrong_side": wrong,
            "island_coverage_min": float(cov.min()) if nin else None}
     if nin <= 32:
