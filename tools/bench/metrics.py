@@ -919,10 +919,13 @@ def input_side(input_path, cache_dir=None):
     # Topology (islands, Euler characteristic, loops, non-manifold) on the input with pinched vertices
     # split per fan, as the core splits them before it remeshes: a correct output has them split too,
     # and an island with a pinch is judged rather than skipped. Positions stay on Vin's indices (Fin).
+    # Triangles with a repeated vertex are left out, as the core removes them first (an a a b triangle
+    # would otherwise join split fans again and add a boundary edge).
     Ft, pinched = split_pinched_vertices(Fin, len(Vin))
     nvt = len(Vin) + pinched
-    used_t = np.unique(Ft)
-    ein_all = np.sort(np.concatenate([Ft[:, [0, 1]], Ft[:, [1, 2]], Ft[:, [2, 0]]]), axis=1)
+    Fk = Ft[(Ft[:, 0] != Ft[:, 1]) & (Ft[:, 1] != Ft[:, 2]) & (Ft[:, 2] != Ft[:, 0])]
+    used_t = np.unique(Fk)
+    ein_all = np.sort(np.concatenate([Fk[:, [0, 1]], Fk[:, [1, 2]], Fk[:, [2, 0]]]), axis=1)
     ein_u, ein_c = np.unique(ein_all, axis=0, return_counts=True)
     ein = ein_u
     # Islands (vertex-connected parts) with their own Euler characteristic, boundary loops and area.
@@ -931,7 +934,7 @@ def input_side(input_path, cache_dir=None):
     vlab = np.zeros(nvt, np.int64)
     vlab[used_t] = island_of_used.ravel()
     nisl = int(vlab[used_t].max()) + 1 if len(used_t) else 0
-    island_euler, island_loops = island_topology(nvt, Ft[:, 0], ein, ein_u[ein_c == 1], used_t, vlab, nisl)
+    island_euler, island_loops = island_topology(nvt, Fk[:, 0], ein, ein_u[ein_c == 1], used_t, vlab, nisl)
     tri_area = 0.5 * np.linalg.norm(np.cross(Vin[Fin[:, 1]] - Vin[Fin[:, 0]], Vin[Fin[:, 2]] - Vin[Fin[:, 0]]), axis=1)
     Fin_oriented, reoriented, nonorientable = orient_like_core(Vin, Fin)
     # Islands that are not a 2-manifold in the input after the pinch split (an edge of 3+ triangles):
@@ -946,7 +949,7 @@ def input_side(input_path, cache_dir=None):
     d = {"Vin": Vin, "Fin": Fin, "used_in": used_in, "input_welded_vertices": np.int64(welded),
          "diag": np.float64(np.linalg.norm(Vin[used_in].max(0) - Vin[used_in].min(0))),
          "input_split_pinched_vertices": np.int64(pinched),
-         "euler_input": np.int64(len(used_t) - len(ein) + len(Fin)),
+         "euler_input": np.int64(len(used_t) - len(ein) + len(Fk)),
          "components_input": np.int64(nisl),
          "boundary_loops_input": np.int64(loops(nvt, ein_u[ein_c == 1])),
          "sharp_edges": sharp, "sharp_angles": sharp_edge_angles(Vin, Fin_oriented, sharp),

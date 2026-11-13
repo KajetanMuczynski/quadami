@@ -305,6 +305,14 @@ class Validity(unittest.TestCase):
         self.assertEqual((v["islands_input"], v["islands_input_non_manifold"]), (2, 0))
         self.assertTrue(v["islands_same_as_input"])
 
+    def test_repeated_vertex_triangle_does_not_join_a_split_pinch(self):
+        # An a a b triangle at the pinch (the core drops it before splitting) leaves the two tori apart.
+        V, F = self.pinched_tori_in()
+        F = F + [[0, 0, 1]]
+        r = self.run_metrics((V, F), join(self.torus_out(), self.torus_out(shift=2.0)))
+        self.assertTrue(r["topology"]["same_as_input"])
+        self.assertEqual(r["validity"]["islands_input"], 2)
+
     def test_pinched_input_island_damage_is_counted(self):
         # The same input, one torus cut open: a pinch no longer hides the island from the topology checks.
         cut = grid(40, 16, False, True, lambda u, v: torus_point(0.98 * u, v, shift=2.0))
