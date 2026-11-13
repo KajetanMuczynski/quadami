@@ -187,6 +187,15 @@ namespace {
     // island's quads, for the check below while results stay unfaithful.
     const double envelopeClosingGrowth = 1.5;
     const double maximumEnvelopeClosingRadius = 2.25;
+    // A lace finer than the quads (a weave of strands or a perforated
+    // plate thinner than a quad) can stay broken at every radius up to
+    // that: closing a hole of width s in a sheet takes a radius of about
+    // s^2 / (8 offset), so in quad widths it grows with the target.  An island
+    // whose kept result is still unfaithful by brokenUnfaithfulShare or more
+    // then grows the radius on, up to this many quad widths, while its
+    // envelope keeps holes or handles: a slab with the lace filled in beats
+    // an island that is torn, empty or a quarter lost.
+    const double maximumBrokenEnvelopeClosingRadius = 17.1;
     // The bound is necessary, not sufficient: above it the map of a
     // perforated plate or a net still breaks, up to about 6|chi|, and its
     // output can be a handful of quads (research/envelope-disprover-2026-11-05.md).
@@ -2914,6 +2923,25 @@ bool AutoRemesher::remeshIslands()
                         ctx.voxelSize = base.voxelSize;
                         ctx.targetQuadCount = base.targetQuadCount;
                         useEnvelope(ctx, std::move(envelope), radii[k]);
+                        tryRun(std::move(ctx));
+                    }
+                    // Still as bad as a broken result: close more, until the envelope is one
+                    // closed piece without handles (Euler characteristic 2).
+                    for (double radius = radii.back() * envelopeClosingGrowth;
+                         best >= brokenUnfaithfulShare && lastRunEuler < 2 && radius <= maximumBrokenEnvelopeClosingRadius * 1.0001;
+                         radius *= envelopeClosingGrowth) {
+                        EnvelopeResult envelope;
+                        if (!envelopeAt(base, radius, &envelope))
+                            continue;
+                        const long long euler = envelopeEuler(envelope);
+                        if (!(euler > lastRunEuler))
+                            continue;
+                        lastRunEuler = euler;
+                        IslandContext ctx;
+                        buildIslandContext(i, ctx);
+                        ctx.voxelSize = base.voxelSize;
+                        ctx.targetQuadCount = base.targetQuadCount;
+                        useEnvelope(ctx, std::move(envelope), radius);
                         tryRun(std::move(ctx));
                     }
                 }
