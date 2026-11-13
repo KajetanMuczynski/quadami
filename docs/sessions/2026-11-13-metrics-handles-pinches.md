@@ -7,7 +7,7 @@
   islands with a pinch are judged instead of skipped (audit 2026-11-05 #14). Islands with an edge of
   three or more triangles stay out of the topology counts.
 - Found: ext_happy 50k u0 split into two pieces and read handles_lost 0 (core: 93). An all-pieces
-  rule for handles added over-counts (ext_flighthelmet 16 vs core 0).
+  rule for handles added over-counts (ext_flighthelmet 4 per run vs core 0); triangles repeating a vertex are left out of the input topology like the core (verifier find).
 - Measured (identical master outputs, old vs new metrics, closed/corpus/sculpt/external/external_thin
   ×2 replicates, testonly 10k ×6, happy 50k ×6): handles lost/added equal the core's report on 500/500
   runs (old: 496); pinch split count equals the core's on 494/494. Corpus handles_lost 16 -> 20
