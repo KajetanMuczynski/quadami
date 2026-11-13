@@ -262,10 +262,16 @@ computed and no reference values (§7).
   loses clean runs or gains defects per 1k on the corpus geo-mean beyond noise (confirm with replicates
   when a count moves less than 1.5×); no soft metric worsens beyond the §2.4 margins. Anything else needs
   a reason in the PR and Kajetan's yes.
-- **Releases**: on every platform, the §3.2 ratchet; §3.1 on every run and replicate for 1.0, and
-  for 0.x previews (§6, decision 3) no §3.1 gate failing on every replicate of more cases than in
-  the previous release (a flip on some replicates only is noise, CLAUDE.md; strict §3.1 fails on master today: RELEASING.md, "Gaps"); for 1.0 also the §3.2 bar and the organic min
-  targets of §4. Checked by `release-check.yml` (`tools/bench/release_gate.py`).
+- **Releases** (TODO 1.16, 2026-11-12): against the previous release, per case (mesh, resolution,
+  target): candidate minus baseline count of each §3.2 defect and of the runs failing each §3.1 gate
+  and V6, summed over the replicates and pooled over the three platforms; a one-sided sign test over
+  the cases per measure and set, Holm at 0.05 over all of them. A Holm failure fails the release;
+  p < 0.05 before Holm is a lead to re-check with 5 replicates. Every candidate crash fails unless the
+  baseline crashed in that case too. For 1.0 also §3.1 on every run and replicate, the §3.2 bar and
+  the organic min targets of §4. The zero-tolerance aggregate ratchet this replaces failed 24 of 24
+  comparisons of one build with itself on another platform; the sign test fails none of 12 and finds
+  #82's valence regression (10/0 cases, research/platform-divergence-2026-10-26.md §5).
+  Checked by `release-check.yml` (`tools/bench/release_gate.py`).
 - **Gate 7.1** (proposal, for when 7.1 is decided): keep upgrading inside the current structure if,
   after 3.3, untangling and 4.1, the §3.2 1.0 bar holds on ≥ 95 % of corpus runs and the corpus meets
   the §4.1 and §4.2 minimums; otherwise start Stage B (7.2).
@@ -295,7 +301,8 @@ computed and no reference values (§7).
    throw away the fidelity lead.
 3. **Release bar** (§3.2): *accepted.* 0.x previews ship under the ratchet, since the add-on panel
    already reports non-quads and folded faces; 1.0 needs §3.1 everywhere and the §3.2 bar, including
-   fold-free organic and scan inputs.
+   fold-free organic and scan inputs. 2026-10-26 (TODO 1.16): the ratchet is decided per case with a
+   sign test pooled over platforms, not on aggregates (§5 "Releases").
 4. **Artist-side reference** (§7): *deferred* ("later"). When it is picked up: Quad Remesher's trial
    first (one month, runs in Blender on Linux [P], reportedly by ZRemesher's author [E]); ZBrush's
    14-day trial is non-commercial and Windows/macOS only [P], so it needs another machine. Read each
