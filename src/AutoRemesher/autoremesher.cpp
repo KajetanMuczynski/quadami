@@ -2047,6 +2047,7 @@ bool AutoRemesher::remeshIslands()
             QuadExtractor extractor(&vertices, &triangles, uvs.get());
             extractor.setOriginalTriangleUvs(&run.capturedOriginalUvs);
             extractor.setSingularVertices(&run.capturedSingularVertexIndices);
+            extractor.setFeatureEdges(&run.isotropicFeatureEdges);
             extractor.setConicalTips(&run.conicalTips);
             extractor.setInputBoundary(&ctx.inputBoundary);
             extractor.setUseQex(m_useQex);
@@ -2085,6 +2086,15 @@ bool AutoRemesher::remeshIslands()
                 }
                 run.remeshedVertices = extractor.remeshedVertices();
                 run.remeshedQuads = extractor.remeshedQuads();
+                // The quad vertices on T's hard edges (guides, marks) before
+                // projection moves them: relax() keeps them (TODO 5.7).
+                std::vector<char> pinned;
+                if (!run.isotropicFeatureEdges.empty()) {
+                    const double meanLength = featureEdgeLength(run.isotropicFeatureEdges, vertices)
+                        / run.isotropicFeatureEdges.size();
+                    pinned = pointsOnFeatureEdges(run.remeshedVertices, run.isotropicFeatureEdges, vertices,
+                        FeatureEdgeSet::Hard, QuadExtractor::kPinnedToleranceOfEdge * meanLength);
+                }
                 // The extractor leaves the output on T; this puts it on the
                 // island's own input faces (TODO 2.8).
                 const auto projectStart = std::chrono::high_resolution_clock::now();
@@ -2110,7 +2120,8 @@ bool AutoRemesher::remeshIslands()
                 // uneven; even the quads out again along M, with the
                 // vertices next to creases put onto them.
                 const auto relaxStart = std::chrono::high_resolution_clock::now();
-                const auto relaxation = projector.relax(&run.remeshedVertices, run.remeshedQuads, surfaceRelaxIterations);
+                const auto relaxation = projector.relax(&run.remeshedVertices, run.remeshedQuads, surfaceRelaxIterations,
+                    &pinned);
                 DiagnosticRecord relaxRecord("surface_relax");
                 relaxRecord.set("snapped", (double)relaxation.snapped);
                 relaxRecord.set("snap_folding", (double)relaxation.snapFolding);

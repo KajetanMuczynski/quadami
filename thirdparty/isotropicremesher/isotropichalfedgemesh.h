@@ -32,6 +32,15 @@
 class IsotropicHalfedgeMesh
 {
 public:
+    // Bit of Halfedge::featureFlags for a hard (user-marked) edge; the same
+    // bit as AutoRemesher::FeatureEdgeSet::Hard.
+    static const unsigned char kHardFeature = 0x1;
+    // Hard edges between faces up to this far apart (cos 40 degrees) count
+    // as drawn on a smooth surface (isSmoothHardChainVertex): sculpt noise
+    // along a guide loop reaches 42 degrees at the 99th percentile on a
+    // 140k-triangle head, marked creases of hard-surface models are steeper.
+    static constexpr double kMinSmoothChainNormalDot = 0.76604444;
+
     struct Halfedge;
       
     struct Vertex
@@ -88,6 +97,10 @@ public:
         // The input chain the feature edge lies on, from 1 (featureCorners);
         // 0 for no feature edge.
         size_t featureChain = 0;
+        bool hard() const
+        {
+            return feature && 0 != (featureFlags & kHardFeature);
+        }
         size_t debugIndex = 0;
         Halfedge *_allocLink = nullptr;
     };
@@ -99,6 +112,18 @@ public:
     double averageEdgeLength();
     void breakEdge(Halfedge *halfedge);
     bool collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared);
+    // On exactly two feature edges, both hard, each between two faces whose
+    // normals are at least kMinSmoothChainNormalDot apart (cosine), and
+    // neither frozen, a corner nor pinned: a point of a hard line drawn on a
+    // smooth surface, such as a guide loop (TODO 5.7). A path of mesh edges
+    // zigzags at the input's edge scale; kept as it is, each kink becomes a
+    // cone of the cross field on the line, and the edge loop along it does
+    // not close. Such a vertex is no corner however far the line turns
+    // (featureCorners), is Taubin-smoothed in its tangent plane instead of
+    // slid along the line, and is projected onto the surface instead of onto
+    // the input's line (IsotropicRemesher). Sets the two neighbours on the
+    // line when given.
+    bool isSmoothHardChainVertex(Vertex *vertex, Vertex **first=nullptr, Vertex **second=nullptr);
     bool flipEdge(Halfedge *halfedge);
     // Flips the edge under a flat face, judged by the face across only.
     bool flipEdgeUnderFlatFace(Halfedge *halfedge);
