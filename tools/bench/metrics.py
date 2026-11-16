@@ -37,20 +37,28 @@ named *_rel_edge, which are relative to the output mean edge length):
               the old count against the file's own normals
   validity    per input island (vertex-connected part), matched to output
               islands by nearest input triangle: dropped (under half its area
-              within one output edge), split, merged (covered but without an
+              within one target edge of its own output), split, merged (covered but without an
               output island of its own),
               Euler characteristic / boundary loops changed, holes added or
               closed, handles lost or added (genus per island; a handle moved
               between islands shows here, not in same_as_input), non-manifold
               vertices, folded faces of any size (the CLI's folded_faces),
-              input area farther than one output edge from the output
-              (area_uncovered) or that near but under an output face facing the
+              input area farther than one target edge (the output's mean edge
+              without a target) from the output faces of its own island
+              (area_uncovered; area_uncovered_any_island: from every output
+              face, so the difference is area only another island's output
+              lies near), or that near but under an output face facing the
               other way (area_wrong_side: thin parts collapsed into one sheet,
               pleats), islands_same_as_input (none dropped, split, merged or
-              changed, output manifold). Input islands that are not manifold
-              themselves have no right topology: they are counted in
-              islands_input_non_manifold and left out of the topology counts
-              (a dropped one still counts as dropped)
+              changed, output manifold). The input's topology is taken
+              after splitting pinched vertices per fan, as the core's input
+              cleanup does (input_split_pinched_vertices; also for the global
+              *_input numbers). Handles lost count over all output pieces of
+              an island, so a split that cuts a handle loses it; handles
+              added only on islands kept in one piece. Input islands
+              with an edge of three or more triangles have no right topology:
+              they are counted in islands_input_non_manifold and left out of
+              the topology counts (a dropped one still counts as dropped)
   normal_deviation_deg  angle between output face and (oriented) input normal at the closest point (D3)
   distance    one-sided mean / max and two-sided Hausdorff on area samples
   symmetry    (with --sym-axis) input reflection error, output geometric
@@ -216,6 +224,45 @@ def nonmanifold_vertex_mask(faces, nv):
     np.add.at(fans, pairs[:, 0], 1)
     return fans > 1
 
+
+
+def split_pinched_vertices(F, nv):
+    """Triangles F with each pinched vertex split per fan, as the core's splitPinchedVertices
+    (inputsanitizer.cpp; written from that rule): corners of a vertex are in one fan when their
+    triangles share an edge from it (an edge of three or more triangles joins them too), and the fan
+    holding the vertex's lowest triangle keeps it. Returns the triangles on nv + added vertices and
+    the number added."""
+    if not len(F):
+        return F, 0
+    keep = (F[:, 0] != F[:, 1]) & (F[:, 1] != F[:, 2]) & (F[:, 2] != F[:, 0])  # core: isDegenerate
+    tri = np.repeat(np.flatnonzero(keep), 3)
+    k = np.tile(np.arange(3), int(keep.sum()))
+    v, nx, pv = F[tri, k], F[tri, (k + 1) % 3], F[tri, (k + 2) % 3]
+    c = np.arange(len(v))
+    keys = np.concatenate([v * nv + nx, v * nv + pv]).astype(np.int64)
+    cs = np.concatenate([c, c])
+    order = np.argsort(keys, kind="stable")
+    keys, cs = keys[order], cs[order]
+    same = keys[1:] == keys[:-1]
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    _, fan = connected_components(coo_matrix((np.ones(int(same.sum())), (cs[:-1][same], cs[1:][same])),
+                                             shape=(len(v), len(v))), directed=False)
+    # Per (vertex, fan): its lowest triangle; per vertex the fan with the lowest one keeps the vertex.
+    pair = v.astype(np.int64) * len(v) + fan
+    up, pinv = np.unique(pair, return_inverse=True)
+    low = np.full(len(up), np.iinfo(np.int64).max)
+    np.minimum.at(low, pinv, tri)
+    pv_of = up // len(v)
+    o = np.lexsort((low, pv_of))
+    first = np.ones(len(up), bool)
+    first[o[1:]] = pv_of[o[1:]] != pv_of[o[:-1]]
+    new_id = np.where(first, pv_of, 0)
+    extra = np.flatnonzero(~first)
+    new_id[extra] = nv + np.arange(len(extra))
+    out = F.copy()
+    out[tri, k] = new_id[pinv]
+    return out, int(len(extra))
 
 
 def edge_faces(faces):
@@ -446,14 +493,95 @@ def folded_faces(V, faces, sizes):
     return int(folded_mask(V, faces)[0].sum())
 
 
-def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, reversed_out, h, in_tri, d, out_face, Ftri):
+def own_island_distance(P, isl, d, out_face, votes, V, Ftri, tri_face):
+    """Distance from points P on input islands isl to the output faces that stand for the same island,
+    and the nearest such face. votes holds per output face the input island(s) it stands for, one
+    array per rule (validity: the input island nearest the face's centroid, and the majority of those
+    votes over the face's output island); a face stands for every island one of the rules names. Starts
+    from the distance d to the whole output and its nearest face out_face (None: computed here); a
+    point whose nearest face stands for another island is measured again against its own island's
+    faces only (inf when the island has none, i.e. it was dropped)."""
+    if d is None:
+        d, tri = point_to_mesh(P, V, Ftri)
+        out_face = tri_face[tri]
+    d, out_face = d.copy(), out_face.copy()
+    redo = np.flatnonzero(np.all([v[out_face] != isl for v in votes], axis=0))
+    if len(redo) == 0:
+        return d, out_face
+    n = int(max(max(v.max() for v in votes), isl.max())) + 2
+    tables = []
+    for v in votes:
+        tv = v[tri_face]
+        order = np.argsort(tv, kind="stable")
+        tables.append((order, np.searchsorted(tv[order], np.arange(n))))
+    for i in np.unique(isl[redo]):
+        pts = redo[isl[redo] == i]
+        own = np.unique(np.concatenate([order[bounds[i]:bounds[i + 1]] for order, bounds in tables]))
+        if len(own) == 0:
+            d[pts] = np.inf
+            continue
+        dd, t = point_to_mesh(P[pts], V, Ftri[own])
+        d[pts], out_face[pts] = dd, tri_face[own[t]]
+    return d, out_face
+
+
+def vertex_votes(faces, used, vertex_island, nv):
+    """Per output face, the input island most of its vertices are nearest to (-1 without a majority).
+    Output vertices lie on (or near) the input surface, while a face's centroid lies inside a curved
+    surface: with two layers closer than that sag (a thin shell, an eyeball in its socket) the
+    centroid's nearest triangle is often on the other layer, the vertices' rarely."""
+    lab = np.full(nv + 1, -2, np.int64)  # index nv: padding
+    lab[used] = vertex_island
+    m = max(len(f) for f in faces)
+    pad = np.full((len(faces), m), nv, np.int64)
+    for i, f in enumerate(faces):
+        pad[i, :len(f)] = f
+    L = lab[pad]
+    count = (L[:, :, None] == L[:, None, :]).sum(2)
+    count[L < 0] = 0
+    best = count.argmax(1)
+    n = (pad != nv).sum(1)
+    win = L[np.arange(len(faces)), best]
+    return np.where(2 * count[np.arange(len(faces)), best] > n, win, -1)
+
+
+def coincident_groups(Vin, Fin, tri_island, nin, diag):
+    """Per input island, a group label: islands lying on each other (at least half of the smaller
+    one's vertices on the other's, within 1e-7 of the diagonal) share one. Islands that only touch
+    along a seam stay apart."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    vis = np.full(len(Vin), -1, np.int64)
+    vis[Fin.ravel()] = np.repeat(tri_island, 3)
+    vi = np.flatnonzero(vis >= 0)
+    pairs = cKDTree(Vin[vi]).query_pairs(1e-7 * diag, output_type="ndarray")
+    if len(pairs) == 0:
+        return np.arange(nin)
+    a, b = vis[vi[pairs[:, 0]]], vis[vi[pairs[:, 1]]]
+    keep = a != b
+    if not keep.any():
+        return np.arange(nin)
+    lo, hi = np.minimum(a[keep], b[keep]), np.maximum(a[keep], b[keep])
+    key, cnt = np.unique(lo * nin + hi, return_counts=True)
+    lo, hi = key // nin, key % nin
+    size = np.bincount(vis[vi], minlength=nin)
+    on = 2 * cnt >= np.minimum(size[lo], size[hi])
+    if not on.any():
+        return np.arange(nin)
+    g = coo_matrix((np.ones(int(on.sum())), (lo[on], hi[on])), shape=(nin, nin))
+    return connected_components(g, directed=False)[1]
+
+
+def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, reversed_out, h, Pin, in_tri, d, out_face, Ftri,
+             tri_face, face_vote=None):
     """Validity per input island (TARGETS H2, H4, H5, V6 and the thin-part part of V3).
 
     Output islands are matched to input islands by the input triangle nearest to each output face's
-    centroid (majority). Coverage: an area sample of the input is covered when the output is within
-    h (output mean edge) of it, and on the wrong side when it is that near but the nearest output
-    face faces the other way (a thin part collapsed into one sheet, or a pleat). Islands with fewer
-    than 200 area samples are measured on up to 2000 of their triangles' centroids instead.
+    centroid (majority). Coverage: an area sample of the input is covered when an output face that
+    stands for its island (own_island_distance) is within h (one target edge) of it, and on the wrong
+    side when it is that near but the nearest such face faces the other way (a thin part collapsed
+    into one sheet, or a pleat). Islands with fewer than 200 area samples are measured on up to 2000
+    of their triangles' centroids instead.
     """
     from scipy.sparse import coo_matrix
 
@@ -474,29 +602,46 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
     chi_sum = np.bincount(major, weights=out_chi, minlength=nin).astype(np.int64)
     loops_sum = np.bincount(major, weights=out_loops, minlength=nin).astype(np.int64)
 
-    # Coverage per input island.
+    # Coverage per input island, by the output faces that stand for that island (own_island_distance):
+    # a dropped island next to another island's output is not covered by that output. A face stands
+    # for the island most of its vertices are nearest to, else its centroid (vertex_votes; so an output
+    # island spanning two merged input islands
+    # covers both) and for its output island's majority (so a small island's output whose faces lie
+    # nearer a neighbour, e.g. an eyelet on fabric, still covers it).
     nin_o = np.cross(Vin[Fo[:, 1]] - Vin[Fo[:, 0]], Vin[Fo[:, 2]] - Vin[Fo[:, 0]])
     sign = -1.0 if reversed_out else 1.0
+    vote = tri_island[cf] if face_vote is None else np.where(face_vote >= 0, face_vote, tri_island[cf])
+    # Islands lying exactly on each other (a double-sided sheet as two islands) cannot be told apart
+    # by nearest distance: the tie goes to one of them for every output face. They are covered as a
+    # group (and the wrong-side test below still sees an output that keeps one side only).
+    group = coincident_groups(Vin, Fin, tri_island, nin, inp["diag"])
+    votes = (group[vote], group[major[olab[first]]])
     if in_tri is None:  # input without area
         cov = np.ones(nin)
-        uncovered = wrong = 0.0
+        uncovered = uncovered_any = wrong = 0.0
     else:
+        isl = tri_island[in_tri]
+        uncovered_any = float(np.mean(d > h))
+        d, out_face = own_island_distance(Pin, group[isl], d, out_face, votes, V, Ftri, tri_face)
         near = d <= h
         opposite = sign * np.einsum("ij,ij->i", nin_o[in_tri], normals[out_face]) < 0
         uncovered = float(np.mean(~near))
         wrong = float(np.mean(near & opposite))
-        isl = tri_island[in_tri]
         n_s = np.bincount(isl, minlength=nin)
         cov = np.bincount(isl, weights=near, minlength=nin) / np.maximum(n_s, 1)
         rng = np.random.default_rng(1)
         area = 0.5 * np.linalg.norm(nin_o, axis=1)
-        for i in np.nonzero(n_s < 200)[0]:
-            tris = np.nonzero(tri_island == i)[0]
-            if len(tris) > 2000:
-                tris = rng.choice(tris, 2000, replace=False)
-            dd, _ = point_to_mesh(Vin[Fin[tris]].mean(1), V, Ftri)
+        small = np.nonzero(n_s < 200)[0]
+        if len(small):
+            pick = []
+            for i in small:
+                tris = np.nonzero(tri_island == i)[0]
+                pick.append(rng.choice(tris, 2000, replace=False) if len(tris) > 2000 else tris)
+            tris = np.concatenate(pick)
+            dd, _ = own_island_distance(Vin[Fin[tris]].mean(1), group[tri_island[tris]], None, None, votes, V, Ftri, tri_face)
             w = area[tris]
-            cov[i] = float(np.sum(w * (dd <= h)) / w.sum()) if w.sum() > 0 else float(np.mean(dd <= h))
+            for i, ix in zip(small, np.split(np.arange(len(tris)), np.cumsum([len(t) for t in pick])[:-1])):
+                cov[i] = float(np.sum(w[ix] * (dd[ix] <= h)) / w[ix].sum()) if w[ix].sum() > 0 else float(np.mean(dd[ix] <= h))
     # Dropped: under half of the island's area has output within h. Merged: no output island of its
     # own, but covered, i.e. joined to a neighbour's output island (a centroid vote alone would also
     # flag a small island that only touches a bigger one).
@@ -520,9 +665,12 @@ def validity(inp, V, faces, sizes, normals, E, bnd, used, vertex_comp, cf, rever
            "islands_topology_changed": int(changed.sum()),
            "holes_added": int(np.sum(np.maximum(loops_sum - in_loops, 0)[kept])),
            "holes_closed": int(np.sum(np.maximum(in_loops - loops_sum, 0)[kept])),
-           "handles_lost": float(np.sum(np.maximum(g2_in - g2_out, 0)[kept & (k == 1)]) / 2),
+           # Lost: genus summed over all of the island's output pieces, so a split that cuts a handle
+           # loses it. Added: only islands kept in one piece, since a split island can also hold
+           # pieces of a neighbour's output (majority vote), which add genus but never remove it.
+           "handles_lost": float(np.sum(np.maximum(g2_in - g2_out, 0)[kept]) / 2),
            "handles_added": float(np.sum(np.maximum(g2_out - g2_in, 0)[kept & (k == 1)]) / 2),
-           "area_uncovered": uncovered, "area_wrong_side": wrong,
+           "area_uncovered": uncovered, "area_uncovered_any_island": uncovered_any, "area_wrong_side": wrong,
            "island_coverage_min": float(cov.min()) if nin else None}
     if nin <= 32:
         res["per_island"] = [{"area_share": float(inp["island_area"][i] / max(inp["island_area"].sum(), 1e-300)),
@@ -768,21 +916,30 @@ def input_side(input_path, cache_dir=None):
     used_raw = np.unique(Fin)
     Fin, welded = weld_seams(Vin, Fin, np.linalg.norm(Vin[used_raw].max(0) - Vin[used_raw].min(0)) if len(used_raw) else 0.0)
     used_in = np.unique(Fin)
-    ein = np.unique(np.sort(np.concatenate([Fin[:, [0, 1]], Fin[:, [1, 2]], Fin[:, [2, 0]]]), axis=1), axis=0)
-    ein_all = np.sort(np.concatenate([Fin[:, [0, 1]], Fin[:, [1, 2]], Fin[:, [2, 0]]]), axis=1)
+    # Topology (islands, Euler characteristic, loops, non-manifold) on the input with pinched vertices
+    # split per fan, as the core splits them before it remeshes: a correct output has them split too,
+    # and an island with a pinch is judged rather than skipped. Positions stay on Vin's indices (Fin).
+    # Triangles with a repeated vertex are left out, as the core removes them first (an a a b triangle
+    # would otherwise join split fans again and add a boundary edge).
+    Ft, pinched = split_pinched_vertices(Fin, len(Vin))
+    nvt = len(Vin) + pinched
+    Fk = Ft[(Ft[:, 0] != Ft[:, 1]) & (Ft[:, 1] != Ft[:, 2]) & (Ft[:, 2] != Ft[:, 0])]
+    used_t = np.unique(Fk)
+    ein_all = np.sort(np.concatenate([Fk[:, [0, 1]], Fk[:, [1, 2]], Fk[:, [2, 0]]]), axis=1)
     ein_u, ein_c = np.unique(ein_all, axis=0, return_counts=True)
+    ein = ein_u
     # Islands (vertex-connected parts) with their own Euler characteristic, boundary loops and area.
-    lab = comps(len(Vin), ein)
-    _, island_of_used = np.unique(lab[used_in], return_inverse=True)
-    vlab = np.zeros(len(Vin), np.int64)
-    vlab[used_in] = island_of_used.ravel()
-    nisl = int(vlab[used_in].max()) + 1 if len(used_in) else 0
-    island_euler, island_loops = island_topology(len(Vin), Fin[:, 0], ein, ein_u[ein_c == 1], used_in, vlab, nisl)
+    lab = comps(nvt, ein)
+    _, island_of_used = np.unique(lab[used_t], return_inverse=True)
+    vlab = np.zeros(nvt, np.int64)
+    vlab[used_t] = island_of_used.ravel()
+    nisl = int(vlab[used_t].max()) + 1 if len(used_t) else 0
+    island_euler, island_loops = island_topology(nvt, Fk[:, 0], ein, ein_u[ein_c == 1], used_t, vlab, nisl)
     tri_area = 0.5 * np.linalg.norm(np.cross(Vin[Fin[:, 1]] - Vin[Fin[:, 0]], Vin[Fin[:, 2]] - Vin[Fin[:, 0]]), axis=1)
     Fin_oriented, reoriented, nonorientable = orient_like_core(Vin, Fin)
-    # Islands that are not a 2-manifold in the input (an edge of 3+ triangles, a pinched vertex): their
-    # topology has no right answer to compare against (sword blade with a glued-on fin).
-    bad_v = nonmanifold_vertex_mask(Fin, len(Vin))
+    # Islands that are not a 2-manifold in the input after the pinch split (an edge of 3+ triangles):
+    # their topology has no right answer to compare against (sword blade with a glued-on fin).
+    bad_v = np.zeros(nvt, bool)
     bad_v[ein_u[ein_c > 2].ravel()] = True
     island_nm = np.zeros(nisl, bool)
     island_nm[vlab[bad_v]] = True
@@ -791,13 +948,14 @@ def input_side(input_path, cache_dir=None):
     sharp = sharp_edges(Vin, Fin_oriented)
     d = {"Vin": Vin, "Fin": Fin, "used_in": used_in, "input_welded_vertices": np.int64(welded),
          "diag": np.float64(np.linalg.norm(Vin[used_in].max(0) - Vin[used_in].min(0))),
-         "euler_input": np.int64(len(used_in) - len(ein) + len(Fin)),
-         "components_input": np.int64(len(np.unique(comps(len(Vin), ein)[used_in]))),
-         "boundary_loops_input": np.int64(loops(len(Vin), ein_u[ein_c == 1])),
+         "input_split_pinched_vertices": np.int64(pinched),
+         "euler_input": np.int64(len(used_t) - len(ein) + len(Fk)),
+         "components_input": np.int64(nisl),
+         "boundary_loops_input": np.int64(loops(nvt, ein_u[ein_c == 1])),
          "sharp_edges": sharp, "sharp_angles": sharp_edge_angles(Vin, Fin_oriented, sharp),
          "marked_edges": read_obj_lines(input_path), "creases_90_raw": creases_90_raw,
-         "tri_island": vlab[Fin[:, 0]], "island_euler": island_euler, "island_loops": island_loops,
-         "island_non_manifold": island_nm, "island_area": np.bincount(vlab[Fin[:, 0]], weights=tri_area, minlength=nisl),
+         "tri_island": vlab[Ft[:, 0]], "island_euler": island_euler, "island_loops": island_loops,
+         "island_non_manifold": island_nm, "island_area": np.bincount(vlab[Ft[:, 0]], weights=tri_area, minlength=nisl),
          "Fin_oriented": Fin_oriented, "input_reoriented": np.int64(reoriented),
          "input_nonorientable_pieces": np.int64(nonorientable)}
     if path:
@@ -854,6 +1012,7 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
     out["topology"]["euler_output"] = int(len(used) - len(uniq) + len(faces))
     out["topology"]["euler_input"] = int(inp["euler_input"])
     out["topology"]["input_welded_vertices"] = int(inp["input_welded_vertices"])
+    out["topology"]["input_split_pinched_vertices"] = int(inp["input_split_pinched_vertices"])
     out["topology"]["components_input"] = int(inp["components_input"])
     t = out["topology"]
     t["boundary_loops"] = loops(len(V), bnd)
@@ -982,7 +1141,7 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
     cos_in = (-dots if reversed_out else dots) / np.maximum(np.linalg.norm(nin, axis=1) * np.linalg.norm(normals, axis=1), 1e-300)
     out["normal_deviation_deg"] = stats(np.degrees(np.arccos(np.clip(cos_in, -1, 1))))
     Pout = np.concatenate([sample_surface(V, Ftri, samples, rng), V[used]])
-    d_out, _ = point_to_mesh(Pout, Vin, Fin)
+    d_out, near_in = point_to_mesh(Pout, Vin, Fin)
     Pin_area, in_tri = sample_surface(Vin, Fin, samples, rng, with_faces=True)
     Pin = np.concatenate([Pin_area, Vin[rng.choice(used_in, min(len(used_in), samples))]])
     d_in, out_tri = point_to_mesh(Pin, V, Ftri)
@@ -992,12 +1151,33 @@ def compute(input_path, output_path, target_quads=None, sym_axis=None, sym_cente
                        "in_to_out_p99": float(np.percentile(d_in, 99) / diag),
                        # Output vertices (the tail of Pout): zero once they are projected onto the input.
                        "vertex_to_in_median": float(np.median(d_out[-len(used):]) / diag)}
-    out["validity"] = validity(inp, V, faces, sizes, normals, E, bnd, used, lab, cf, reversed_out, mean_edge,
-                               in_tri, d_in[:len(Pin_area)], tri_face[out_tri[:len(Pin_area)]], Ftri)
+    # Coverage threshold: one target edge (the side of a square of the input's area over the target
+    # quad count), so it is the same for both sides of an A/B; the output's own mean edge moved with the
+    # output (shattered or tiny-edge outputs read worse, dropping dense parts read better). The mean
+    # edge only when no target is given.
+    in_area = float(inp["island_area"].sum())
+    h_cov = float(np.sqrt(in_area / target_quads)) if target_quads and in_area > 0 else mean_edge
+    out["validity"] = validity(inp, V, faces, sizes, normals, E, bnd, used, lab, cf, reversed_out, h_cov,
+                               Pin_area, in_tri, d_in[:len(Pin_area)], tri_face[out_tri[:len(Pin_area)]], Ftri, tri_face,
+                               vertex_votes(faces, used, inp["tri_island"][near_in[-len(used):]], len(V)))
     # same_as_input per island: no island dropped (a part shrunk to a blob can keep its topology and
     # its own output island), changed its Euler characteristic or boundary loops, split or merged with
     # another, and the output is manifold at edges and vertices.
     vd = out["validity"]
+    vd["coverage_h_rel_diag"] = h_cov / diag
+    # Output islands facing against the oriented input (most of their area): faces_vs_input takes the
+    # smaller count over the whole output, so a reversed output, or a reversed island holding most of
+    # the faces, does not show there.
+    # Each face is judged against the oriented input normals nearest to its vertices (not to its
+    # centroid, which on a thin shell can be nearest the other layer, see vertex_votes).
+    vn = np.zeros((len(V), 3))
+    vn[used] = nin_unit = np.cross(Vin[Fo[near_in[-len(used):], 1]] - Vin[Fo[near_in[-len(used):], 0]],
+                                   Vin[Fo[near_in[-len(used):], 2]] - Vin[Fo[near_in[-len(used):], 0]])
+    vn[used] /= np.maximum(np.linalg.norm(nin_unit, axis=1, keepdims=True), 1e-300)
+    vdots = np.einsum("ij,ij->i", normals, np.array([vn[f].sum(0) for f in faces]))
+    f_isl = lab[[f[0] for f in faces]]
+    against = np.bincount(f_isl, weights=area * (vdots < 0)) > np.bincount(f_isl, weights=area * (vdots > 0))
+    vd["islands_reversed"] = int(against[np.unique(f_isl)].sum())
     vd["islands_same_as_input"] = bool(vd["islands_dropped"] == 0 and vd["islands_topology_changed"] == 0
                                        and vd["islands_merged"] == 0
                                        and vd["non_manifold_vertices"] == 0 and t["non_manifold_edges"] == 0)

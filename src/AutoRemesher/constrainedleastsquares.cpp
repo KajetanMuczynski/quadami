@@ -33,6 +33,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace AutoRemesher {
 namespace {
@@ -73,6 +74,115 @@ namespace {
         return count;
     }
 
+    // Eigen's simplicial LDL^T factor with one more operation: deleting a row
+    // and column of the factored matrix (Davis and Hager, "Row modifications
+    // of a sparse Cholesky factorization", SIAM J. Matrix Anal. Appl. 26,
+    // 2005). Holding a variable (fixVariables) turns its row and column of
+    // the normal matrix into the diagonal entry alone, and the greedy
+    // rounding holds a few dozen more per pass of a system with tens of
+    // thousands of unknowns; refactorising for that took 21-43 % of a
+    // remesh at 10k quads. With M = L D L^T permuted, deleting row k leaves
+    // L and D of the leading block alone, zeroes row and column k of L, and
+    // adds d_k l l^T (l = the old column k below the diagonal) to the
+    // trailing block, a rank-one update along the elimination-tree path of
+    // k (Gill, Golub, Murray and Saunders, method C1). Neither step adds a
+    // non-zero, so the symbolic analysis stays valid, and the result is the
+    // factor of the same held matrix a refactorisation would give, up to
+    // rounding.
+    class DeletableLDLT : public Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> {
+    public:
+        typedef Eigen::SparseMatrix<double>::StorageIndex Index;
+
+        // Multiply-adds of one numeric factorisation of this pattern, which
+        // is what a deletion's work is weighed against.
+        double factorizationWork() const
+        {
+            const Index* outer = m_matrix.outerIndexPtr();
+            double work = 0.0;
+            for (Eigen::Index j = 0; j < m_matrix.outerSize(); ++j) {
+                const double count = (double)(outer[j + 1] - outer[j]);
+                work += 0.5 * count * (count + 1.0);
+            }
+            return work;
+        }
+
+        // Replaces row and column `variable` (unpermuted) of the factored
+        // matrix by `diagonal` on the diagonal. `pattern` is a matrix with
+        // the sparsity pattern the factor was analysed with. Adds the
+        // multiply-adds spent to *work and stops once it passes `budget`;
+        // false then, and the factor is invalid until refactorised.
+        bool deleteRowAndColumn(Eigen::Index variable, const Eigen::SparseMatrix<double>& pattern,
+            double diagonal, double* work, double budget)
+        {
+            const Eigen::Index size = m_matrix.outerSize();
+            const Index* outer = m_matrix.outerIndexPtr();
+            const Index* inner = m_matrix.innerIndexPtr();
+            double* values = m_matrix.valuePtr();
+            if ((Eigen::Index)m_mark.size() != size) {
+                m_mark.assign((size_t)size, -1);
+                m_update.assign((size_t)size, 0.0);
+            }
+            const auto permuted = [&](Eigen::Index i) { return m_P.size() > 0 ? (Eigen::Index)m_P.indices()[i] : i; };
+            const Eigen::Index k = permuted(variable);
+
+            // Row k of L: column j < k has an entry in row k exactly when j
+            // lies on an elimination-tree path from a non-zero of row k of
+            // the permuted matrix up to k.
+            // A fresh stamp per deletion, so marks left by an earlier factor
+            // (which may have deleted the same k) never stop the walk.
+            const Eigen::Index stamp = ++m_stamp;
+            m_mark[(size_t)k] = stamp;
+            for (Eigen::SparseMatrix<double>::InnerIterator it(pattern, variable); it; ++it) {
+                for (Eigen::Index j = permuted(it.row()); j >= 0 && j < k && m_mark[(size_t)j] != stamp; j = m_parent[j]) {
+                    m_mark[(size_t)j] = stamp;
+                    const Index* end = inner + outer[j + 1];
+                    const Index* entry = std::lower_bound(inner + outer[j], end, (Index)k);
+                    if (entry != end && *entry == k)
+                        values[entry - inner] = 0.0;
+                    *work += 1.0;
+                }
+            }
+
+            // Column k moves into the trailing block as d_k l l^T.
+            double alpha = m_diag[k];
+            for (Index p = outer[k]; p < outer[k + 1]; ++p) {
+                m_update[(size_t)inner[p]] = values[p];
+                values[p] = 0.0;
+            }
+            m_diag[k] = diagonal;
+            *work += (double)(outer[k + 1] - outer[k]);
+            for (Eigen::Index j = m_parent[k]; j >= 0; j = m_parent[j]) {
+                const double p = m_update[(size_t)j];
+                if (0.0 == p)
+                    continue;
+                m_update[(size_t)j] = 0.0;
+                const double d = m_diag[j];
+                const double updated = d + alpha * p * p;
+                const double beta = p * alpha / updated;
+                alpha *= d / updated;
+                m_diag[j] = updated;
+                for (Index q = outer[j]; q < outer[j + 1]; ++q) {
+                    double& w = m_update[(size_t)inner[q]];
+                    w -= p * values[q];
+                    values[q] += beta * w;
+                }
+                *work += (double)(outer[j + 1] - outer[j]);
+                if (*work > budget) {
+                    // The rest of the update vector lies on the same path.
+                    for (Eigen::Index rest = m_parent[j]; rest >= 0; rest = m_parent[rest])
+                        m_update[(size_t)rest] = 0.0;
+                    return false;
+                }
+            }
+            return std::isfinite(m_diag[k]);
+        }
+
+    private:
+        std::vector<Eigen::Index> m_mark;
+        Eigen::Index m_stamp = 0;
+        std::vector<double> m_update;
+    };
+
     double ridgeFor(const Eigen::SparseMatrix<double>& normalMatrix)
     {
         const Eigen::Index size = normalMatrix.rows();
@@ -98,7 +208,13 @@ struct ConstrainedLeastSquares::Cache {
     Eigen::VectorXd fixedValue;
     std::vector<size_t> fixedColumns;
     Eigen::SparseMatrix<double> fixedMatrix;
-    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> solver;
+    DeletableLDLT solver;
+    // Columns held in the current numeric factor of `solver`, and whether
+    // more can be added to it by deletion (Eigen's factor of the current
+    // normal matrix; not Accelerate's, whose factor is opaque).
+    std::vector<char> factoredColumn;
+    bool deletable = false;
+    double factorizationWork = 0.0;
 #if AUTO_REMESHER_USE_ACCELERATE
     Eigen::AccelerateLLT<Eigen::SparseMatrix<double>, Eigen::Lower> acceleratedSolver;
     bool useAccelerated = true;
@@ -159,6 +275,42 @@ struct ConstrainedLeastSquares::Cache {
             return false;
         patternAnalyzed = true;
         factorNonZeros = (size_t)solver.matrixL().nestedExpression().nonZeros();
+        factoredColumn = fixedColumn;
+        factorizationWork = solver.factorizationWork();
+        deletable = true;
+        return true;
+    }
+
+    // Holds the newly held columns by deleting them from the current factor
+    // instead of refactorising, when that factor holds a subset of them and
+    // the deletions cost less than half a factorisation. Sets *deleted to
+    // how many were deleted; false when a refactorisation is needed (the
+    // factor may then be partly updated, so it must be redone).
+    bool deleteNewlyFixedColumns(size_t* deleted)
+    {
+        *deleted = 0;
+#if AUTO_REMESHER_USE_ACCELERATE
+        if (useAccelerated)
+            return false;
+#endif
+        if (!deletable || !factorized || factoredColumn.size() != fixedColumn.size())
+            return false;
+        for (size_t column = 0; column < fixedColumn.size(); ++column)
+            if (factoredColumn[column] && !fixedColumn[column])
+                return false;
+        deletable = false;
+        double work = 0.0;
+        const double budget = 0.5 * factorizationWork;
+        for (size_t column : fixedColumns) {
+            if (factoredColumn[column])
+                continue;
+            const Eigen::Index index = (Eigen::Index)column;
+            if (!solver.deleteRowAndColumn(index, normalMatrix, normalMatrix.coeff(index, index), &work, budget))
+                return false;
+            factoredColumn[column] = 1;
+            ++*deleted;
+        }
+        deletable = true;
         return true;
     }
 
@@ -384,6 +536,7 @@ bool ConstrainedLeastSquares::solveReduced(std::vector<double>* solution)
 
     if (m_matrixDirty) {
         const Clock::time_point buildStart = Clock::now();
+        cache.deletable = false;
         if (!buildReducedSystem())
             return false;
         m_lastSolveStats.buildSeconds = secondsSince(buildStart);
@@ -463,11 +616,18 @@ bool ConstrainedLeastSquares::mapFixedVariables()
 bool ConstrainedLeastSquares::factorizeReducedSystem()
 {
     Cache& cache = *m_cache;
-    cache.factorized = false;
-    m_lastSolveStats.refactorized = true;
     m_lastSolveStats.normalNonZeros = (size_t)cache.normalMatrix.nonZeros();
     m_lastSolveStats.ridge = ridgeFor(cache.normalMatrix);
     const Clock::time_point factorizeStart = Clock::now();
+    size_t deleted = 0;
+    if (cache.deleteNewlyFixedColumns(&deleted)) {
+        m_lastSolveStats.deletedRows = deleted;
+        m_lastSolveStats.factorizeSeconds = secondsSince(factorizeStart);
+        m_lastSolveStats.factorNonZeros = cache.factorNonZeros;
+        return true;
+    }
+    cache.factorized = false;
+    m_lastSolveStats.refactorized = true;
     ++m_lastSolveStats.factorizations;
     const bool factorized = cache.factorize(cache.systemMatrix());
     m_lastSolveStats.factorizeSeconds = secondsSince(factorizeStart);
@@ -614,6 +774,7 @@ void appendSolveStats(DiagnosticRecord* record, const std::string& prefix,
     record->set(p + "factor_nnz", (double)stats.factorNonZeros);
     record->set(p + "ridge", stats.ridge);
     record->set(p + "refactorized", stats.refactorized ? 1.0 : 0.0);
+    record->set(p + "deleted_rows", (double)stats.deletedRows);
     record->set(p + "kkt_fallback", stats.lagrangeFallback ? 1.0 : 0.0);
     record->set(p + "non_finite", (double)stats.nonFiniteValues);
     record->set(p + "build_ms", 1e3 * stats.buildSeconds);

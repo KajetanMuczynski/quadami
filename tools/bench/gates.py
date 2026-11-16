@@ -27,6 +27,7 @@ sys.path.insert(0, HERE)
 import ab  # noqa: E402
 from metrics import read_obj  # noqa: E402
 
+RETIRED_V1 = "V1 retired cluster rule of 2026-10-21 (all-quad on hard surface, else clusters ≤ 2)"
 FAMILIES = ["organic", "hard surface", "thin shell", "scan", "multi-island"]
 
 
@@ -83,7 +84,9 @@ def gates(rec, run_dir, fam):
     val = (m.get("valence") or {}).get("interior_hist") or {}
     v5 = sum(n for k, n in val.items() if int(k) == 2 or int(k) >= 7)
     nonquads = f["total"] - f["quads"]
-    cluster = largest_nonquad_cluster(os.path.join(run_dir, "out.obj")) if nonquads else 0
+    obj = os.path.join(run_dir, "out.obj")
+    # The records release-check.yml uploads have no out.obj; the retired rule then is left out.
+    cluster = (largest_nonquad_cluster(obj) if os.path.exists(obj) else None) if nonquads else 0
     fl = m["flipped"]
     v3 = fl.get("faces_off_input_folds", fl["faces_vs_input"])  # metrics.py before 2026-10-23: no fold mask
     ex = rec.get("extractor") or {}
@@ -97,7 +100,7 @@ def gates(rec, run_dir, fam):
          "H6 count within ±10 %": abs(f["quads"] / rec["target"] - 1) <= 0.10 + 1e-9,  # 2200/2000 - 1 > 0.1 in floats
          "H8 no 6+-gon": f["other"] == 0,
          "V1 all-quad": nonquads == 0,
-         "V1 retired cluster rule of 2026-10-21 (all-quad on hard surface, else clusters ≤ 2)": (
+         RETIRED_V1: cluster is not None and (
              nonquads == 0 if fam == "hard surface" else (f["other"] == 0 and cluster <= 2)),
          "V2 no folded quad": q.get("sj_le_0", 0) == 0,
          "V2+ no folded face of any size": v.get("folded_faces") == 0,
@@ -110,6 +113,8 @@ def gates(rec, run_dir, fam):
          "no handle lost or added": v.get("handles_lost") == 0 and v.get("handles_added") == 0,
          "thin parts kept (wrong-side area < 0.1 %)": (v.get("area_wrong_side") or 0) < 1e-3,
          "no input area lost (uncovered < 0.1 %)": (v.get("area_uncovered") or 0) < 1e-3}
+    if cluster is None:
+        del g[RETIRED_V1]
     if ex.get("islands"):  # runs with stages.jsonl from the libQEx extractor
         g["no libQEx fallback (every island extracted by libQEx)"] = ex["fallbacks"] == 0
     g["V1–V5 together"] = all(g[k] for k in (

@@ -132,7 +132,7 @@ code reading), **untested** before this audit. "This audit" gives what was run n
 ## 4. Findings
 
 "Uncovered" is `metrics.py`'s `area_uncovered`: the share of the input's area farther than one output
-edge from the output. Every [M] row is 6 runs; ranges are min–max.
+edge from the output (as measured then; since 2026-11-05 one target edge from its own island's output). Every [M] row is 6 runs; ranges are min–max.
 
 ### 4.1 Split imports and converted text: cracks, soup, no warning
 

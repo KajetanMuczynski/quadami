@@ -177,6 +177,77 @@ class Validity(unittest.TestCase):
         F = [list(f) for f in F] + [[F[0][0], len(V) - 1, F[0][1]]]  # two corners at one point: normal 0
         for out in ((V, F), (V, [f[::-1] for f in F])):
             self.assertEqual(self.run_metrics(self.torus_in(), out)["flipped"]["faces_vs_input"], 0)
+    def test_dropped_island_next_to_another_islands_output(self):
+        # A small ring lying on the big torus, closer to it than one output edge, is dropped. The big
+        # torus's output is near all of the ring's area but stands for the torus, not the ring
+        # (nemetona 2026-11-05: lace islands left empty read as covered by their neighbours).
+        a = self.torus_in()
+        ring = grid(48, 16, True, True, lambda u, v: torus_point(u, v, R=0.12, r=0.03) + np.array([1.0, 0.0, 0.36]),
+                    quads=False)
+        r = self.run_metrics(join(a, ring), self.torus_out())
+        v = r["validity"]
+        self.assertEqual((v["islands_input"], v["islands_output"], v["islands_dropped"]), (2, 1, 1))
+        share = r["validity"]["per_island"][1]["area_share"]
+        self.assertAlmostEqual(v["area_uncovered"], share, delta=0.3 * share)
+        self.assertLess(v["area_uncovered_any_island"], 0.1 * share)  # the torus's output is near it
+        self.assertFalse(v["islands_same_as_input"])
+
+    def test_thin_shell_layers_are_each_covered_by_their_own_output(self):
+        # A shell 0.001 thick (outer and inner wall, separate islands), remeshed right. Each output
+        # face's centroid lies inside the curved wall, nearer the inner one; its vertices lie on its
+        # own wall, so voting by vertices keeps both walls covered and facing the right way.
+        rev = lambda m: (m[0], [f[::-1] for f in m[1]])
+        inp = join(self.torus_in(), rev(self.torus_in(r=0.299)))
+        out = join(self.torus_out(), rev(self.torus_out(r=0.299)))
+        v = self.run_metrics(inp, out)["validity"]
+        self.assertEqual((v["islands_dropped"], v["islands_reversed"]), (0, 0))
+        self.assertLess(v["area_uncovered"], 1e-3)
+
+    def test_coincident_double_sided_sheet_is_not_dropped(self):
+        # Two exactly coincident sheets (one island each, opposite windings) remeshed right: nearest-face
+        # ties go to one sheet, so neither sheet alone can claim its area; they are covered as a group.
+        tri = lambda m: (m[0], [t for f in m[1] for t in ([f[0], f[1], f[2]], [f[0], f[2], f[3]])])
+        V, F = sheet(24, 24, 1.0)
+        rev = [f[::-1] for f in F]
+        inp = join(tri((V, F)), tri((V, rev)))
+        Vo, Fo = sheet(8, 8, 1.0)
+        v = self.run_metrics(inp, join((Vo, Fo), (Vo, [f[::-1] for f in Fo])))["validity"]
+        self.assertEqual((v["islands_input"], v["islands_dropped"]), (2, 0))
+        self.assertLess(v["area_uncovered"], 1e-3)
+
+    def test_reversed_islands_are_counted(self):
+        # The big torus reversed holds most faces, so faces_vs_input counts the small one's faces; the
+        # reversed island is counted on its own, and a reversed output counts every island.
+        big, small = self.torus_out(), grid(10, 6, True, True, lambda u, v: torus_point(u, v, shift=5.0))
+        inp = join(self.torus_in(), self.torus_in(shift=5.0))
+        rev = lambda m: (m[0], [f[::-1] for f in m[1]])
+        r = self.run_metrics(inp, join(rev(big), small))
+        self.assertEqual(r["validity"]["islands_reversed"], 1)
+        self.assertEqual(r["flipped"]["faces_vs_input"], 60)  # the right island's faces: why the key exists
+        r = self.run_metrics(inp, join(rev(big), rev(small)))
+        self.assertEqual(r["validity"]["islands_reversed"], 2)
+        self.assertEqual(self.run_metrics(inp, join(big, small))["validity"]["islands_reversed"], 0)
+
+    def test_coverage_threshold_is_the_target_edge(self):
+        # The same hole in a coarse and a fine output: with a target, both are judged at one target
+        # edge; the output's own mean edge would call the fine output's hole larger.
+        def holed(n, m):
+            V, F = grid(n, m, True, True, torus_point)
+            ang = [np.arctan2(*V[f].mean(0)[1::-1]) for f in F]
+            return V, [f for f, a in zip(F, ang) if not 0.0 < a < 0.6]
+        write(self.inp, *self.torus_in())
+        res = []
+        for n, m in ((40, 16), (80, 32)):
+            write(self.out, *holed(n, m))
+            res.append(metrics.compute(self.inp, self.out, 640, samples=20000))
+        h = [r["validity"]["coverage_h_rel_diag"] * r["diag"] for r in res]
+        area = 2 * np.pi * 1.0 * 2 * np.pi * 0.3  # torus area, R = 1, r = 0.3
+        self.assertAlmostEqual(h[0], np.sqrt(area / 640), delta=0.01 * h[0])
+        self.assertAlmostEqual(h[1], h[0], places=6)
+        u = [r["validity"]["area_uncovered"] for r in res]
+        self.assertGreater(u[0], 0.02)
+        self.assertAlmostEqual(u[1], u[0], delta=0.15 * u[0])
+
     def test_island_shrunk_to_a_blob_is_dropped_not_same(self):
         # The second torus comes out as a much smaller torus at its centre: one output island of the
         # same topology votes for it, but none of its area lies within one output edge of the output.
@@ -192,6 +263,60 @@ class Validity(unittest.TestCase):
         # The output is the torus cut open across the tube: a cylinder with two boundary loops.
         out = grid(40, 16, False, True, lambda u, v: torus_point(0.98 * u, v))
         v = self.run_metrics(self.torus_in(), out)["validity"]
+        self.assertEqual((v["holes_added"], v["handles_lost"], v["islands_topology_changed"]), (2, 1.0, 1))
+
+    def test_handle_cut_by_a_split_is_lost(self):
+        # The output is the torus cut into two tubes: two pieces of one input island, each of genus 0.
+        out = join(grid(20, 16, False, True, lambda u, v: torus_point(0.48 * u, v)),
+                   grid(20, 16, False, True, lambda u, v: torus_point(0.5 + 0.48 * u, v)))
+        v = self.run_metrics(self.torus_in(), out)["validity"]
+        self.assertEqual((v["islands_split"], v["holes_added"], v["handles_lost"]), (1, 4, 1.0))
+
+    def test_split_keeping_the_handle_loses_none(self):
+        # A torus and a crumb split off it (a disc above it in the same island's vote): genus kept.
+        crumb = sheet(2, 2, 0.02, z=0.31)
+        crumb = (crumb[0] * [0.02, 1, 1] + [1.0, 0.0, 0.0], crumb[1])
+        v = self.run_metrics(self.torus_in(), join(self.torus_out(), crumb))["validity"]
+        self.assertEqual((v["islands_split"], v["handles_lost"], v["handles_added"]), (1, 0.0, 0.0))
+
+    def test_extra_piece_with_a_handle_adds_none(self):
+        # A second, tiny ring on the torus: a split island can hold another island's output piece, so
+        # handles are added only on islands kept in one piece.
+        ring = grid(12, 6, True, True, lambda u, v: torus_point(u, v, R=0.02, r=0.005, shift=1.3))
+        v = self.run_metrics(self.torus_in(), join(self.torus_out(), ring))["validity"]
+        self.assertEqual((v["islands_split"], v["handles_lost"], v["handles_added"]), (1, 0.0, 0.0))
+
+    def pinched_tori_in(self):
+        # Two tori sharing one vertex: A's outer equator point (u = 0, v = 0) is B's inner one.
+        A = self.torus_in()
+        B = grid(96, 48, True, True, lambda u, v: torus_point(u, v, shift=2.0), quads=False)
+        V, F = join(A, B)
+        shared = len(A[0]) + 48 * 48 + 24
+        self.assertLess(np.linalg.norm(V[shared] - V[0]), 1e-12)
+        return V, [[0 if x == shared else x for x in f] for f in F]
+
+    def test_pinched_input_island_is_split_like_the_core(self):
+        # The correct output has the pinch split: two separate tori, same as the input after the core's
+        # splitPinchedVertices, globally and per island.
+        r = self.run_metrics(self.pinched_tori_in(), join(self.torus_out(), self.torus_out(shift=2.0)))
+        t, v = r["topology"], r["validity"]
+        self.assertEqual(t["input_split_pinched_vertices"], 1)
+        self.assertTrue(t["same_as_input"])
+        self.assertEqual((v["islands_input"], v["islands_input_non_manifold"]), (2, 0))
+        self.assertTrue(v["islands_same_as_input"])
+
+    def test_repeated_vertex_triangle_does_not_join_a_split_pinch(self):
+        # An a a b triangle at the pinch (the core drops it before splitting) leaves the two tori apart.
+        V, F = self.pinched_tori_in()
+        F = F + [[0, 0, 1]]
+        r = self.run_metrics((V, F), join(self.torus_out(), self.torus_out(shift=2.0)))
+        self.assertTrue(r["topology"]["same_as_input"])
+        self.assertEqual(r["validity"]["islands_input"], 2)
+
+    def test_pinched_input_island_damage_is_counted(self):
+        # The same input, one torus cut open: a pinch no longer hides the island from the topology checks.
+        cut = grid(40, 16, False, True, lambda u, v: torus_point(0.98 * u, v, shift=2.0))
+        v = self.run_metrics(self.pinched_tori_in(), join(self.torus_out(), cut))["validity"]
         self.assertEqual((v["holes_added"], v["handles_lost"], v["islands_topology_changed"]), (2, 1.0, 1))
 
     def test_handle_swapped_between_islands(self):

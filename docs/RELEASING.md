@@ -40,8 +40,9 @@ is made by CI from a tag and always starts as a **draft**: nothing is public unt
 ## Versions
 
 - The manifest version is the release version, `MAJOR.MINOR.PATCH`, and changes only in a release
-  PR. While the major number is 0, the minor goes up for a release with new features or changed
-  output, the patch for fixes only.
+  PR. While the major number is 0, the minor goes up for a release with new features that change
+  output or the workflow, the patch for fixes and small additions that don't change output (Kajetan,
+  2026-10-31: 0.2.1 adds the Copy Report button).
 - Test builds between releases keep the last version; the build line in the panel tells them apart
   (`pr77 abc1234+master`, `abc1234 2026-11-03`, or `v0.1.0 ...` for the release itself).
 - Not `0.1.0+<commit>` in the manifest: Blender would show it but every build would need its own
@@ -58,17 +59,23 @@ Copy into the release PR's description and tick each line there.
    - [ ] master CI green on the commit to tag (Actions > ci, branch master).
    - [ ] TARGETS release check ([TARGETS.md](TARGETS.md) §2.5, §5 "Releases") on all three
          platforms: **Actions > release-check > Run workflow**, `ref` = the commit to tag, `baseline`
-         = the previous release's tag (`v0.1.0` for 0.2.0, the default; 0.1.0 used `877891d`, see below). Each
+         = the previous release's tag (`v0.2.0` for 0.2.1, the default; `v0.1.0` for 0.2.0; 0.1.0 used `877891d`, see below). Each
          platform builds both, runs corpus and closed sets with 5 replicates (about an hour; macOS
-         longer) and `tools/bench/release_gate.py` decides: for 0.x no structural gate (H1–H6, H8)
-         fails on every replicate of more cases (mesh, resolution, target) than in the baseline and no §3.2 validity number is worse (TARGETS §6,
-         decision 3); tick **hard** for 1.0, where the structural gates must hold on every run. The
+         longer) and `tools/bench/release_gate.py` decides in the job **verdict**, pooled over the platforms
+         (TARGETS §5 "Releases"): per measure and set, a sign test over the cases that got worse or
+         better, **fail** after Holm fails the check; a **lead** (p < 0.05 before Holm) does not, but
+         re-check its listed cases with `ab.py run ... --replicates 5` on both sides before tagging.
+         Any candidate crash fails unless the baseline crashed there too; tick **hard** for 1.0, where
+         the structural gates must hold on every run. The verdict needs every platform's records: a
+         dropped macOS job must be re-run.The
          job summary has the tables and `ab.py compare`; the artifact `release-check-<platform>` the
          run records. A macOS job dropped for want of a runner: re-run it from the run page.
    - [ ] The changes this release promises are merged. For 0.1.0 (Kajetan, 2026-10-22): the
          thin-parts (vines) fix and its panel warnings. For 0.2.0 (Kajetan, 2026-10-28): source
          data, sanitizer, sharp-edge tolerance, hang and crash guards, opt-in smoothing, the
-         thin-part wording and lower memory; cone tips and crease preservation moved to 0.3.
+         thin-part wording and lower memory; cone tips and crease preservation moved to 0.3. For 0.2.1
+         (Kajetan, 2026-10-31): the fallback tracer cap (#153), no copying of flooded marks (#154) and
+         Copy Report (#160); 2026-11-03: the twisted-quad count (#167).
 2. **Real-machine checks** (CI runs Blender without a window): install the master zip from CI on
    Kajetan's Linux laptop and remesh a sculpt; Windows and a Mac when one is at hand (unsigned
    program: SmartScreen and Gatekeeper behaviour are untested, write down what happened).
@@ -100,14 +107,18 @@ Copy into the release PR's description and tick each line there.
   2026-10-26 and listed in the 0.1.0 notes (bisection and numbers:
   `docs/sessions/2026-10-26-fold-bisect.md`). Every core merge after it up to the 0.1.0 candidate
   gives byte-identical output (`ab.py lane`), so the check passes only if nothing else moved. The
-  ratchet has no noise tolerance: a candidate whose output differs from the baseline at all, even
-  harmlessly, shows **worse** rows, so read a red check against its `ab.py compare` before calling
-  it a regression. From 0.1.0 on, the baseline is the previous release tag (`v0.1.0` for 0.2).
+  aggregate ratchet of 0.1-0.2.1 had no noise tolerance (any change in output showed **worse**
+  rows); the per-case sign test replaced it (TODO 1.16). From 0.1.0 on, the baseline is the
+  previous release tag (`v0.1.0` for 0.2).
+- **What the sign test cannot see**: a regression confined to a few cases. With 72 corpus and 78
+  closed cases and Holm over 24 tests, it fails only from about 9 worse cases and none better; a
+  change that adds many folds to 3 cases passes, at most as a lead. Power comes from more meshes,
+  not more replicates.
 - **Structural gates fail on master today** (cloud dry run 2026-10-22, Linux, master `ae27301`
   against `0e9bec8`, byte-identical outputs): corpus 21 of 432 runs (human_neutral islands merged
   and holes, sword at 2k quads 11-22 % under target, csg_bracket u2 one hole), closed 114 of 468
   (thin ellipsoids at 150 quads drop the island or miss the count, tori over the count). Hence the
-  0.x ratchet; 1.0 needs them fixed (`--hard`).
+  0.x per-case comparison with the baseline; 1.0 needs them fixed (`--hard`).
 
 ## Tag ruleset for `v*`
 

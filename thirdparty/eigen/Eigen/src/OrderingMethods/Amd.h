@@ -6,6 +6,9 @@
 // This Source Code Form is subject to the terms of the Mozilla
 // Public License v. 2.0. If a copy of the MPL was not distributed
 // with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+//
+// Modified by Quadami contributors, 2026-11-05: the supervariable hash of a
+// node is summed in 64 bits (see thirdparty/eigen/PATCHES.md).
 
 /*
 NOTE: this routine has been adapted from the CSparse library:
@@ -95,6 +98,11 @@ void minimum_degree_ordering(SparseMatrix<Scalar, ColMajor, StorageIndex>& C,
 
   StorageIndex d, dk, dext, lemax = 0, e, elenk, eln, i, j, k, k1, k2, k3, jlast, ln, dense, nzmax, mindeg = 0, nvi,
                             nvj, nvk, mark, wnvi, ok, nel = 0, p, p1, p2, p3, p4, pj, pk, pk1, pk2, pn, q, t, h;
+  // Quadami: the hash is a sum of up to |Ai| node and element indices, which
+  // passes 2^31 on large systems with a few dense rows; a wrapped (negative)
+  // StorageIndex sum then indexed hhead out of bounds. Summing in 64 bits
+  // gives the same bucket whenever the old sum did not overflow.
+  long long hash;
 
   StorageIndex n = StorageIndex(C.cols());
   dense = std::max<StorageIndex>(16, StorageIndex(10 * sqrt(double(n)))); /* find dense threshold */
@@ -270,7 +278,7 @@ void minimum_degree_ordering(SparseMatrix<Scalar, ColMajor, StorageIndex>& C,
       p1 = Cp[i];
       p2 = p1 + elen[i] - 1;
       pn = p1;
-      for (h = 0, d = 0, p = p1; p <= p2; p++) /* scan Ei */
+      for (hash = 0, d = 0, p = p1; p <= p2; p++) /* scan Ei */
       {
         e = Ci[p];
         if (w[e] != 0) /* e is an unabsorbed element */
@@ -279,7 +287,7 @@ void minimum_degree_ordering(SparseMatrix<Scalar, ColMajor, StorageIndex>& C,
           if (dext > 0) {
             d += dext;    /* sum up the set differences */
             Ci[pn++] = e; /* keep e in Ei */
-            h += e;       /* compute the hash of node i */
+            hash += e;    /* compute the hash of node i */
           } else {
             Cp[e] = amd_flip(k); /* aggressive absorb. e->k */
             w[e] = 0;            /* e is a dead element */
@@ -295,7 +303,7 @@ void minimum_degree_ordering(SparseMatrix<Scalar, ColMajor, StorageIndex>& C,
         if ((nvj = nv[j]) <= 0) continue; /* node j dead or in Lk */
         d += nvj;                         /* degree(i) += |j| */
         Ci[pn++] = j;                     /* place j in node list of i */
-        h += j;                           /* compute hash for node i */
+        hash += j;                        /* compute hash for node i */
       }
       if (d == 0) /* check for mass elimination */
       {
@@ -312,7 +320,7 @@ void minimum_degree_ordering(SparseMatrix<Scalar, ColMajor, StorageIndex>& C,
         Ci[p3] = Ci[p1];                                  /* move 1st el. to end of Ei */
         Ci[p1] = k;                                       /* add k as 1st element in of Ei */
         len[i] = pn - p1 + 1;                             /* new len of adj. list of node i */
-        h %= n;                                           /* finalize hash of i */
+        h = StorageIndex(hash % n);                       /* finalize hash of i */
         next[i] = hhead[h];                               /* place i in hash bucket */
         hhead[h] = i;
         last[i] = h; /* save hash of i in last[i] */

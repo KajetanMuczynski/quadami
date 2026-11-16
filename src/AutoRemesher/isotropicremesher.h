@@ -24,8 +24,8 @@
 #include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/Progress>
 #include <AutoRemesher/Vector3>
-#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace AutoRemesher {
 
@@ -38,9 +38,11 @@ public:
     {
     }
 
-    void setConstraintVertices(const std::unordered_set<size_t>* constraintVertices)
+    // Vertices of the input the remesh keeps where they are (conical tips):
+    // never relaxed, projected or collapsed.
+    void setPinnedVertices(const std::vector<size_t>* pinnedVertices)
     {
-        m_constraintVertices = constraintVertices;
+        m_pinnedVertices = pinnedVertices;
     }
 
     void setVertexTargetEdgeLengths(const std::vector<double>* targetLengths)
@@ -53,8 +55,9 @@ public:
         m_targetEdgeLength = edgeLength;
     }
 
-    // The input's sharp edges (classifySharpEdges); their vertices stay where
-    // they are, and featureEdges() is what is left of them in the result.
+    // The input's sharp edges (classifySharpEdges).  The remesh keeps them
+    // as edge chains on the input's creases (TODO 2.5), and featureEdges()
+    // is the same chains in the result.
     void setFeatureEdges(const FeatureEdgeSet& featureEdges)
     {
         m_featureEdges = featureEdges;
@@ -80,16 +83,11 @@ public:
         return m_remeshedTriangles;
     }
 
-    // The input's feature edges as edges of the result: the halves of every
-    // split one, less those a flip removed (clearedFeatureEdges()).
+    // The input's feature edges as edges of the result: split into pieces,
+    // collapsed only along their chains, never flipped.
     const FeatureEdgeSet& featureEdges() const
     {
         return m_remeshedFeatureEdges;
-    }
-
-    size_t clearedFeatureEdges() const
-    {
-        return m_clearedFeatureEdges;
     }
 
     bool remesh();
@@ -99,7 +97,7 @@ public:
 private:
     std::vector<Vector3> m_vertices;
     std::vector<std::vector<size_t>> m_triangles;
-    const std::unordered_set<size_t>* m_constraintVertices = nullptr;
+    const std::vector<size_t>* m_pinnedVertices = nullptr;
     const std::vector<double>* m_vertexTargetEdgeLengths = nullptr;
     double m_targetEdgeLength = 0;
     FeatureEdgeSet m_featureEdges;
@@ -109,7 +107,6 @@ private:
     std::vector<Vector3> m_remeshedVertices;
     std::vector<std::vector<size_t>> m_remeshedTriangles;
     FeatureEdgeSet m_remeshedFeatureEdges;
-    size_t m_clearedFeatureEdges = 0;
 };
 
 }

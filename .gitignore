@@ -53,3 +53,7 @@ __pycache__/
 
 # Test fixtures (tests/data/README.md)
 !tests/data/*.obj
+
+# Downloaded archives (pip sdists, tool tarballs) never belong in the repo
+*.tar.gz
+*.whl
