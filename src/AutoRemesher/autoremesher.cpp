@@ -157,6 +157,12 @@ namespace {
     // Marked length per quad-edge length above which an island's marks are
     // not used (applyMarkedEdgeDensity).
     const double maximumMarkedEdgeDensity = 0.25;
+    // How far from a chain of marks (a guide, a mark line), in quad widths,
+    // the marked-edge fallback counts bad faces as that chain's.
+    const double markedChainFoldRadius = 3.0;
+    // How many more bad faces than the run without marks, per planned quad
+    // and at least 2, a run that keeps its marks may have away from them.
+    const double markedFoldBudgetPerQuad = 0.001;
     const size_t maximumIslandRetries = 4;
     const double maximumRetriedIslandTriangleCount = 1024.0;
 
@@ -352,6 +358,78 @@ namespace {
                 && output.eulerCharacteristic == input.eulerCharacteristic;
         }
         return true;
+    }
+
+    // The connected sets of marked edges (one guide, one mark line), each a
+    // list of indices into `edges`, in the order of their first edge.
+    std::vector<std::vector<size_t>> markedEdgeChains(const std::vector<std::pair<size_t, size_t>>& edges)
+    {
+        std::unordered_map<size_t, size_t> parents;
+        const auto find = [&parents](size_t vertex) {
+            auto it = parents.find(vertex);
+            if (it == parents.end())
+                it = parents.emplace(vertex, vertex).first;
+            size_t root = vertex;
+            while (parents[root] != root)
+                root = parents[root];
+            while (parents[vertex] != root) {
+                const size_t next = parents[vertex];
+                parents[vertex] = root;
+                vertex = next;
+            }
+            return root;
+        };
+        for (const auto& edge : edges) {
+            const size_t a = find(edge.first);
+            const size_t b = find(edge.second);
+            if (a != b)
+                parents[std::max(a, b)] = std::min(a, b);
+        }
+        std::unordered_map<size_t, size_t> chainOfRoot;
+        std::vector<std::vector<size_t>> chains;
+        for (size_t i = 0; i < edges.size(); ++i) {
+            const size_t root = find(edges[i].first);
+            auto it = chainOfRoot.find(root);
+            if (it == chainOfRoot.end()) {
+                it = chainOfRoot.emplace(root, chains.size()).first;
+                chains.emplace_back();
+            }
+            chains[it->second].push_back(i);
+        }
+        return chains;
+    }
+
+    // Per chain of segments, how many of the faces flagged in `bad` have
+    // their centroid within `radius` of one of the chain's segments.
+    std::vector<size_t> badFacesNearChains(const std::vector<Vector3>& vertices,
+        const std::vector<std::vector<size_t>>& faces, const std::vector<char>& bad,
+        const std::vector<std::vector<std::pair<Vector3, Vector3>>>& chains, double radius)
+    {
+        std::vector<size_t> counts(chains.size(), 0);
+        const double radiusSquared = radius * radius;
+        for (size_t face = 0; face < faces.size() && face < bad.size(); ++face) {
+            if (!bad[face] || faces[face].empty())
+                continue;
+            Vector3 centroid;
+            for (size_t vertex : faces[face])
+                centroid += vertices[vertex];
+            centroid /= (double)faces[face].size();
+            for (size_t c = 0; c < chains.size(); ++c) {
+                for (const auto& segment : chains[c]) {
+                    const Vector3 direction = segment.second - segment.first;
+                    const double lengthSquared = direction.lengthSquared();
+                    double t = lengthSquared > 0.0
+                        ? Vector3::dotProduct(centroid - segment.first, direction) / lengthSquared
+                        : 0.0;
+                    t = std::max(0.0, std::min(1.0, t));
+                    if ((segment.first + direction * t - centroid).lengthSquared() <= radiusSquared) {
+                        ++counts[c];
+                        break;
+                    }
+                }
+            }
+        }
+        return counts;
     }
 
     // Share of the area of `faces` (triangles or polygons, fanned) farther
@@ -2651,7 +2729,8 @@ bool AutoRemesher::remeshIslands()
             && surfaceTopology(run.remeshedQuads, run.remeshedVertices.size()).eulerCharacteristic == ctx.inputTopology.eulerCharacteristic
             && (double)quads >= 0.5 * ctx.targetQuadCount;
     };
-    const auto badFaces = [&isFaithful](const IslandRun& run, bool* faithful, const IslandContext& ctx) {
+    const auto badFaces = [&isFaithful](const IslandRun& run, bool* faithful, const IslandContext& ctx,
+                              std::vector<char>* flags) {
         RemeshMesh mesh;
         for (const auto& v : run.remeshedVertices) {
             mesh.positions.push_back(v.x());
@@ -2666,7 +2745,15 @@ bool AutoRemesher::remeshIslands()
         QualityReport report;
         measureMesh(mesh, &report);
         *faithful = isFaithful(run, ctx);
+        if (nullptr != flags)
+            *flags = badFaceFlags(mesh);
         return report.foldedFaceCount + report.nonQuadCount + report.degenerateFaceCount;
+    };
+    const auto keepSupersededRecords = [](IslandRun& dropped, IslandRun& kept) {
+        for (auto& record : dropped.diagnostics) {
+            if (record.stage == "extractor")
+                kept.diagnostics.push_back(std::move(record.label("superseded", "yes")));
+        }
     };
     // Marked edges the quads cannot follow (a mark across the field that
     // creases set, many short lines that cross; TODO 5.2) fold the result.
@@ -2674,45 +2761,131 @@ bool AutoRemesher::remeshIslands()
     // one that is not; between two alike the one with fewer folded faces and
     // non-quads is kept, and a tie, or 2 faces more, keeps the marks.  Only
     // islands with marks and such a defect pay for the second run.
+    //
+    // Where both runs are faithful and the marked one has the more bad
+    // faces, the faces are counted per chain of marks (a guide, a mark
+    // line) within markedChainFoldRadius quad widths of it.  A marked run
+    // has its own map, so its folds elsewhere differ from the plain run's by
+    // chance (head with three guide rings, 6 replicates: at 10k 66 of the
+    // marked runs' 69 bad faces sat 3 to 16 quads off the guides, as the
+    // plain runs' did; at 3k 28 of 29 sat within 3 of a guide).  A chain is
+    // dropped only if more than 2 more bad faces sit next to it than next to
+    // the same line in the plain run.  The far ones may still come from the
+    // marks (cones they move), so a run keeping marks may have at most
+    // max(2, markedFoldBudgetPerQuad x planned quads) more bad faces in all.
+    // No failing chain keeps every mark (within that budget, else none),
+    // every chain failing drops them all, and otherwise the island is run a
+    // third time with the passing chains, kept if it is faithful, within the
+    // budget and its chains pass again (markedEdgesDropped 2), else the
+    // plain run is.
     std::vector<char> markedEdgesDropped(islandContexes.size(), 0);
+    std::vector<size_t> markedChainCounts(islandContexes.size(), 0);
+    std::vector<size_t> markedChainsDropped(islandContexes.size(), 0);
     if (!m_markedEdges.empty()) {
         tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
             [&](const tbb::blocked_range<size_t>& range) {
                 for (size_t i = range.begin(); i != range.end(); ++i) {
                     if (!islandContexes[i].followMarks || islandContexes[i].markedEdges.empty())
                         continue;
+                    const std::vector<std::vector<size_t>> chains = markedEdgeChains(islandContexes[i].markedEdges);
+                    markedChainCounts[i] = chains.size();
                     bool markedFaithful = false;
-                    const size_t markedBad = badFaces(islandRuns[i], &markedFaithful, islandContexes[i]);
+                    std::vector<char> markedFlags;
+                    const size_t markedBad = badFaces(islandRuns[i], &markedFaithful, islandContexes[i], &markedFlags);
                     if (markedFaithful && 0 == markedBad)
                         continue;
                     IslandContext ctx;
                     buildIslandContext(i, ctx);
                     ctx.voxelSize = islandContexes[i].voxelSize;
                     ctx.targetQuadCount = islandContexes[i].targetQuadCount;
+                    // The marks' positions, taken before resampling replaces the vertices.
+                    std::vector<std::vector<std::pair<Vector3, Vector3>>> chainSegments(chains.size());
+                    for (size_t c = 0; c < chains.size(); ++c) {
+                        for (size_t e : chains[c]) {
+                            const auto& edge = islandContexes[i].markedEdges[e];
+                            chainSegments[c].emplace_back(ctx.vertices[edge.first], ctx.vertices[edge.second]);
+                        }
+                    }
+                    IslandContext markedSubsetCtx;
+                    if (chains.size() > 1)
+                        markedSubsetCtx = ctx;
                     ctx.markedEdges.clear();
                     ctx.followMarks = false;
                     IslandRun run;
                     resampleIsland(i, ctx, run, &retryDecimationStats);
                     parameterizeIsland(i, ctx, run);
                     bool plainFaithful = false;
-                    const size_t plainBad = badFaces(run, &plainFaithful, ctx);
-                    const bool drop = (plainFaithful && !markedFaithful) || (plainFaithful == markedFaithful && markedBad > plainBad + 2);
-                    IslandRun& dropped = drop ? islandRuns[i] : run;
-                    IslandRun& kept = drop ? run : islandRuns[i];
-                    for (auto& record : dropped.diagnostics) {
-                        if (record.stage == "extractor")
-                            kept.diagnostics.push_back(std::move(record.label("superseded", "yes")));
+                    std::vector<char> plainFlags;
+                    const size_t plainBad = badFaces(run, &plainFaithful, ctx, &plainFlags);
+                    bool drop = (plainFaithful && !markedFaithful) || (plainFaithful == markedFaithful && markedBad > plainBad + 2);
+                    if (drop && markedFaithful) {
+                        const double quadWidth = islandContexes[i].targetQuadCount > 0.0
+                            ? std::sqrt(islandContexes[i].area / islandContexes[i].targetQuadCount)
+                            : 0.0;
+                        const double radius = markedChainFoldRadius * quadWidth;
+                        const std::vector<size_t> markedNear = badFacesNearChains(islandRuns[i].remeshedVertices,
+                            islandRuns[i].remeshedQuads, markedFlags, chainSegments, radius);
+                        const std::vector<size_t> plainNear = badFacesNearChains(run.remeshedVertices,
+                            run.remeshedQuads, plainFlags, chainSegments, radius);
+                        std::vector<size_t> keptChains;
+                        for (size_t c = 0; c < chains.size(); ++c) {
+                            if (markedNear[c] <= plainNear[c] + 2)
+                                keptChains.push_back(c);
+                        }
+                        // Folds away from the marks are let through only up to
+                        // markedFoldBudgetPerQuad of the planned quads.
+                        const double budget = std::max(2.0, markedFoldBudgetPerQuad * islandContexes[i].targetQuadCount);
+                        if (keptChains.size() == chains.size()) {
+                            drop = (double)markedBad > (double)plainBad + budget;
+                        } else if (!keptChains.empty()) {
+                            IslandContext& subsetCtx = markedSubsetCtx;
+                            std::vector<std::pair<size_t, size_t>> keptEdges;
+                            std::vector<std::vector<std::pair<Vector3, Vector3>>> keptSegments;
+                            for (size_t c : keptChains) {
+                                for (size_t e : chains[c])
+                                    keptEdges.push_back(islandContexes[i].markedEdges[e]);
+                                keptSegments.push_back(chainSegments[c]);
+                            }
+                            subsetCtx.markedEdges = std::move(keptEdges);
+                            subsetCtx.followMarks = true;
+                            IslandRun subsetRun;
+                            resampleIsland(i, subsetCtx, subsetRun, &retryDecimationStats);
+                            parameterizeIsland(i, subsetCtx, subsetRun);
+                            bool subsetFaithful = false;
+                            std::vector<char> subsetFlags;
+                            const size_t subsetBad = badFaces(subsetRun, &subsetFaithful, subsetCtx, &subsetFlags);
+                            const std::vector<size_t> subsetNear = badFacesNearChains(subsetRun.remeshedVertices,
+                                subsetRun.remeshedQuads, subsetFlags, keptSegments, radius);
+                            bool subsetPasses = subsetFaithful && (double)subsetBad <= (double)plainBad + budget;
+                            for (size_t k = 0; k < keptChains.size() && subsetPasses; ++k)
+                                subsetPasses = subsetNear[k] <= plainNear[keptChains[k]] + 2;
+                            if (subsetPasses) {
+                                keepSupersededRecords(islandRuns[i], subsetRun);
+                                keepSupersededRecords(run, subsetRun);
+                                subsetCtx.inputMarkedEdgeCount = islandContexes[i].inputMarkedEdgeCount;
+                                subsetCtx.markedEdgeDensity = islandContexes[i].markedEdgeDensity;
+                                islandContexes[i] = std::move(subsetCtx);
+                                islandRuns[i] = std::move(subsetRun);
+                                markedEdgesDropped[i] = 2;
+                                markedChainsDropped[i] = chains.size() - keptChains.size();
+                                continue;
+                            }
+                            keepSupersededRecords(subsetRun, run);
+                        }
                     }
+                    keepSupersededRecords(drop ? islandRuns[i] : run, drop ? run : islandRuns[i]);
                     if (drop) {
                         ctx.inputMarkedEdgeCount = islandContexes[i].inputMarkedEdgeCount;
                         islandContexes[i] = std::move(ctx);
                         islandRuns[i] = std::move(run);
                         markedEdgesDropped[i] = 1;
+                        markedChainsDropped[i] = chains.size();
                     }
                 }
             });
     }
     m_markedEdgesDroppedIslandCount = (size_t)std::count(markedEdgesDropped.begin(), markedEdgesDropped.end(), 1);
+    m_markedEdgesPartlyDroppedIslandCount = (size_t)std::count(markedEdgesDropped.begin(), markedEdgesDropped.end(), 2);
 
     // Sharp edges classified on T lock the cross field to their direction.
     // Where T bevels a crease into a zigzag, the locked directions disagree a
@@ -3387,7 +3560,10 @@ bool AutoRemesher::remeshIslands()
             if (!m_markedEdges.empty()) {
                 record.set("marked_edges", (double)islandContexes[i].inputMarkedEdgeCount);
                 record.set("isotropic_marked_edges", (double)islandContexes[i].isotropicMarkedEdgeCount);
+                // 0: kept, 1: all dropped, 2: some chains dropped.
                 record.set("marked_edges_dropped", (double)markedEdgesDropped[i]);
+                record.set("marked_chains", (double)markedChainCounts[i]);
+                record.set("marked_chains_dropped", (double)markedChainsDropped[i]);
                 record.set("marked_edge_density", islandContexes[i].markedEdgeDensity);
                 record.set("marked_edges_too_dense", islandContexes[i].markedEdgesTooDense ? 1.0 : 0.0);
             }

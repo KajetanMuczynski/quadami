@@ -31,6 +31,10 @@ namespace AutoRemesher {
 // interface.
 void measureMesh(const RemeshMesh& mesh, QualityReport* report);
 
+// Per face: 1 if measureMesh() counts it as a non-quad, degenerate or folded
+// face (the defects the marked-edge fallback weighs), else 0.
+std::vector<char> badFaceFlags(const RemeshMesh& mesh);
+
 // Moves the twisted quads of report (counted by measureMesh() on mesh) that
 // have a diagonal along an input crease of 90 degrees or more to
 // creaseDiagonalQuadCount: both ends of the diagonal on such an edge of the

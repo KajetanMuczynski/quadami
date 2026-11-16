@@ -177,6 +177,24 @@ namespace {
     }
 }
 
+std::vector<char> badFaceFlags(const RemeshMesh& mesh)
+{
+    std::vector<char> flags(mesh.faceSizes.size(), 0);
+    size_t offset = 0;
+    for (size_t face = 0; face < mesh.faceSizes.size(); ++face) {
+        const size_t size = mesh.faceSizes[face];
+        const uint32_t* corners = mesh.faceIndices.data() + offset;
+        offset += size;
+        if (4 != size) {
+            flags[face] = 1;
+            continue;
+        }
+        const FaceShape shape = faceShape(mesh, corners, size);
+        flags[face] = (shape.degenerate || shape.folded) ? 1 : 0;
+    }
+    return flags;
+}
+
 void measureMesh(const RemeshMesh& mesh, QualityReport* report)
 {
     const size_t vertexCount = mesh.positions.size() / 3;
@@ -1105,6 +1123,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
 
     report.ignoredFeatureEdgeCount = engine.ignoredMarkedEdgeCount();
     const size_t marksDroppedIslands = engine.markedEdgesDroppedIslandCount();
+    const size_t marksPartlyDroppedIslands = engine.markedEdgesPartlyDroppedIslandCount();
     const size_t marksTooDenseIslands = engine.markedEdgesTooDenseIslandCount();
     const size_t sharpDroppedIslands = engine.sharpEdgesDroppedIslandCount();
     if (nullptr != preview)
@@ -1195,6 +1214,11 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
         report.warnings.push_back("Marked edges were not followed on " + std::to_string(marksDroppedIslands)
             + (1 == marksDroppedIslands ? " part" : " parts")
             + ": following them folded the quads there (marks that cross other creases or each other)");
+    }
+    if (marksPartlyDroppedIslands > 0) {
+        report.warnings.push_back("Some marked edges were not followed on " + std::to_string(marksPartlyDroppedIslands)
+            + (1 == marksPartlyDroppedIslands ? " part" : " parts")
+            + ": following those lines folded the quads next to them; the other lines were kept");
     }
     if (sharpDroppedIslands > 0) {
         report.warnings.push_back("Sharp edges were not kept on " + std::to_string(sharpDroppedIslands)
