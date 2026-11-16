@@ -1,7 +1,7 @@
 # Quadami: plan
 
 One prioritized, dependency-ordered plan, merged on 2026-10-14 from the earlier TODO ([archive/TODO-2026-10-14-pre-merge.md](archive/TODO-2026-10-14-pre-merge.md)) and every research report in [research/](research/).
-Update this file and add a session file in [sessions/](sessions/README.md) every session.
+A PR edits only the item(s) named in its title (`[TODO x.y]`): no new items, no edits to other items. New items are added after merges, numbered, in one docs PR from master (Kajetan, 2026-11-16; two PRs adding the same new number or editing the same item were most of this file's merge conflicts). Add a session file in [sessions/](sessions/README.md) every session.
 Keep one blank line between top-level items: git merges edits to two neighbouring items cleanly only when an unchanged line separates them.
 
 **Keys.** Status `[ ]` open, `[~]` in progress / partly done, `[x]` done, `[-]` deferred or dropped by a decision (reason given). Everything known but deliberately not done, with why and what unblocks it: [Parked](#parked-known-but-not-done). Item IDs (e.g. **3.3**) are wave.number; "needs" lists hard dependencies. Issue IDs P*, M*, F* are in [REFERENCE.md](REFERENCE.md); SQ-* in [SPECIALIST-QUESTIONS.md](SPECIALIST-QUESTIONS.md). Effort: S days, M 1–3 weeks, L 1–3 months. **License flags** ([LICENSES.md](LICENSES.md) §2): `OK-MIT` own or permissive code, can also go upstream; `OK-GPL3` needs a GPL-compatible dependency; `GPL3-ONLY` pulls in GPL-3.0-only code (CoMISo), **excluded by 0.2**; `ASK` no license, needs author permission or a re-implementation; `NO` never ship.
