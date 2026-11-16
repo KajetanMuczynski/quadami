@@ -20,3 +20,14 @@
 - Next: the cliff moves rather than vanishes on fine weaves (woven_r05 1100-1440, wov_r03 2000: 25-41 % lost):
   there the filled slab scores worse than the torn result because filled area counts as unfaithful. Notes:
   research/lace-cliffs-2026-11-13.md in the project files.
+
+## 2026-11-16 follow-up: filled area weighed lower near the input
+- Did (Kajetan asked for a middle way between "filled = lost" and ignoring fill): output up to 1.5 quad
+  widths off the input counts at weight 0.5 in the unfaithful share, farther output in full.
+- Measured (19 lace and plate cases × 6 replicates, metric2.py; weights 1 / 0.5 / 0.25): no run lost more input
+  at either lower weight. At 0.5: woven_r05 1100 41 -> 0.3 % (6/6 filled), wov_r03 2000 37-41 -> 1-37 % (5/6
+  filled), woven_r11 960 6/6 filled (base 1/6), mixed 2000 6/6 under 5 % lost (base 4/6); plates with holes of
+  about 5 quads (plate3_big 300/400, plate6_mid 1000) filled in 1-4 of 6 replicates (base 10-34 % lost there).
+  0.25 adds woven_r05 1300 (6/6) and wov_r07_p16 800 (2/6). Unchanged at both: woven_r05 1440/2000,
+  slabnet_t05 2016/3000. Lane light at both (790 runs identical); thin sets u0-u1: 0.5 moves iron_gate 10000 u1
+  (lost 39.39 -> 39.25 %), 0.25 also nemetona 3000 u1 and iron_gate 10000 u0, all within 0.15 points.

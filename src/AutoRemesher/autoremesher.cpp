@@ -225,6 +225,16 @@ namespace {
     const double maximumUnfaithfulQuadRatio = 2.0;
     const double minimumFaithfulQuadRatio = 0.5;
     const double envelopeShareMargin = 0.01;
+    // Output up to filledNearDistance quad widths off the input counts at
+    // filledNearWeight in the share, farther output in full: that is the
+    // fill of a hole up to about three quads wide in a lace the envelope
+    // closed, which costs less than the torn result it replaces.  Weighed
+    // in full, a weave of strands thinner than a quad kept its torn result
+    // at 25-41 % lost from 1100 to 2000 quads; at one half woven_r05 1100
+    // and wov_r03 2000 come out filled, and no run lost more input
+    // (19 lace cases, 6 replicates; research/lace-cliffs-2026-11-13.md).
+    const double filledNearWeight = 0.5;
+    const double filledNearDistance = 1.5;
 
     // A sliver is a strip-shaped island (area below 1e-3 of its bounding
     // diagonal squared) whose mean width, area over diagonal, is under half
@@ -2755,8 +2765,9 @@ bool AutoRemesher::remeshIslands()
     // Islands with holes or handles that came out unfaithful are tried on
     // their envelope (maximumUnfaithfulShare).  A result's share is the
     // input farther than a quad from it plus its area more than half a quad
-    // off the input; a torn result (several pieces, non-manifold edges, a
-    // boundary on a closed input) or one with more than
+    // off the input (at filledNearWeight up to filledNearDistance); a torn
+    // result (several pieces, non-manifold edges, a boundary on a closed
+    // input) or one with more than
     // maximumUnfaithfulQuadRatio or fewer than minimumFaithfulQuadRatio times
     // its quads counts brokenUnfaithfulShare more, and an empty one counts 1.
     const auto unfaithfulShare = [&](size_t i, const IslandContext& ctx, const IslandRun& run, bool* broken, double* lost) {
@@ -2779,8 +2790,9 @@ bool AutoRemesher::remeshIslands()
         const SurfaceProjector output(&run.remeshedVertices, &outputTriangles);
         const SurfaceProjector input(&m_vertices, &trianglesIslands[i]);
         *lost = fartherAreaShare(m_vertices, trianglesIslands[i], output, quadWidth, 0.5 * quadWidth, maximumSamples);
-        double share = *lost
-            + fartherAreaShare(run.remeshedVertices, outputTriangles, input, 0.5 * quadWidth, 0.5 * quadWidth, maximumSamples);
+        const double offHalf = fartherAreaShare(run.remeshedVertices, outputTriangles, input, 0.5 * quadWidth, 0.5 * quadWidth, maximumSamples);
+        const double offFar = fartherAreaShare(run.remeshedVertices, outputTriangles, input, filledNearDistance * quadWidth, 0.5 * quadWidth, maximumSamples);
+        double share = *lost + filledNearWeight * offHalf + (1.0 - filledNearWeight) * offFar;
         const SurfaceTopology topology = surfaceTopology(run.remeshedQuads, run.remeshedVertices.size());
         const bool closedInput = 0 == ctx.originalTopology.boundaryEdges && 0 == ctx.originalTopology.nonManifoldEdges;
         if (1 != topology.components || 0 != topology.nonManifoldEdges || (closedInput && 0 != topology.boundaryEdges)) {
