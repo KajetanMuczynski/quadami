@@ -40,6 +40,8 @@ bool IsotropicRemesher::remesh()
         remesher.setTargetEdgeLength(m_targetEdgeLength);
     if (m_vertexTargetEdgeLengths != nullptr)
         remesher.setVertexTargetEdgeLengths(m_vertexTargetEdgeLengths);
+    if (m_pinnedVertices != nullptr)
+        remesher.setPinnedVertices(m_pinnedVertices);
     remesher.setFeatureEdges(m_featureEdges.edges, m_featureEdges.flags);
     remesher.setSmoothNormalDegrees(m_smoothNormalDegrees);
     if (m_progressHandler)
@@ -85,7 +87,6 @@ bool IsotropicRemesher::remesh()
         } while (halfedge != face->halfedge);
     }
     m_remeshedFeatureEdges.normalize();
-    m_clearedFeatureEdges = halfedgeMesh->clearedFeatureEdges();
 
     return true;
 }

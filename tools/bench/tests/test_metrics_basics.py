@@ -101,7 +101,10 @@ class Basics(unittest.TestCase):
         V, Q = np.vstack([V1, V2[1:]]), Q1 + [[remap[i] for i in q] for q in Q2]
         m = self.measure((V, tris(Q)), (V, Q))
         self.assertEqual((m["validity"]["non_manifold_vertices"], m["topology"]["non_manifold_edges"]), (1, 0))
-        self.assertEqual(m["validity"]["islands_input_non_manifold"], 1)
+        # The pinch is split like the core's input cleanup: two manifold input islands, and an output
+        # that keeps it is judged (its non-manifold vertex), not skipped.
+        self.assertEqual((m["validity"]["islands_input"], m["validity"]["islands_input_non_manifold"]), (2, 0))
+        self.assertFalse(m["validity"]["islands_same_as_input"])
 
     def test_vertex_colours_and_negative_indices(self):
         # "v x y z r g b" (MeshLab, ZBrush, Blender with colours) was read as two vertices per line,

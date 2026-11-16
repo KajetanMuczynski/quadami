@@ -156,6 +156,16 @@ int main(int argc, char* argv[])
             tight, &vertices, &polygons, &outcome);
         expect(!capped, "the grid-vertex cap stops the extraction");
         expect(std::string::npos != outcome.reason.find("grid vertex cap"), "the cap is named as the reason");
+
+        // A triangle that uses a vertex twice: OpenMesh's add_face() wrote
+        // before its arrays on it, so it must be a fallback, not a crash.
+        Map degenerate = square;
+        degenerate.triangles.push_back({ 0, 0, 1 });
+        degenerate.uvs.push_back({ square.uvs[0][0], square.uvs[0][0], square.uvs[0][1] });
+        const bool usedDegenerate = AutoRemesher::extractWithQex(degenerate.vertices, degenerate.triangles,
+            degenerate.uvs, limitsFor(degenerate, 16), &vertices, &polygons, &outcome);
+        expect(!usedDegenerate, "a triangle with a repeated vertex falls back");
+        expect(std::string::npos != outcome.reason.find("uses a vertex twice"), "the repeated vertex is named");
     }
 
     {

@@ -8,7 +8,7 @@ It is made for people who sculpt or model in Blender and need clean, even topolo
 (to animate, UV-unwrap, keep sculpting at a lower resolution, or hand over). You do not need to be
 a programmer to use it: the [user guide](docs/USER-GUIDE.md) is written for Blender beginners.
 
-> **Status: 0.2.0, a release with known limits.** It works on the sculpts we test with, but
+> **Status: 0.2.1, a release with known limits.** It works on the sculpts we test with, but
 > expect rough edges. Read [Limits and warnings](#limits-and-warnings) before you rely
 > on it, and send the panel's build line with every bug report.
 
@@ -33,6 +33,10 @@ More before/after examples, with their numbers and limits: [docs/gallery](docs/g
   blames a sculpt brush); if the result looks fine, ignore it.
 - **Builds quads with libQEx**, a robust quad extractor from RWTH Aachen, with our own extractor as
   a per-piece fallback.
+- **Shows the quad size before you remesh.** **Preview Density** paints the planned quad size on your
+  model; drag **Change** to see what more or fewer quads would give, at once, then remesh at the
+  count that keeps your details. It is a plan (on average 10-15 % off the result, less reliable on
+  hard-surface parts), and it shows size only, not edge loops.
 - **Asks before a huge job.** Above 200,000 quads it shows the memory it needs (about 2 GB per
   100,000 quads) and waits for you to confirm.
 
@@ -45,7 +49,7 @@ no GitHub account needed). Do not unpack it: Blender installs the zip itself.
 | System | Zip | Tested |
 |---|---|---|
 | **Linux** (x64, any distribution with glibc 2.28 or newer, e.g. Ubuntu 20.04+, Debian 10+, Fedora 29+, RHEL 8+) | `quadami-<version>-linux-x64.zip` (built in AlmaLinux 8, so it does not need a new distribution). Works with Blender from blender.org and the snap (`/snap/bin/blender`). Or build it yourself ([addon/BEGINNERS.md](addon/BEGINNERS.md)). | CI (Ubuntu 24.04, Blender 4.2, headless) and the maintainer's laptop (Ubuntu, Blender 4.5 snap) |
-| **Windows** 10/11 (x64) | `quadami-<version>-windows-x64.zip` | CI (Blender 5.2, headless); 0.1.0 also on one Windows 10 desktop, 0.2.0 not yet by hand. The program is not signed. |
+| **Windows** 10/11 (x64) | `quadami-<version>-windows-x64.zip` | CI (Blender 5.2, headless); 0.1.0 also on one Windows 10 desktop, 0.2.x not yet by hand. The program is not signed. |
 | **macOS** (Apple silicon, macOS 11.2+): **experimental, untested** | `quadami-<version>-macos-arm64.zip` | In CI only; **never tried on a real Mac**, and the program is not notarized, so Gatekeeper may block it |
 | macOS on Intel | Build it yourself ([docs/BUILDING.md](docs/BUILDING.md)). | No |
 
@@ -70,7 +74,7 @@ the install scripts and the snap version of Blender on Linux: [user guide §2](d
 - **Holes** can still appear in closed sculpts at higher quad counts; the **Holes** row shows them.
 - **Hard-surface models**: sharp edges come out slightly rounded (on Blender's cube an edge loop
   follows about 90 % of the edges at 5,000 quads, on the cylinder about 80 % of the rims; a cone's
-  rim much less), and cone tips are cut off about one quad deep. Mark the edges to keep as Sharp:
+  rim much less), and needle-sharp spikes are cut off about one quad deep (a cone tip keeps its point). Mark the edges to keep as Sharp:
   **Follow Marks** (on by default) then keeps quad edges along 90-99 % of a cube's or cylinder's marked
   edges at 5,000 quads. Sharp Edge below 90° makes more triangles
   and other non-quads on detailed parts. Mirror symmetry, guide curves and density painting are not

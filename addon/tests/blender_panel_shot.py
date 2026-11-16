@@ -28,10 +28,10 @@ Linux CI under Xvfb) after the zip is installed:
 
 It remeshes a sphere with a thin horn, a one-triangle speck beside it and its
 equator marked Sharp at a low target, so the report has missing thin parts, a
-missing piece and followed marks, shows the result in the sidebar, and saves
-the screen at UI scale 1 and 1.5 as panel-<scale>.png and the sidebar as
-sidebar-<scale>.png (ImageMagick; --ocr prints the sidebar's text, read by
-tesseract).
+missing piece, followed marks and the Raise Target Quads hint, shows the
+result in the sidebar, and saves the screen at UI scale 1 and 1.5 as
+panel-<scale>.png and the sidebar as sidebar-<scale>.png (ImageMagick; --ocr
+prints the sidebar's text, read by tesseract).
 The script quits Blender with exit status 1 on any error, a blank picture or,
 with --ocr, a line of our panel that Blender cut off with an ellipsis because
 it was too wide for the sidebar.  The pictures are for a person to look at.
@@ -103,12 +103,18 @@ def setup():
 
     settings = getattr(bpy.context.scene, ID)
     settings.target_quads = 300
-    positions, triangles, smooth, marked, _flooded = addon._mesh_arrays(bpy.context, source, settings.follow_marks)
+    positions, triangles, smooth, marked, _flooded, _guide_edges = addon._mesh_arrays(bpy.context, source, settings.follow_marks)
     assert len(marked) > 0
     outcome = worker.remesh(worker.bundled_executable(), positions, triangles, settings.parameters(),
                             marked_edges=marked)
     assert outcome.ok, (outcome.status, outcome.message, outcome.log)
-    obj, final_report = addon._build_object(bpy.context, source, outcome, smooth)
+    # The imported-marks warning is not true of this mesh; it is added so the
+    # OCR check covers the longest warning text too.
+    obj, final_report = addon._build_object(bpy.context, source, outcome, smooth, [addon._flood_warning(["SHARP"])])
+    key = addon.raise_hint.input_key(positions, triangles, marked, settings.parameters())
+    addon._track(source, key, obj, final_report)
+    assert final_report.get("raise", {}).get("state") == "try", final_report.get("raise")
+    print("panel_shot: raise hint: %s" % addon.raise_hint.text(final_report["raise"]))
     addon._show_result(bpy.context, obj, (source,))
     for label, value, problem in report.summary_rows(final_report):
         print("panel_shot: %-20s %s%s" % (label, value, "  <-" if problem else ""))

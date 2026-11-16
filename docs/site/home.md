@@ -18,7 +18,7 @@ quads that follows the shape, with edge loops that run along it. It is free soft
 
 ## Status
 
-**Version 0.2.0, a release with known limits.** It works on the sculpts we test with, but expect rough edges.
+**Version 0.2.1, a release with known limits.** It works on the sculpts we test with, but expect rough edges.
 After every run the panel reports quads against the target, non-quads, holes, folded faces and the
 time, so a bad result shows itself. Put the panel's build line in every bug report.
 
