@@ -442,9 +442,22 @@ int main()
     printf("%-24s %13s %17s %11s %13s\n", "case", "folded", "degenerate", "flips", "twisted");
     for (const auto& c : cases) {
         const AutoRemesher::QualityReport report = measure(c.positions, c.faces);
+        // badFaceFlags (the marked-edge fallback's per-face test) marks the
+        // non-quads and the faces counted folded or degenerate.
+        AutoRemesher::RemeshMesh mesh;
+        mesh.positions = c.positions;
+        for (const auto& face : c.faces) {
+            mesh.faceSizes.push_back((uint32_t)face.size());
+            mesh.faceIndices.insert(mesh.faceIndices.end(), face.begin(), face.end());
+        }
+        size_t bad = 0;
+        for (char flag : AutoRemesher::badFaceFlags(mesh))
+            bad += flag ? 1 : 0;
+        const size_t wantBad = 1 == c.faces.size() ? (4 != c.faces[0].size() || c.folded || c.degenerate ? 1u : 0u)
+                                                   : c.folded + c.degenerate;
         const bool ok = report.foldedFaceCount == c.folded && report.degenerateFaceCount == c.degenerate
             && report.orientationFlipCount == c.flips && report.twistedQuadCount == c.twisted
-            && report.foldedOrTwistedFaceCount == (c.folded || c.twisted ? 1u : 0u);
+            && report.foldedOrTwistedFaceCount == (c.folded || c.twisted ? 1u : 0u) && bad == wantBad;
         failures += ok ? 0 : 1;
         printf("%-24s %6zu (want %zu) %10zu (want %zu) %4zu (want %zu) %6zu (want %zu)%s\n", c.name.c_str(),
             report.foldedFaceCount, c.folded, report.degenerateFaceCount, c.degenerate,

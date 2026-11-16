@@ -131,6 +131,12 @@ public:
     {
         return m_markedEdgesDroppedIslandCount;
     }
+    // Islands that kept some chains of marks (guides, mark lines) and
+    // dropped those next to which the run folded more quads than without.
+    size_t markedEdgesPartlyDroppedIslandCount() const
+    {
+        return m_markedEdgesPartlyDroppedIslandCount;
+    }
     // Islands remeshed again without their sharp edges: the run with them
     // changed the island's topology or lost most of its quads.
     size_t sharpEdgesDroppedIslandCount() const
@@ -543,6 +549,7 @@ private:
     std::vector<std::pair<size_t, size_t>> m_markedEdges;
     size_t m_ignoredMarkedEdgeCount = 0;
     size_t m_markedEdgesDroppedIslandCount = 0;
+    size_t m_markedEdgesPartlyDroppedIslandCount = 0;
     size_t m_sharpEdgesDroppedIslandCount = 0;
     size_t m_markedEdgesTooDenseIslandCount = 0;
     double m_smoothNormalDegrees = 0.0;
