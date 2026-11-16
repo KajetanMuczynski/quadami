@@ -187,6 +187,15 @@ namespace {
     // island's quads, for the check below while results stay unfaithful.
     const double envelopeClosingGrowth = 1.5;
     const double maximumEnvelopeClosingRadius = 2.25;
+    // A lace finer than the quads (a weave of strands or a perforated
+    // plate thinner than a quad) can stay broken at every radius up to
+    // that: closing a hole of width s in a sheet takes a radius of about
+    // s^2 / (8 offset), so in quad widths it grows with the target.  An island
+    // whose kept result is still unfaithful by brokenUnfaithfulShare or more
+    // then grows the radius on, up to this many quad widths, while its
+    // envelope keeps holes or handles: a slab with the lace filled in beats
+    // an island that is torn, empty or a quarter lost.
+    const double maximumBrokenEnvelopeClosingRadius = 17.1;
     // The bound is necessary, not sufficient: above it the map of a
     // perforated plate or a net still breaks, up to about 6|chi|, and its
     // output can be a handful of quads (research/envelope-disprover-2026-11-05.md).
@@ -216,6 +225,16 @@ namespace {
     const double maximumUnfaithfulQuadRatio = 2.0;
     const double minimumFaithfulQuadRatio = 0.5;
     const double envelopeShareMargin = 0.01;
+    // Output up to filledNearDistance quad widths off the input counts at
+    // filledNearWeight in the share, farther output in full: that is the
+    // fill of a hole up to about three quads wide in a lace the envelope
+    // closed, which costs less than the torn result it replaces.  Weighed
+    // in full, a weave of strands thinner than a quad kept its torn result
+    // at 25-41 % lost from 1100 to 2000 quads; at one half woven_r05 1100
+    // and wov_r03 2000 come out filled, and no run lost more input
+    // (19 lace cases, 6 replicates; research/lace-cliffs-2026-11-13.md).
+    const double filledNearWeight = 0.5;
+    const double filledNearDistance = 1.5;
 
     // A sliver is a strip-shaped island (area below 1e-3 of its bounding
     // diagonal squared) whose mean width, area over diagonal, is under half
@@ -2767,8 +2786,9 @@ bool AutoRemesher::remeshIslands()
     // Islands with holes or handles that came out unfaithful are tried on
     // their envelope (maximumUnfaithfulShare).  A result's share is the
     // input farther than a quad from it plus its area more than half a quad
-    // off the input; a torn result (several pieces, non-manifold edges, a
-    // boundary on a closed input) or one with more than
+    // off the input (at filledNearWeight up to filledNearDistance); a torn
+    // result (several pieces, non-manifold edges, a boundary on a closed
+    // input) or one with more than
     // maximumUnfaithfulQuadRatio or fewer than minimumFaithfulQuadRatio times
     // its quads counts brokenUnfaithfulShare more, and an empty one counts 1.
     const auto unfaithfulShare = [&](size_t i, const IslandContext& ctx, const IslandRun& run, bool* broken, double* lost) {
@@ -2791,8 +2811,9 @@ bool AutoRemesher::remeshIslands()
         const SurfaceProjector output(&run.remeshedVertices, &outputTriangles);
         const SurfaceProjector input(&m_vertices, &trianglesIslands[i]);
         *lost = fartherAreaShare(m_vertices, trianglesIslands[i], output, quadWidth, 0.5 * quadWidth, maximumSamples);
-        double share = *lost
-            + fartherAreaShare(run.remeshedVertices, outputTriangles, input, 0.5 * quadWidth, 0.5 * quadWidth, maximumSamples);
+        const double offHalf = fartherAreaShare(run.remeshedVertices, outputTriangles, input, 0.5 * quadWidth, 0.5 * quadWidth, maximumSamples);
+        const double offFar = fartherAreaShare(run.remeshedVertices, outputTriangles, input, filledNearDistance * quadWidth, 0.5 * quadWidth, maximumSamples);
+        double share = *lost + filledNearWeight * offHalf + (1.0 - filledNearWeight) * offFar;
         const SurfaceTopology topology = surfaceTopology(run.remeshedQuads, run.remeshedVertices.size());
         const bool closedInput = 0 == ctx.originalTopology.boundaryEdges && 0 == ctx.originalTopology.nonManifoldEdges;
         if (1 != topology.components || 0 != topology.nonManifoldEdges || (closedInput && 0 != topology.boundaryEdges)) {
@@ -2935,6 +2956,25 @@ bool AutoRemesher::remeshIslands()
                         ctx.voxelSize = base.voxelSize;
                         ctx.targetQuadCount = base.targetQuadCount;
                         useEnvelope(ctx, std::move(envelope), radii[k]);
+                        tryRun(std::move(ctx));
+                    }
+                    // Still as bad as a broken result: close more, until the envelope is one
+                    // closed piece without handles (Euler characteristic 2).
+                    for (double radius = radii.back() * envelopeClosingGrowth;
+                        best >= brokenUnfaithfulShare && lastRunEuler < 2 && radius <= maximumBrokenEnvelopeClosingRadius * 1.0001;
+                        radius *= envelopeClosingGrowth) {
+                        EnvelopeResult envelope;
+                        if (!envelopeAt(base, radius, &envelope))
+                            continue;
+                        const long long euler = envelopeEuler(envelope);
+                        if (!(euler > lastRunEuler))
+                            continue;
+                        lastRunEuler = euler;
+                        IslandContext ctx;
+                        buildIslandContext(i, ctx);
+                        ctx.voxelSize = base.voxelSize;
+                        ctx.targetQuadCount = base.targetQuadCount;
+                        useEnvelope(ctx, std::move(envelope), radius);
                         tryRun(std::move(ctx));
                     }
                 }
