@@ -181,6 +181,7 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
     double foldRepair = 0, foldedTriangles = 0, foldClusters = 0, foldPatches = 0, foldedAfter = 0, foldClustersAfter = 0;
     double foldMovedVertices = 0, foldMaxOffset = 0, foldMaxMove = 0, foldSpikes = 0, foldSpikeDrop = 0, foldMs = 0;
     double thinShare = 0, thinSpots = 0, thinGrowth = 0;
+    double floorRaised = 0, floorExtraShare = 0;
     double projected = 0, projectionKeptFolding = 0, projectionKeptOther = 0;
     double creaseSnapped = 0, relaxMoves = 0;
     // Area-weighted over islands; the rescale is the island's farthest from 1.
@@ -221,6 +222,11 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
             thinShare = valueOf(record, "thin_area_share", 0);
             thinSpots = valueOf(record, "thin_spots", 0);
             thinGrowth = valueOf(record, "thin_growth_p50", 0);
+            floorRaised = valueOf(record, "floor_raised_islands", 0);
+            floorExtraShare = valueOf(record, "floor_extra_quad_share", 0);
+        } else if (record.stage == "plan") {
+            floorRaised = valueOf(record, "floor_raised_islands", 0);
+            floorExtraShare = valueOf(record, "floor_extra_quad_share", 0);
         } else if (record.stage == "cover_result") {
             flipped += valueOf(record, "snapped_flipped", 0);
             degenerate += valueOf(record, "snapped_degenerate", 0);
@@ -330,6 +336,8 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
         { "thin_area_share", thinShare },
         { "thin_spots", thinSpots },
         { "thin_growth_p50", thinGrowth },
+        { "floor_raised_islands", floorRaised },
+        { "floor_extra_quad_share", floorExtraShare },
     };
 }
 
