@@ -129,6 +129,14 @@ class Plan:
         q = np.maximum(quads * self.share, self.floor) / (self.edge_scaling ** 2)
         return np.where(self.left_out, 0.0, q)
 
+    def floor_parts(self, quads):
+        """(islands, quads) the core's small-part floor adds at Target Quads
+        `quads`: islands whose share is below their floor, and what the
+        floor adds over their share."""
+        raised = (~self.left_out) & (quads * self.share < self.floor)
+        extra = (self.floor[raised] - quads * self.share[raised]).sum() / (self.edge_scaling ** 2)
+        return int(raised.sum()), float(extra)
+
     def planned_quads(self, quads):
         return float(self.island_quads(quads).sum())
 

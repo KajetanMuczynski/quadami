@@ -31,6 +31,7 @@
 #include <cmath>
 #include <cstdio>
 #include <map>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -165,6 +166,38 @@ int main()
     const double ratio = (double)run.report.quadCount / plan.plannedQuads;
     std::printf("run %zu quads, %.3f of the plan\n", run.report.quadCount, ratio);
     check(ratio > 0.85 && ratio < 1.15, "the run lands within 15 % of the plan");
+
+    // The floor's report (TODO G13): one small sphere adds about 1 % of the
+    // target, so it is counted but not warned about; forty add about 60 %.
+    const auto diagnostic = [](const QualityReport& report, const char* key) {
+        for (const auto& it : report.diagnostics)
+            if (it.first == key)
+                return it.second;
+        return -1.0;
+    };
+    const auto floorWarned = [](const QualityReport& report) {
+        for (const auto& warning : report.warnings)
+            if (warning.find("each given a minimum of quads") != std::string::npos)
+                return true;
+        return false;
+    };
+    check(1.0 == diagnostic(planned.report, "floor_raised_islands"), "the plan counts one floor-raised island");
+    check(!floorWarned(planned.report) && !floorWarned(run.report), "one small part is not warned about");
+    check(1.0 == diagnostic(run.report, "floor_raised_islands"), "the run counts one floor-raised island");
+    RemeshRequest crumbs;
+    sphere(4, 0.0, 1.0, &crumbs.positions, &crumbs.triangles);
+    for (int i = 0; i < 40; ++i)
+        sphere(2, 3.0 + 0.2 * i, 0.05, &crumbs.positions, &crumbs.triangles);
+    crumbs.parameters.targetQuadCount = 2000;
+    const RemeshResult crumbsPlanned = planRemesh(crumbs);
+    const double share = diagnostic(crumbsPlanned.report, "floor_extra_quad_share");
+    std::printf("40 crumbs: %.0f raised, floor adds %.2f of the target\n",
+        diagnostic(crumbsPlanned.report, "floor_raised_islands"), share);
+    check(40.0 == diagnostic(crumbsPlanned.report, "floor_raised_islands"), "the plan counts forty raised islands");
+    check(share > 0.4 && share < 0.8, "forty crumbs add about 60 % of the target");
+    check(floorWarned(crumbsPlanned.report), "the plan warns about the floor");
+    const RemeshResult crumbsRun = remesh(crumbs);
+    check(RemeshStatus::Ok == crumbsRun.status && floorWarned(crumbsRun.report), "the run warns about the floor");
 
     if (0 == failures)
         std::printf("plan_test: ok\n");
