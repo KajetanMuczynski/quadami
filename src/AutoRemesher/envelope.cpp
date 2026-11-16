@@ -190,14 +190,27 @@ bool buildEnvelope(const std::vector<Vector3>& vertices,
     result->cells = grid.size();
 
     // Nodes within closingRadius of a triangle, filled slab by slab along z
-    // so that each thread writes its own nodes.
+    // so that each thread writes its own nodes.  Each triangle visits the
+    // nodes of its box grown by the radius, (2 r / cell)^3 of them; past
+    // maximumDirectRadiusCells that is thousands of nodes per triangle (an
+    // island closed at 17 quad widths spent 20 s here).  So for a larger
+    // radius the triangles mark only the seed nodes within one cell of them,
+    // and the distance transform gives every node its distance e to the
+    // nearest seed.  The closest point of the surface has a seed within
+    // sqrt(3)/2 cell, and every seed is within a cell of the surface, so
+    // e - sqrt(3)/2 <= d <= e + 1 (in cells).  Nodes clear of the radius by
+    // that much are decided by e; the shell between is measured exactly.
+    const double maximumDirectRadiusCells = 9.5;
+    const bool viaTransform = closingRadius > maximumDirectRadiusCells * grid.cell;
+    const double reach = viaTransform ? grid.cell : closingRadius;
     const size_t slabLayers = 4;
     const size_t slabCount = (grid.nz + slabLayers - 1) / slabLayers;
     std::vector<std::vector<size_t>> slabTriangles(slabCount);
     const double radius2 = closingRadius * closingRadius;
+    const double reach2 = reach * reach;
     const auto nodeRange = [&](double low, double high, size_t k, size_t count, size_t* first, size_t* last) {
-        const double a = std::ceil((low - closingRadius - grid.origin[k]) / grid.cell);
-        const double b = std::floor((high + closingRadius - grid.origin[k]) / grid.cell);
+        const double a = std::ceil((low - reach - grid.origin[k]) / grid.cell);
+        const double b = std::floor((high + reach - grid.origin[k]) / grid.cell);
         *first = (size_t)std::max(0.0, a);
         *last = (size_t)std::min((double)count - 1.0, b);
         return a <= b && b >= 0.0 && a <= (double)count - 1.0;
@@ -215,6 +228,10 @@ bool buildEnvelope(const std::vector<Vector3>& vertices,
             slabTriangles[s].push_back(t);
     }
     std::vector<uint8_t> inside(grid.size(), 0);
+    // Squared distance to the nearest seed in cells^2 (viaTransform only).
+    std::vector<float> seeds;
+    if (viaTransform)
+        seeds.assign(grid.size(), (float)farValue);
     tbb::parallel_for(tbb::blocked_range<size_t>(0, slabCount),
         [&](const tbb::blocked_range<size_t>& range) {
             for (size_t s = range.begin(); s != range.end(); ++s) {
@@ -238,14 +255,41 @@ bool buildEnvelope(const std::vector<Vector3>& vertices,
                                 if (inside[i])
                                     continue;
                                 const Vector3 p = grid.position(x, y, z);
-                                if ((p - closestPointOnTriangle(p, a, b, c)).lengthSquared() <= radius2)
-                                    inside[i] = 1;
+                                if ((p - closestPointOnTriangle(p, a, b, c)).lengthSquared() <= reach2) {
+                                    if (viaTransform)
+                                        seeds[i] = 0.0f;
+                                    else
+                                        inside[i] = 1;
+                                }
                             }
                         }
                     }
                 }
             }
         });
+
+    if (viaTransform) {
+        for (int axis = 0; axis < 3; ++axis)
+            distanceTransformAxis(seeds, grid, axis);
+        const double radiusCells = closingRadius / grid.cell;
+        const double surely = std::pow(std::max(0.0, radiusCells - 1.0001), 2.0);
+        const double surelyNot = std::pow(radiusCells + 0.8661, 2.0);
+        const SurfaceProjector surface(&vertices, &triangles);
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, grid.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t i = range.begin(); i != range.end(); ++i) {
+                    const double e2 = (double)seeds[i];
+                    if (e2 <= surely) {
+                        inside[i] = 1;
+                    } else if (e2 <= surelyNot) {
+                        const size_t x = i % grid.nx, y = (i / grid.nx) % grid.ny, z = i / (grid.nx * grid.ny);
+                        const double d = surface.distance(grid.position(x, y, z), 2.0 * closingRadius);
+                        inside[i] = d * d <= radius2 ? 1 : 0;
+                    }
+                }
+            });
+        std::vector<float>().swap(seeds);
+    }
 
     // Distance of each grown node to the nearest node outside, then the
     // shrink: the field is positive inside the envelope.

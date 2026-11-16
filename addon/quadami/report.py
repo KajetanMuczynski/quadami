@@ -53,6 +53,11 @@ def spike_text(diagnostics):
     return "%d, tip lowered by up to %.1f quads" % (spikes, float(diagnostics.get("input_fold_spike_drop_quads", 0.0)))
 
 
+# The core warns above this share of Target Quads added by its small-part
+# floor (floorExtraWarningShare in remesh.cpp).
+FLOOR_EXTRA_SHARE = 0.25
+
+
 def summary_rows(report):
     """(label, value, is_problem) rows for a report dict from --report-json."""
     rows = []
@@ -61,7 +66,10 @@ def summary_rows(report):
     if report.get("status") == "ok":
         quads = output.get("quads", 0)
         ratio = " (%d%%)" % round(100.0 * quads / target) if target else ""
-        rows.append(("Quads", "%d of %d target%s" % (quads, target, ratio), False))
+        # Marked when the small-part floor added over a quarter of the target:
+        # the core's warning says why (cores before 2026-11 don't report it).
+        floor_share = report.get("diagnostics", {}).get("floor_extra_quad_share", 0.0)
+        rows.append(("Quads", "%d of %d target%s" % (quads, target, ratio), floor_share > FLOOR_EXTRA_SHARE))
 
         def count(label, value):
             rows.append((label, str(value), value > 0))

@@ -31,7 +31,10 @@ import bpy
 import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
 
-from . import density, guide_tool, transfer, worker
+from . import density
+from . import guide_tool
+from . import transfer
+from . import worker
 from . import raise_hint
 from . import report as report_rows
 from .names import ID, NAME
@@ -930,6 +933,13 @@ def _draw_density(layout, context, settings, room):
                                                 _length_text(context, preview, high),
                                                 _length_text(context, preview, middle)),
              "Orange: smaller quads, blue: larger; planned, not the result"]
+    # The core's small-part floor (TODO G13): many tiny loose parts each get a
+    # minimum that Target Quads does not lower; the core warns above the same share.
+    parts, extra = preview.plan.floor_parts(quads)
+    if quads and extra > report_rows.FLOOR_EXTRA_SHARE * quads:
+        lines.insert(1, "%s small parts get a minimum of quads each, %s of the planned quads; "
+                        "separate them (P > By Loose Parts) to stay near the target"
+                     % (format(parts, ","), format(round(extra), ",")))
     for line in lines:
         for part in report_rows.wrap(line, room.box - room.pad, room.measure):
             column.label(text=part)
