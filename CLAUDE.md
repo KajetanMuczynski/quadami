@@ -57,6 +57,8 @@ bench can build other checkouts for A/B). A new core `.cpp` goes into the first 
 Core tests (`tests/`, Qt-free, link `autoremesher_core`): configure with `-DAUTOREMESHER_BUILD_TESTS=ON`,
 build all targets (ctest reports a test whose executable wasn't built as failed), run
 `ctest --test-dir <build> --output-on-failure`.
+A new test is just `tests/<name>_test.cpp` (picked up by a glob; ctest name `<name>`), with no edit to
+`tests/CMakeLists.txt`; one that needs arguments or properties adds `tests/<name>_test.cmake` (see `qex_guard_test.cmake`).
 
 Blender add-on (`addon/`, Quadami): `python addon/package.py --cli-prefix <install-prefix>`
 builds the extension zip with the CLI bundled; see `addon/README.md`.
@@ -152,8 +154,8 @@ Running the binary with no args opens the GUI. The core needs `setTargetTriangle
 - Body starts with `Merge order / depends on: ...` (`none` if independent).
 - Body holds only what this change does, possible conflicts and dependencies (Kajetan, 2026-10-26).
   No clutter: no background, no replay of the work, no to-dos for Kajetan.
-- If the PR touches a conflict-prone file (`tests/CMakeLists.txt`, `src/AutoRemesher/remesh.cpp`,
-  `src/AutoRemesher/quadextractor.cpp`), say so in the body so parallel PRs can be ordered.
+- If the PR touches a conflict-prone file (`src/AutoRemesher/remesh.cpp`, `src/AutoRemesher/autoremesher.cpp`,
+  `src/AutoRemesher/quadextractor.cpp`, `addon/quadami/__init__.py`), say so in the body so parallel PRs can be ordered.
 - A PR stays **draft** until its thread has verified everything: **CI passed** green on the current
   head, no conflicts with master, A/B or regression checks finished, description final. Then mark it
   Ready for review and reply "ready to merge" with the head SHA.
