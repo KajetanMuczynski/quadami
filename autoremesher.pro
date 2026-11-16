@@ -281,6 +281,9 @@ HEADERS += src/AutoRemesher/foldrepair.h
 HEADERS += include/AutoRemesher/FoldRepair
 SOURCES += src/AutoRemesher/thinparts.cpp
 HEADERS += src/AutoRemesher/thinparts.h
+SOURCES += src/AutoRemesher/envelope.cpp
+HEADERS += src/AutoRemesher/envelope.h
+HEADERS += include/AutoRemesher/Envelope
 
 SOURCES += src/AutoRemesher/inputsanitizer.cpp
 HEADERS += src/AutoRemesher/inputsanitizer.h

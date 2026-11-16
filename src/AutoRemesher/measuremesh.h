@@ -31,6 +31,10 @@ namespace AutoRemesher {
 // interface.
 void measureMesh(const RemeshMesh& mesh, QualityReport* report);
 
+// Per face: 1 if measureMesh() counts it as a non-quad, degenerate or folded
+// face (the defects the marked-edge fallback weighs), else 0.
+std::vector<char> badFaceFlags(const RemeshMesh& mesh);
+
 // Moves the twisted quads of report (counted by measureMesh() on mesh) that
 // have a diagonal along an input crease of 90 degrees or more to
 // creaseDiagonalQuadCount: both ends of the diagonal on such an edge of the
@@ -53,11 +57,13 @@ void measureClosedIslands(const RemeshMesh& mesh,
 // after it): the distance from every vertex of the input triangles (positions
 // and triangles as in RemeshRequest) to mesh, and each island's faces against
 // the quads it was planned.  targetQuads is the run's target.  Vertices in
-// leftOut (sliver islands the remesh did not run on) are not measured.
+// leftOut (sliver islands the remesh did not run on) are not measured.  A
+// referenceTargetQuads > 0 also fills lostPartsReferenceTarget and
+// referenceLostParts.
 void measureLostParts(const std::vector<double>& positions, const std::vector<uint32_t>& triangles,
     size_t targetQuads, const RemeshMesh& mesh,
     const std::vector<::AutoRemesher::AutoRemesher::RemeshedIsland>& islands,
-    QualityReport* report, const std::vector<size_t>* leftOut = nullptr);
+    QualityReport* report, const std::vector<size_t>* leftOut = nullptr, size_t referenceTargetQuads = 0);
 
 }
 

@@ -57,6 +57,8 @@ bench can build other checkouts for A/B). A new core `.cpp` goes into the first 
 Core tests (`tests/`, Qt-free, link `autoremesher_core`): configure with `-DAUTOREMESHER_BUILD_TESTS=ON`,
 build all targets (ctest reports a test whose executable wasn't built as failed), run
 `ctest --test-dir <build> --output-on-failure`.
+A new test is just `tests/<name>_test.cpp` (picked up by a glob; ctest name `<name>`), with no edit to
+`tests/CMakeLists.txt`; one that needs arguments or properties adds `tests/<name>_test.cmake` (see `qex_guard_test.cmake`).
 
 Blender add-on (`addon/`, Quadami): `python addon/package.py --cli-prefix <install-prefix>`
 builds the extension zip with the CLI bundled; see `addon/README.md`.
@@ -83,7 +85,8 @@ CI (`.github/workflows/`):
     fails on exit status, quads outside 0.6-1.5x target, >2 % non-quads, any non-manifold edge,
     an input island more than 1 % farther than one output edge from the output (TARGETS H4 coverage: dropped
     or collapsed parts), report/OBJ mismatch; folded faces are reported in the job summary, not gated yet), worker tests, zip installed into a real Blender (4.2 LTS on Linux, 5.2 on Windows and
-    macOS). All three zips (Linux glibc 2.28+, macOS 11.2+ Apple silicon) are uploaded as artifacts
+    macOS) and remeshed headless (`addon/tests/blender_smoke.py`); Linux also installs it into Blender 4.5 LTS
+    (Kajetan's) and presses Remesh, Copy Report and Cancel in a real window under Xvfb (`addon/tests/blender_operator.py`). All three zips (Linux glibc 2.28+, macOS 11.2+ Apple silicon) are uploaded as artifacts
     `addon-<platform>`. One macOS job per PR, since macOS runners are the scarce ones.
   - `site`: tests and builds the website (`tools/site/`, whitelist in `site.json`); fails on broken links,
     upstream links outside the credits page, images outside the media folders, private paths. Artifact `site-preview`.
@@ -151,8 +154,8 @@ Running the binary with no args opens the GUI. The core needs `setTargetTriangle
 - Body starts with `Merge order / depends on: ...` (`none` if independent).
 - Body holds only what this change does, possible conflicts and dependencies (Kajetan, 2026-10-26).
   No clutter: no background, no replay of the work, no to-dos for Kajetan.
-- If the PR touches a conflict-prone file (`tests/CMakeLists.txt`, `src/AutoRemesher/remesh.cpp`,
-  `src/AutoRemesher/quadextractor.cpp`), say so in the body so parallel PRs can be ordered.
+- If the PR touches a conflict-prone file (`src/AutoRemesher/remesh.cpp`, `src/AutoRemesher/autoremesher.cpp`,
+  `src/AutoRemesher/quadextractor.cpp`, `addon/quadami/__init__.py`), say so in the body so parallel PRs can be ordered.
 - A PR stays **draft** until its thread has verified everything: **CI passed** green on the current
   head, no conflicts with master, A/B or regression checks finished, description final. Then mark it
   Ready for review and reply "ready to merge" with the head SHA.

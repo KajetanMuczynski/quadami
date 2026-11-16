@@ -28,8 +28,7 @@
 #include "vector3.h"
 #include "axisalignedboundingboxtree.h"
 #include "axisalignedboundingbox.h"
-
-class IsotropicHalfedgeMesh;
+#include "isotropichalfedgemesh.h"
 
 class IsotropicRemesher
 {
@@ -39,13 +38,15 @@ public:
     ~IsotropicRemesher();
     double initialAverageEdgeLength();
     // Feature edges of the input, as pairs of input vertex indices with a
-    // flags byte each (kept as they are).  Their vertices are not collapsed
-    // or projected; the edges are tracked through the remesh, see
-    // featureEdges().
+    // flags byte each (kept as they are).  The remesh keeps them as edge
+    // chains (TODO 2.5): never flipped, collapsed only along the chain, chain
+    // vertices slide along it and are projected onto the input's chain,
+    // corners stay where they are.
     void setFeatureEdges(const std::vector<std::pair<size_t, size_t>> &edges,
         const std::vector<unsigned char> &flags);
     void setTargetEdgeLength(double edgeLength);
     void setVertexTargetEdgeLengths(const std::vector<double> *targetLengths);
+    void setPinnedVertices(const std::vector<size_t> *pinnedVertices);
     void setTargetTriangleCount(size_t triangleCount);
     void setSmoothNormalDegrees(double degrees);
     // Reports 0..1 across remesh(), which is otherwise a long silent stretch of
@@ -58,6 +59,8 @@ public:
     IsotropicHalfedgeMesh *remeshedHalfedgeMesh();
     
 private:
+    // Taubin rounds (one shrink, one inflate step each) per shiftVertices.
+    static const size_t kHardChainSmoothingRounds = 4;
     const std::vector<Vector3> *m_vertices = nullptr;
     const std::vector<std::vector<size_t>> *m_triangles = nullptr;
     std::vector<Vector3> *m_triangleNormals = nullptr;
@@ -66,10 +69,14 @@ private:
     AxisAlignedBoudingBoxTree *m_axisAlignedBoundingBoxTree = nullptr;
     std::vector<std::pair<size_t, size_t>> m_featureEdges;
     std::vector<unsigned char> m_featureEdgeFlags;
+    std::vector<IsotropicHalfedgeMesh::FeatureSegment> m_featureSegments;
+    std::vector<AxisAlignedBoudingBox> m_featureSegmentBoxes;
+    AxisAlignedBoudingBoxTree *m_featureSegmentTree = nullptr;
     double m_targetEdgeLength = 0;
     double m_initialAverageEdgeLength = 0;
     size_t m_targetTriangleCount = 0;
     const std::vector<double> *m_vertexTargetEdgeLengths = nullptr;
+    const std::vector<size_t> *m_pinnedVertices = nullptr;
     double m_smoothNormalDegrees = 0.0;
     std::vector<Vector3> m_smoothVertexNormals; // Per-vertex smooth normals (input)
     std::vector<Vector3> m_smoothVertices;      // Subdivided mesh vertices for AABB tree
@@ -92,7 +99,11 @@ private:
     void collapseShortEdges(double minEdgeLengthSquared, double maxEdgeLengthSquared);
     void flipEdges();
     void shiftVertices();
+    void relaxSmoothHardChains();
     void projectVertices();
+    void projectVertex(IsotropicHalfedgeMesh::Vertex *vertex);
+    void buildFeatureSegmentTree();
+    bool projectOntoFeatureChain(IsotropicHalfedgeMesh::Vertex *vertex);
     void buildAxisAlignedBoundingBoxTree();
 };
 

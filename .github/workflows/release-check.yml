@@ -2,10 +2,12 @@
 # Release check (docs/TARGETS.md §2.5, docs/RELEASING.md checklist step 1), by hand before a tag:
 # Actions > release-check > Run workflow. On each platform it builds the candidate and the
 # baseline with tools/bench/ab.py, runs both over the corpus and closed sets with 1-ulp
-# replicates and checks the result with tools/bench/release_gate.py: the structural gates
-# H1-H6 and H8 on every run and replicate (for 0.x: no worse than the baseline), and the §3.2
-# ratchet against the baseline. Both sides run on the same runner, because builds on different
-# platforms give different output.
+# replicates and checks each platform's runs with tools/bench/release_gate.py (crashes, lost runs;
+# with "hard" the structural gates H1-H6 and H8 on every run). The job "verdict" then decides on
+# the records of all platforms: per case (mesh, resolution, target), candidate minus baseline
+# defects and structural failures summed over replicates and platforms, a one-sided sign test
+# per measure and set, Holm over all of them (TODO 1.16). Both sides of a pair run on the same
+# runner, because builds on different platforms give different output.
 # About an hour per platform (cloud dry run, Linux 4 cores, 2026-10-22: 54 min for both sides, 900
 # runs each); not part of "CI passed".
 #
@@ -37,13 +39,13 @@ on:
         description: Commit or tag to check (default the commit this workflow runs from)
         default: ''
       baseline:
-        description: Commit or tag of the previous release for the ratchet (empty skips the ratchet)
-        default: v0.1.0  # the previous release (docs/RELEASING.md); 0.1.0 itself was checked against 877891d
+        description: Commit or tag of the previous release for the sign tests (empty skips them)
+        default: v0.2.0  # the previous release (docs/RELEASING.md); 0.1.0 itself was checked against 877891d
       replicates:
         description: 1-ulp replicates besides the plain input
         default: '5'
       hard:
-        description: Structural gates on every run (the 1.0 bar); off = no gate fails on more runs than the baseline (0.x)
+        description: Structural gates on every run (the 1.0 bar); off = per-case sign test against the baseline (0.x)
         type: boolean
         default: false
       platforms:
@@ -168,15 +170,17 @@ jobs:
           done
           cat dirs.txt
 
-      - name: Gates and ratchet
+      - name: Per-run checks
         env:
           AR_WORK: ${{ runner.temp }}/ar-work
         run: |
           cand=$(sed -n 1p dirs.txt); base=$(sed -n 2p dirs.txt)
           echo "# ${{ matrix.platform }}: $REF${BASELINE:+ against $BASELINE}" >> "$GITHUB_STEP_SUMMARY"
           status=0
+          # Per-run checks decide here; the sign tests are this platform's column of the
+          # pooled verdict (job "verdict"), reported only.
           # shellcheck disable=SC2086  # HARD is empty or one argument
-          python tools/bench/release_gate.py "$cand" ${base:+--baseline "$base"} $HARD \
+          python tools/bench/release_gate.py "$cand" ${base:+--baseline "$base"} $HARD --decide runs \
             --summary "$GITHUB_STEP_SUMMARY" || status=$?
           if [ -n "$base" ]; then
             for set in corpus closed; do
@@ -197,6 +201,11 @@ jobs:
                           dst = os.path.join("build", "records", os.path.relpath(os.path.join(root, f), work))
                           os.makedirs(os.path.dirname(dst), exist_ok=True)
                           shutil.copy2(os.path.join(root, f), dst)
+          # Which run folder is the candidate and which the baseline, for the verdict job.
+          with open("dirs.txt") as f, open(os.path.join("build", "records", "pair.txt"), "w", newline="\n") as out:
+              for line in f:
+                  if line.strip():
+                      out.write("runs/" + os.path.basename(line.strip().rstrip("/\\")) + "\n")
           EOF
           exit $status
 
@@ -206,3 +215,48 @@ jobs:
           name: release-check-${{ matrix.platform }}
           path: build/records/
           if-no-files-found: ignore
+
+  # The release decision: the per-case sign test pooled over the platforms (TODO 1.16), on the
+  # records the check jobs uploaded. Runs when a check job failed too (its per-run failures are
+  # repeated here); a platform without records fails it, so a dropped macOS job needs its re-run.
+  verdict:
+    needs: [meshes, check]
+    if: ${{ !cancelled() && needs.meshes.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HARD: ${{ inputs.hard && '--hard' || '' }}
+      MATRIX: ${{ needs.meshes.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the metrics' packages
+        timeout-minutes: 10
+        run: python -m pip install -q --require-hashes --no-deps -r tools/bench/requirements.txt
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-check-*-*  # the platforms' records, not release-check-meshes
+          path: records
+
+      - name: Pooled sign test
+        run: |
+          args=()
+          for p in $(python3 -c 'import json, os; print(" ".join(m["platform"] for m in json.loads(os.environ["MATRIX"])["include"]))'); do
+            d="records/release-check-$p"
+            if [ ! -f "$d/pair.txt" ]; then
+              echo "::error::no records from $p (job failed before its runs or was dropped): re-run it"
+              exit 1
+            fi
+            mapfile -t folders < <(sed -e 's/\r$//' -e "s|^|$d/|" "$d/pair.txt")  # candidate [baseline]
+            args+=(--pair "${folders[@]}")
+          done
+          echo "# Verdict, pooled over the platforms" >> "$GITHUB_STEP_SUMMARY"
+          # shellcheck disable=SC2086  # HARD is empty or one argument
+          python tools/bench/release_gate.py "${args[@]}" $HARD --summary "$GITHUB_STEP_SUMMARY"

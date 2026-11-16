@@ -177,10 +177,11 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
     double peakRss = 0, cpuSeconds = 0;
     double mergedVertices = 0, droppedTriangles = 0, cleanupKeptParts = 0, zeroAreaTriangles = 0;
     double flippedTriangles = 0, nonOrientablePieces = 0;
-    double weldedEdges = 0, weldedVertices = 0, weldKeptParts = 0, duplicateTriangles = 0, sliverIslands = 0, splitVertices = 0;
+    double weldedEdges = 0, weldedVertices = 0, weldKeptParts = 0, repeatedCornerTriangles = 0, duplicateTriangles = 0, sliverIslands = 0, splitVertices = 0;
     double foldRepair = 0, foldedTriangles = 0, foldClusters = 0, foldPatches = 0, foldedAfter = 0, foldClustersAfter = 0;
     double foldMovedVertices = 0, foldMaxOffset = 0, foldMaxMove = 0, foldSpikes = 0, foldSpikeDrop = 0, foldMs = 0;
     double thinShare = 0, thinSpots = 0, thinGrowth = 0;
+    double floorRaised = 0, floorExtraShare = 0;
     double projected = 0, projectionKeptFolding = 0, projectionKeptOther = 0;
     double creaseSnapped = 0, relaxMoves = 0;
     // Area-weighted over islands; the rescale is the island's farthest from 1.
@@ -202,6 +203,7 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
             weldedEdges = valueOf(record, "input_welded_edges", 0);
             weldedVertices = valueOf(record, "input_welded_vertices", 0);
             weldKeptParts = valueOf(record, "input_weld_kept_parts", 0);
+            repeatedCornerTriangles = valueOf(record, "input_repeated_corner_triangles", 0);
             duplicateTriangles = valueOf(record, "input_duplicate_triangles", 0);
             sliverIslands = valueOf(record, "input_sliver_islands", 0);
             splitVertices = valueOf(record, "input_split_vertices", 0);
@@ -220,6 +222,11 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
             thinShare = valueOf(record, "thin_area_share", 0);
             thinSpots = valueOf(record, "thin_spots", 0);
             thinGrowth = valueOf(record, "thin_growth_p50", 0);
+            floorRaised = valueOf(record, "floor_raised_islands", 0);
+            floorExtraShare = valueOf(record, "floor_extra_quad_share", 0);
+        } else if (record.stage == "plan") {
+            floorRaised = valueOf(record, "floor_raised_islands", 0);
+            floorExtraShare = valueOf(record, "floor_extra_quad_share", 0);
         } else if (record.stage == "cover_result") {
             flipped += valueOf(record, "snapped_flipped", 0);
             degenerate += valueOf(record, "snapped_degenerate", 0);
@@ -310,6 +317,7 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
         { "input_welded_edges", weldedEdges },
         { "input_welded_vertices", weldedVertices },
         { "input_weld_kept_parts", weldKeptParts },
+        { "input_repeated_corner_triangles", repeatedCornerTriangles },
         { "input_duplicate_triangles", duplicateTriangles },
         { "input_sliver_islands", sliverIslands },
         { "input_split_vertices", splitVertices },
@@ -328,6 +336,8 @@ std::vector<std::pair<std::string, double>> summarizeDiagnostics(
         { "thin_area_share", thinShare },
         { "thin_spots", thinSpots },
         { "thin_growth_p50", thinGrowth },
+        { "floor_raised_islands", floorRaised },
+        { "floor_extra_quad_share", floorExtraShare },
     };
 }
 

@@ -2137,6 +2137,54 @@ struct QuadExtractor::TargetTree {
     std::unique_ptr<AxisAlignedBoudingBoxTree> tree;
 };
 
+std::vector<size_t> QuadExtractor::pinnedVertices() const
+{
+    std::vector<size_t> pinned;
+    if (nullptr == m_featureEdges || m_featureEdges->empty() || nullptr == m_vertices)
+        return pinned;
+    const double meanLength = featureEdgeLength(*m_featureEdges, *m_vertices) / m_featureEdges->size();
+    const std::vector<char> on = pointsOnFeatureEdges(m_remeshedVertices, *m_featureEdges, *m_vertices,
+        FeatureEdgeSet::Hard, kPinnedToleranceOfEdge * meanLength);
+    for (size_t v = 0; v < on.size(); ++v) {
+        if (on[v])
+            pinned.push_back(v);
+    }
+    return pinned;
+}
+
+std::vector<char> QuadExtractor::conicalTipVertices() const
+{
+    std::vector<char> tips(m_remeshedVertices.size(), 0);
+    if (nullptr == m_conicalTips || m_conicalTips->empty())
+        return tips;
+    double totalEdgeLength = 0.0;
+    size_t edgeCount = 0;
+    for (const auto& face : m_remeshedPolygons)
+        for (size_t i = 0; i < face.size(); ++i) {
+            totalEdgeLength += (m_remeshedVertices[face[i]] - m_remeshedVertices[face[(i + 1) % face.size()]]).length();
+            ++edgeCount;
+        }
+    if (0 == edgeCount)
+        return tips;
+    // The extraction puts the tip's vertex on it up to rounding, while its
+    // neighbours are about a quad edge away.
+    const double tolerance = 0.01 * totalEdgeLength / (double)edgeCount;
+    for (const Vector3& tip : *m_conicalTips) {
+        size_t nearest = m_remeshedVertices.size();
+        double nearestDistance = tolerance;
+        for (size_t v = 0; v < m_remeshedVertices.size(); ++v) {
+            const double distance = (m_remeshedVertices[v] - tip).length();
+            if (distance <= nearestDistance) {
+                nearest = v;
+                nearestDistance = distance;
+            }
+        }
+        if (nearest < tips.size())
+            tips[nearest] = 1;
+    }
+    return tips;
+}
+
 void QuadExtractor::smoothAndProject(size_t iterations,
     const std::vector<char>* movableVertices)
 {
@@ -2180,6 +2228,15 @@ void QuadExtractor::smoothAndProject(size_t iterations,
         k = end;
     }
     std::vector<std::pair<size_t, size_t>>().swap(edgeUses);
+    for (size_t v : pinnedVertices())
+        locked[v] = 1;
+    {
+        // A conical tip stays where the extraction put it (TODO 2.23).
+        const std::vector<char> tips = conicalTipVertices();
+        for (size_t v = 0; v < locked.size(); ++v)
+            if (tips[v])
+                locked[v] = 1;
+    }
 
     // Neighbours of the points that move only. Each set gets its insertions in
     // the same order as when every point had one, so it lists them in the
@@ -3050,6 +3107,7 @@ void QuadExtractor::mergeDoubleSharedEdgeQuads()
 
     size_t mergeNum = 0;
     std::unordered_set<size_t> mergedVertices;
+    const std::vector<char> tips = conicalTipVertices();
     for (;;) {
         const PolygonAdjacency adjacency(m_remeshedPolygons, m_remeshedVertices.size());
 
@@ -3104,6 +3162,10 @@ void QuadExtractor::mergeDoubleSharedEdgeQuads()
             const size_t firstApex = firstFace[(firstAt + 2) % 4];
             const size_t secondApex = secondFace[(secondAt + 2) % 4];
             if (firstApex == secondApex)
+                continue;
+            // The apex of a cone asks for a valence-2 vertex (TODO 2.23);
+            // merging it would cut the tip off.
+            if (tips[middle])
                 continue;
             bool touched = false;
             for (const auto& vertex : { middle, previous, next, firstApex, secondApex }) {
@@ -3200,6 +3262,7 @@ void QuadExtractor::mergeThreeAndFiveValenceTriangles()
 
     size_t mergeNum = 0;
     std::unordered_set<size_t> mergedVertices;
+    const std::vector<char> tips = conicalTipVertices();
     for (;;) {
         const PolygonAdjacency adjacency(m_remeshedPolygons, m_remeshedVertices.size());
         const std::vector<char> borderVertices = adjacency.borderVertices();
