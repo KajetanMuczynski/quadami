@@ -12,3 +12,7 @@
   u4 twisted 12 -> 11, dyntopo u1 SJ<=0 9 -> 8; Hausdorff equal to 1e-11. CLI time (load noise):
   demosthenes ×0.92, nefertiti ×0.88, dyntopo ×1.01.
 - Next: none for this change.
+- 2026-11-18: merged master f907333 (#189). Lane vs f907333 light (790/790). Head 400k quality, private
+  sculpt, one run each (unconfirmed): both complete; ND chosen for the curl solve (factor 72 s + ordering
+  21 s vs AMD 374 s); total CLI 2,933 s vs 3,575 s; peak RSS 9.4 vs 9.9 GB; SJ<=0 323 vs 319, holes and
+  handles 0 both.
