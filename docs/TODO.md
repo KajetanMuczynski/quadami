@@ -308,7 +308,7 @@ Order from perf §10, now checked against the baseline profile (REFERENCE §4, �
 
 - [ ] **8.9** **Extraction clean-up passes on flat arrays** (branch `perf/extraction-cleanup`, no PR yet; [research/speed-cleanup-2026-11-05.md](research/speed-cleanup-2026-11-05.md)). Output byte-identical (`ab.py lane` light, public 770/770, private 56/56); head 10k −5…−6 %, cube 10k −7…−8.5 %, sword 10k −10…−15 % wall time [M]. PR after #172 (8.8) and `perf/untangle-projection` (pushed, no PR; opens after #172 merges).
 
-- [ ] **8.10** **Untangler projection without allocations, closed-form PSD projection** (branch `perf/untangle-projection`, head 42be5fd, no PR yet; [research/speed-algorithms-2026-11-04.md](research/speed-algorithms-2026-11-04.md)). Head 5k −6.5…−14 %, head 10k −2…−5 % [M, 2 passes incl. a disprover]; full lane ×6 neutral on the 2026-11-04 base. Left: rebase on master, lane again. Release 0.3. S.
+- [x] **8.10** **Untangler projection without allocations, closed-form PSD projection** (PR #189, branch `perf/untangle-projection`; [research/speed-algorithms-2026-11-04.md](research/speed-algorithms-2026-11-04.md)). Head 5k −6.5…−14 %, head 10k −2…−5 % [M, 2 passes incl. a disprover]; full lane ×6 neutral on the 2026-11-04 base and again on 2906a31 (11 public sets, fixed/broken none, nothing separated) [M]. Release 0.3. S.
 
 - [ ] **8.11** **Incremental triangle clean-up, five-edge merge and diagonal collapse** (branch `perf/incremental-cleanup`, on top of 8.9). Byte-identical (lane light: public 770/770, private 44/44, external_thin 24/24) [M]; head 100k passes 56–69 s → ~2.2 s [M, 5 rounds]. needs 8.9. Left: rebase, lane again. Release 0.3. S.
 
