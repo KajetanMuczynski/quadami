@@ -44,7 +44,8 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "Quad-remeshes a triangle or polygon mesh (Wavefront OBJ).\n"
                           "\n"
                           "Options:\n"
-                          "  -i, --input <file.obj>      mesh to remesh (required); its line elements\n"
+                          "  -i, --input <file.obj>      mesh to remesh (required unless --input-cache\n"
+                          "                              names a usable file); its line elements\n"
                           "                              (l a b ...) are marked edges, kept as creases\n"
                           "  -o, --output <file.obj>     where to write the quad mesh (required)\n"
                           "  --report-json <file.json>   status and quality report, also written when\n"
@@ -82,6 +83,13 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "                              also count lost parts in the report at the quad\n"
                           "                              width of this target (an earlier run's), so its\n"
                           "                              losses can be tracked (default 0: off)\n"
+                          "  --input-cache <file>        keep the prepared input (cleanup, fold check,\n"
+                          "                              island split) in this file: read when it holds\n"
+                          "                              the same mesh and fold settings from this build,\n"
+                          "                              else written; same output either way.  Without\n"
+                          "                              --input the mesh comes from the file, and a file\n"
+                          "                              that cannot give it fails with \"input cache\n"
+                          "                              unusable\" in the report\n"
                           "  --stdin-control             cancel when stdin receives the line \"cancel\"\n"
                           "                              or is closed; the report then says \"cancelled\"\n"
                           "  -h, --help                  show this text\n"
@@ -93,6 +101,7 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
 
 struct Options {
     std::string inputPath;
+    std::string inputCachePath;
     std::string outputPath;
     std::string reportJsonPath;
     std::string stageDiagnosticsPath;
@@ -170,6 +179,8 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
         RemeshParameters& parameters = options->parameters;
         if ("-i" == name || "--input" == name)
             options->inputPath = value;
+        else if ("--input-cache" == name)
+            options->inputCachePath = value;
         else if ("-o" == name || "--output" == name)
             options->outputPath = value;
         else if ("--report-json" == name)
@@ -226,8 +237,8 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
             return 1;
         }
     }
-    if (options->inputPath.empty() || options->outputPath.empty()) {
-        std::fprintf(stderr, "Error: --input and --output are required (see --help)\n");
+    if ((options->inputPath.empty() && options->inputCachePath.empty()) || options->outputPath.empty()) {
+        std::fprintf(stderr, "Error: --input (or --input-cache) and --output are required (see --help)\n");
         return 1;
     }
     if (options->parameters.flattenSpikes && !options->parameters.repairFolds) {
@@ -274,8 +285,12 @@ int run(const std::vector<std::string>& arguments)
     RemeshResult result;
     RemeshRequest request;
     request.parameters = options.parameters;
+    request.inputCachePath = options.inputCachePath;
+    request.inputCacheTag = AUTOREMESHER_BUILD_ID;
     std::string error;
-    if (Cli::readObj(options.inputPath, &request.positions, &request.triangles, &request.featureEdges, &error)) {
+    // Without --input the mesh comes from the input cache.
+    if (options.inputPath.empty()
+        || Cli::readObj(options.inputPath, &request.positions, &request.triangles, &request.featureEdges, &error)) {
         RemeshCallbacks callbacks;
         callbacks.progress = printProgress;
         if (options.stdinControl)

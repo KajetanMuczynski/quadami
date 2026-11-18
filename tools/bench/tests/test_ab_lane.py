@@ -73,6 +73,24 @@ class LaneRunArgs(unittest.TestCase):
             self.assertEqual(set(vars(ra)), set(run))
             self.assertEqual((ra.no_metrics, ra.replicates, ra.timeout, ra.work), (True, 1, 1200, tmp))
 
+    def test_head_cli_arg_goes_to_head_only(self):
+        seen = []
+        with tempfile.TemporaryDirectory() as tmp:
+            corpus = os.path.join(tmp, "corpus.json")
+            with open(corpus, "w") as fp:
+                json.dump({"sets": {"s": {"targets": [2000]}}}, fp)
+            with mock.patch.object(ab, "CORPUS", corpus), \
+                    mock.patch.object(ab, "source_key", side_effect=lambda ref, *a: ref), \
+                    mock.patch.object(ab, "git", return_value="0"), \
+                    mock.patch.object(ab, "load_set", return_value=({}, [])), \
+                    mock.patch.object(ab, "cmd_run", side_effect=seen.append), \
+                    mock.patch.object(ab, "load_runs", return_value={}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                ab.cmd_lane(ab.parser().parse_args(["lane", "base", "head", "--work", tmp,
+                                                    "--head-cli-arg=--input-cache={input_cache}"]))
+        self.assertEqual([(ra.ref, ra.cli_arg) for ra in seen],
+                         [("base", []), ("head", ["--input-cache={input_cache}"])])
+
 
 class MetricsAddedLater(unittest.TestCase):
     """A run made with --no-metrics (as `lane` does) gets its metrics once a run asks for them,

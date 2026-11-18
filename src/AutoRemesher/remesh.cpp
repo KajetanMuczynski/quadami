@@ -18,6 +18,7 @@
  */
 #include <AutoRemesher/AutoRemesher>
 #include <AutoRemesher/FeatureEdges>
+#include <AutoRemesher/InputCache>
 #include <AutoRemesher/MeasureMesh>
 #include <AutoRemesher/Remesh>
 #include <AutoRemesher/RemeshPreview>
@@ -28,6 +29,7 @@
 #include <cmath>
 #include <exception>
 #include <iomanip>
+#include <iostream>
 #include <limits>
 #include <locale>
 #include <memory>
@@ -1035,17 +1037,28 @@ bool parseQuadSmoothing(const std::string& text, QuadSmoothing* smoothing)
 }
 
 // The engine for a request: its mesh, parameters and callbacks.
+// What the input cache (RemeshRequest::inputCachePath) gives one run.
+struct InputCacheUse {
+    // The prepared input to start from; null: prepare and write the file.
+    std::shared_ptr<PreparedInput> prepared;
+    double writeMilliseconds = 0.0;
+    bool writeFailed = false;
+};
+
 static std::unique_ptr<::AutoRemesher::AutoRemesher> makeEngine(const RemeshRequest& request,
-    const RemeshCallbacks& callbacks)
+    const RemeshCallbacks& callbacks, InputCacheUse* cache = nullptr)
 {
+    const bool prepared = nullptr != cache && nullptr != cache->prepared;
     std::vector<Vector3> vertices;
-    vertices.reserve(request.positions.size() / 3);
-    for (size_t i = 0; i < request.positions.size(); i += 3)
-        vertices.emplace_back(request.positions[i], request.positions[i + 1], request.positions[i + 2]);
     std::vector<std::vector<size_t>> triangles;
-    triangles.reserve(request.triangles.size() / 3);
-    for (size_t i = 0; i < request.triangles.size(); i += 3)
-        triangles.push_back({ request.triangles[i], request.triangles[i + 1], request.triangles[i + 2] });
+    if (!prepared) {
+        vertices.reserve(request.positions.size() / 3);
+        for (size_t i = 0; i < request.positions.size(); i += 3)
+            vertices.emplace_back(request.positions[i], request.positions[i + 1], request.positions[i + 2]);
+        triangles.reserve(request.triangles.size() / 3);
+        for (size_t i = 0; i < request.triangles.size(); i += 3)
+            triangles.push_back({ request.triangles[i], request.triangles[i + 1], request.triangles[i + 2] });
+    }
 
     const RemeshParameters& parameters = request.parameters;
     auto enginePointer = std::make_unique<::AutoRemesher::AutoRemesher>(std::move(vertices), std::move(triangles));
@@ -1057,7 +1070,7 @@ static std::unique_ptr<::AutoRemesher::AutoRemesher> makeEngine(const RemeshRequ
     engine.setGradientAdaptivity(parameters.adaptivity);
     engine.setAnisotropy(parameters.anisotropy);
     engine.setSharpEdgeDegrees(parameters.sharpEdgeDegrees);
-    if (!request.featureEdges.empty()) {
+    if (!prepared && !request.featureEdges.empty()) {
         std::vector<std::pair<size_t, size_t>> marked;
         marked.reserve(request.featureEdges.size() / 2);
         for (size_t i = 0; i + 1 < request.featureEdges.size(); i += 2)
@@ -1080,13 +1093,78 @@ static std::unique_ptr<::AutoRemesher::AutoRemesher> makeEngine(const RemeshRequ
         const CancelToken* token = callbacks.cancel;
         engine.setCancelCheck([token]() { return token->cancelRequested(); });
     }
+    if (nullptr != cache && !request.inputCachePath.empty()) {
+        if (prepared)
+            engine.setPreparedInput(cache->prepared);
+        cache->prepared.reset();
+        engine.setPreparedInputSink([&request, cache](const PreparedInput& input) {
+            const auto start = std::chrono::steady_clock::now();
+            std::string error;
+            if (!writeInputCache(request.inputCachePath, request.inputCacheTag, request.positions,
+                    request.triangles, request.featureEdges, input, &error)) {
+                cache->writeFailed = true;
+                std::cerr << "Input cache not written: " << error << std::endl;
+            }
+            cache->writeMilliseconds = 1000.0 * std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        });
+    }
 
     return enginePointer;
 }
 
-RemeshResult remeshWithPreview(const RemeshRequest& request,
+// The request a run works on and what the cache gives it.  With an input
+// cache, a request without arrays takes them from the file; the prepared
+// input is used only when the file's arrays and fold settings match.  False
+// (message set) when the request has no arrays and the file cannot give them.
+static bool openInputCache(const RemeshRequest& request, RemeshRequest* filled, InputCacheUse* cache,
+    std::string* message)
+{
+    if (request.inputCachePath.empty())
+        return true;
+    const bool arraysLeftOut = request.positions.empty() && request.triangles.empty() && request.featureEdges.empty();
+    auto prepared = std::make_shared<PreparedInput>();
+    RawInput raw;
+    std::string error;
+    if (!readInputCache(request.inputCachePath, request.inputCacheTag, &raw, prepared.get(), &error)) {
+        if (arraysLeftOut) {
+            *message = std::string(InputCacheUnusableMessage) + ": " + error;
+            return false;
+        }
+        return true;
+    }
+    const RemeshParameters& parameters = request.parameters;
+    const bool sameSettings = prepared->repairFolds == parameters.repairFolds
+        && prepared->flattenSpikes == (parameters.repairFolds && parameters.flattenSpikes);
+    if (arraysLeftOut) {
+        *filled = request;
+        filled->positions = std::move(raw.positions);
+        filled->triangles = std::move(raw.triangles);
+        filled->featureEdges = std::move(raw.featureEdges);
+    } else if (raw.positions != request.positions || raw.triangles != request.triangles
+        || raw.featureEdges != request.featureEdges) {
+        return true;
+    }
+    if (sameSettings)
+        cache->prepared = std::move(prepared);
+    return true;
+}
+
+// The cache's line in the report's diagnostics.
+static void reportInputCache(const RemeshRequest& request, const ::AutoRemesher::AutoRemesher& engine,
+    const InputCacheUse& cache, QualityReport* report)
+{
+    if (request.inputCachePath.empty())
+        return;
+    report->diagnostics.emplace_back("input_cache_read", engine.usedPreparedInput() ? 1.0 : 0.0);
+    report->diagnostics.emplace_back("input_cache_write_ms", cache.writeMilliseconds);
+    if (cache.writeFailed)
+        report->diagnostics.emplace_back("input_cache_write_failed", 1.0);
+}
+
+static RemeshResult runRemesh(const RemeshRequest& request,
     const RemeshCallbacks& callbacks,
-    RemeshPreview* preview)
+    RemeshPreview* preview,
+    InputCacheUse* cache)
 {
     const auto start = std::chrono::steady_clock::now();
     RemeshResult result;
@@ -1107,7 +1185,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     if (nullptr != callbacks.cancel && callbacks.cancel->cancelRequested())
         return finish(RemeshStatus::Cancelled, "cancelled before the run started");
 
-    auto enginePointer = makeEngine(request, callbacks);
+    auto enginePointer = makeEngine(request, callbacks, cache);
     auto& engine = *enginePointer;
     const RemeshParameters& parameters = request.parameters;
     engine.setKeepPreviewData(nullptr != preview);
@@ -1131,6 +1209,7 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     result.stageDiagnostics = engine.takeDiagnostics();
     if (!result.stageDiagnostics.empty())
         report.diagnostics = summarizeDiagnostics(result.stageDiagnostics);
+    reportInputCache(request, engine, *cache, &report);
     if (engine.cancelled())
         return finish(RemeshStatus::Cancelled, "cancelled");
     if (!completed)
@@ -1343,12 +1422,38 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
     return finish(RemeshStatus::Ok, std::string());
 }
 
+// Runs `run` on the request, or on its arrays from the input cache.
+template <typename Run>
+static RemeshResult withInputCache(const RemeshRequest& request, Run run)
+{
+    InputCacheUse cache;
+    RemeshRequest filled;
+    std::string message;
+    if (!openInputCache(request, &filled, &cache, &message)) {
+        RemeshResult result;
+        result.parameters = request.parameters;
+        result.status = RemeshStatus::InvalidInput;
+        result.message = message;
+        return result;
+    }
+    return run(filled.positions.empty() ? request : filled, &cache);
+}
+
+RemeshResult remeshWithPreview(const RemeshRequest& request,
+    const RemeshCallbacks& callbacks,
+    RemeshPreview* preview)
+{
+    return withInputCache(request, [&](const RemeshRequest& used, InputCacheUse* cache) {
+        return runRemesh(used, callbacks, preview, cache);
+    });
+}
+
 RemeshResult remesh(const RemeshRequest& request, const RemeshCallbacks& callbacks)
 {
     return remeshWithPreview(request, callbacks, nullptr);
 }
 
-RemeshResult planRemesh(const RemeshRequest& request, const RemeshCallbacks& callbacks)
+static RemeshResult runPlan(const RemeshRequest& request, const RemeshCallbacks& callbacks, InputCacheUse* cache)
 {
     const auto start = std::chrono::steady_clock::now();
     RemeshResult result;
@@ -1368,7 +1473,7 @@ RemeshResult planRemesh(const RemeshRequest& request, const RemeshCallbacks& cal
     if (nullptr != callbacks.cancel && callbacks.cancel->cancelRequested())
         return finish(RemeshStatus::Cancelled, "cancelled before the run started");
 
-    auto enginePointer = makeEngine(request, callbacks);
+    auto enginePointer = makeEngine(request, callbacks, cache);
     auto& engine = *enginePointer;
     engine.setKeepPreviewData(false);
     engine.setPlanOnly(true);
@@ -1382,6 +1487,7 @@ RemeshResult planRemesh(const RemeshRequest& request, const RemeshCallbacks& cal
     result.stageDiagnostics = engine.takeDiagnostics();
     if (!result.stageDiagnostics.empty())
         report.diagnostics = summarizeDiagnostics(result.stageDiagnostics);
+    reportInputCache(request, engine, *cache, &report);
     if (engine.cancelled())
         return finish(RemeshStatus::Cancelled, "cancelled");
     if (!completed)
@@ -1405,6 +1511,13 @@ RemeshResult planRemesh(const RemeshRequest& request, const RemeshCallbacks& cal
     }
     warnAboutFloor(report, request.parameters.targetQuadCount);
     return finish(RemeshStatus::Ok, std::string());
+}
+
+RemeshResult planRemesh(const RemeshRequest& request, const RemeshCallbacks& callbacks)
+{
+    return withInputCache(request, [&](const RemeshRequest& used, InputCacheUse* cache) {
+        return runPlan(used, callbacks, cache);
+    });
 }
 
 std::string toJson(const RemeshResult& result)
