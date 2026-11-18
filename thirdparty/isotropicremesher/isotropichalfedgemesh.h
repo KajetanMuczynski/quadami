@@ -124,7 +124,8 @@ public:
     // the input's line (IsotropicRemesher). Sets the two neighbours on the
     // line when given.
     bool isSmoothHardChainVertex(Vertex *vertex, Vertex **first=nullptr, Vertex **second=nullptr);
-    bool flipEdge(Halfedge *halfedge);
+    // `ear`: flip whatever the valences, for flipChainEars (IsotropicRemesher).
+    bool flipEdge(Halfedge *halfedge, bool ear = false);
     // Flips the edge under a flat face, judged by the face across only.
     bool flipEdgeUnderFlatFace(Halfedge *halfedge);
     void relaxVertex(Vertex *vertex);
