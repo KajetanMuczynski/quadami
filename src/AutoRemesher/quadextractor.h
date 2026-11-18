@@ -116,6 +116,14 @@ public:
         m_tangentialSmoothing = tangential;
     }
 
+    // 1 when the island kept its crease slides (TODO 2.8), 0 when they added
+    // folded or twisted faces and it was finished without them, -1 when no
+    // vertex slid.
+    int creaseSlides() const
+    {
+        return m_creaseSlides;
+    }
+
     // Whether libQEx extracted this island, and if not, why.
     const QexOutcome& qexOutcome() const
     {
@@ -192,6 +200,11 @@ private:
     ProgressHandler m_progressHandler;
     bool m_useQex = true;
     bool m_tangentialSmoothing = false;
+    // Whether smoothAndProject() slides crease vertices along T's creases,
+    // how many it slid or held on a chain corner, and creaseSlides()
+    bool m_slideCreases = false;
+    size_t m_slidingVertexCount = 0;
+    int m_creaseSlides = -1;
     size_t m_targetQuadCount = 0;
     QexOutcome m_qexOutcome;
     std::map<std::pair<size_t, size_t>, ConnectionInfo> m_connectionInfos;
@@ -204,6 +217,8 @@ private:
     void traceMesh();
     // Hole filling, repair and the cleanup passes, after either extractor.
     void finishMesh();
+    // Smoothing and the clean-up passes; quiet reports no progress.
+    void smoothAndCleanUp(bool quiet);
     void extractConnections(std::vector<Vector3>* crossPoints,
         std::vector<size_t>* sourceTriangles,
         std::set<std::pair<size_t, size_t>>* connections);
