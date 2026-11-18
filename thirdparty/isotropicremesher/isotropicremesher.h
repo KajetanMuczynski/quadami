@@ -100,6 +100,8 @@ private:
     void splitLongEdges(double maxEdgeLength);
     void collapseShortEdges(double minEdgeLengthSquared, double maxEdgeLengthSquared);
     void flipEdges();
+    void flipChainEars();
+    bool isFlatEar(IsotropicHalfedgeMesh::Halfedge *third);
     void shiftVertices();
     void relaxSmoothHardChains();
     void projectVertices();
