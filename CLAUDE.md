@@ -154,6 +154,9 @@ Running the binary with no args opens the GUI. The core needs `setTargetTriangle
 - Body starts with `Merge order / depends on: ...` (`none` if independent).
 - Body holds only what this change does, possible conflicts and dependencies (Kajetan, 2026-10-26).
   No clutter: no background, no replay of the work, no to-dos for Kajetan.
+- `docs/TODO.md` (Kajetan, 2026-11-16): a PR edits only the item(s) named in its title's `[TODO x.y]`
+  (status, notes). It adds no new items and edits no other items: new findings go in the PR body or a
+  research note, and the coordinator adds them, numbered, in one docs PR from master after merges.
 - If the PR touches a conflict-prone file (`src/AutoRemesher/remesh.cpp`, `src/AutoRemesher/autoremesher.cpp`,
   `src/AutoRemesher/quadextractor.cpp`, `addon/quadami/__init__.py`), say so in the body so parallel PRs can be ordered.
 - A PR stays **draft** until its thread has verified everything: **CI passed** green on the current
