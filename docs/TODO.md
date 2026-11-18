@@ -312,7 +312,7 @@ Order from perf §10, now checked against the baseline profile (REFERENCE §4, �
 
 - [ ] **8.11** **Incremental triangle clean-up, five-edge merge and diagonal collapse** (branch `perf/incremental-cleanup`, on top of 8.9). Byte-identical (lane light: public 770/770, private 44/44, external_thin 24/24) [M]; head 100k passes 56–69 s → ~2.2 s [M, 5 rounds]. needs 8.9. Left: rebase, lane again. Release 0.3. S.
 
-- [x] **8.12** **Nested dissection or AMD for the curl solve, by predicted work** (PR, branch `perf/nd-ordering`; [research/high-targets-2026-11-05.md](research/high-targets-2026-11-05.md)). Only above 1M unknowns; head 200k curl 86 → 61 s, quality identical at 100k (×6) [M]. Rebased on f907333: lane light (790/790); head 400k end to end completes, curl factor 374 s → 72 s + 21 s ordering, total 3,575 → 2,933 s (1 run each, unconfirmed). Release 0.3. S.
+- [x] **8.12** **Nested dissection or AMD for the curl solve, by predicted work** (PR #192, branch `perf/nd-ordering`; [research/high-targets-2026-11-05.md](research/high-targets-2026-11-05.md)). Only above 1M unknowns; head 200k curl 86 → 61 s, quality identical at 100k (×6) [M]. Rebased on f907333: lane light (790/790); head 400k end to end completes, curl factor 374 s → 72 s + 21 s ordering, total 3,575 → 2,933 s (1 run each, unconfirmed). Release 0.3. S.
 - Not planned: GPU solvers (≤ 2×, CUDA-only), MKL/Panua PARDISO, cuDSS, Gurobi (`NO`).
 
 ## Track G: Blender layer (parallel to everything)
