@@ -482,8 +482,61 @@ void IsotropicRemesher::collapseShortEdges(double minEdgeLengthSquared, double m
     }
 }
 
+bool IsotropicRemesher::isFlatEar(IsotropicHalfedgeMesh::Halfedge *third)
+{
+    // Only where the line runs through a smooth surface, the way
+    // relaxSmoothHardChains judges it, but against the faces around the ear
+    // (across its two hard sides and its third side), not the ear itself,
+    // which may already lie flat.  An ear at a crease corner is the shape.
+    IsotropicHalfedgeMesh::Vertex *apex = third->previousHalfedge->startVertex;
+    if (apex->featured)
+        return false;
+    const IsotropicHalfedgeMesh::Halfedge *across[3] = { third->oppositeHalfedge,
+        third->nextHalfedge->oppositeHalfedge, third->previousHalfedge->oppositeHalfedge };
+    Vector3 normals[3];
+    for (int i = 0; i < 3; ++i) {
+        const IsotropicHalfedgeMesh::Halfedge *e = across[i];
+        if (nullptr == e)
+            return false;
+        normals[i] = Vector3::normal(e->previousHalfedge->startVertex->position,
+            e->startVertex->position, e->nextHalfedge->startVertex->position);
+    }
+    return Vector3::dotProduct(normals[0], normals[1]) >= IsotropicHalfedgeMesh::kMinSmoothChainNormalDot
+        && Vector3::dotProduct(normals[0], normals[2]) >= IsotropicHalfedgeMesh::kMinSmoothChainNormalDot
+        && Vector3::dotProduct(normals[1], normals[2]) >= IsotropicHalfedgeMesh::kMinSmoothChainNormalDot;
+}
+
+void IsotropicRemesher::flipChainEars()
+{
+    // A triangle with two hard sides (an ear) is a bend of a hard line that
+    // took two edges of one input triangle: a guide or mark drawn along a
+    // zigzag of input edges.  Hard edges never flip, and once the line is
+    // straightened (relaxSmoothHardChains) the ear lies flat along it, with
+    // all three corners on one isoline of the cover: a degenerate map
+    // triangle at every such bend (head with guides: 26-38 per run).
+    // Flipping its third side removes it.
+    for (IsotropicHalfedgeMesh::Face *face = m_halfedgeMesh->moveToNextFace(nullptr);
+            nullptr != face;
+            face = m_halfedgeMesh->moveToNextFace(face)) {
+        if (face->removed)
+            continue;
+        IsotropicHalfedgeMesh::Halfedge *halfedge = face->halfedge;
+        do {
+            // halfedge is the third side when the other two are hard.
+            if (!halfedge->hard() && nullptr != halfedge->oppositeHalfedge
+                    && halfedge->nextHalfedge->hard() && halfedge->previousHalfedge->hard()) {
+                if (isFlatEar(halfedge))
+                    m_halfedgeMesh->flipEdge(halfedge, true);
+                break;
+            }
+            halfedge = halfedge->nextHalfedge;
+        } while (halfedge != face->halfedge);
+    }
+}
+
 void IsotropicRemesher::flipEdges()
 {
+    flipChainEars();
     for (IsotropicHalfedgeMesh::Face *face = m_halfedgeMesh->moveToNextFace(nullptr); 
             nullptr != face; 
             ) {
