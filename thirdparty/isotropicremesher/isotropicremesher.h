@@ -67,6 +67,8 @@ private:
     IsotropicHalfedgeMesh *m_halfedgeMesh = nullptr;
     std::vector<AxisAlignedBoudingBox> *m_triangleBoxes = nullptr;
     AxisAlignedBoudingBoxTree *m_axisAlignedBoundingBoxTree = nullptr;
+    std::vector<size_t> m_projectionCandidates;
+    std::vector<std::pair<Vector3, double>> m_projectionHits;
     std::vector<std::pair<size_t, size_t>> m_featureEdges;
     std::vector<unsigned char> m_featureEdgeFlags;
     std::vector<IsotropicHalfedgeMesh::FeatureSegment> m_featureSegments;
