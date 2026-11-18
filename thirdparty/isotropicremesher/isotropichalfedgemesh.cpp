@@ -640,13 +640,22 @@ bool IsotropicHalfedgeMesh::isFaceOfVertex(Vertex *vertex, Vertex *second, Verte
     return found;
 }
 
-bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge)
+bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge, bool ear)
 {
     if (nullptr == halfedge->oppositeHalfedge)
         return false;
 
     // The other diagonal would cut across the crease (TODO 2.5).
     if (halfedge->feature)
+        return false;
+
+    // Never make an ear (a triangle with two hard
+    // sides, see IsotropicRemesher::flipChainEars) at a vertex of a hard line
+    // through a smooth surface; at a crease corner an ear is the shape.
+    if ((halfedge->previousHalfedge->hard() && halfedge->oppositeHalfedge->nextHalfedge->hard()
+                && isSmoothHardChainVertex(halfedge->startVertex))
+            || (halfedge->oppositeHalfedge->previousHalfedge->hard() && halfedge->nextHalfedge->hard()
+                && isSmoothHardChainVertex(halfedge->oppositeHalfedge->startVertex)))
         return false;
         
     Vertex *topVertex = halfedge->previousHalfedge->startVertex;
@@ -684,7 +693,7 @@ bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge)
         deviation(leftValence - 1, isLeftBoundary) +
         deviation(rightValence - 1, isRightBoundary);
     
-    if (newDeviation >= oldDeviation)
+    if (!ear && newDeviation >= oldDeviation)
         return false;
     
     // The flipped edge connects the two apexes. When they are already
@@ -710,7 +719,15 @@ bool IsotropicHalfedgeMesh::flipEdge(Halfedge *halfedge)
     const Vector3 newTopNormal = Vector3::normal(topPosition, leftPosition, bottomPosition);
     const Vector3 newBottomNormal = Vector3::normal(bottomPosition, rightPosition, topPosition);
 
-    if (Vector3::dotProduct(newTopNormal, oldTopNormal) <= 0 ||
+    // An ear (the top triangle, see flipChainEars) lies flat along its hard
+    // line, so its normal says nothing; the new pair is checked against the
+    // bottom triangle and each other instead.
+    if (ear) {
+        if (Vector3::dotProduct(newTopNormal, newBottomNormal) <= 0 ||
+                Vector3::dotProduct(newTopNormal, oldBottomNormal) <= 0 ||
+                Vector3::dotProduct(newBottomNormal, oldBottomNormal) <= 0)
+            return false;
+    } else if (Vector3::dotProduct(newTopNormal, oldTopNormal) <= 0 ||
             Vector3::dotProduct(newTopNormal, oldBottomNormal) <= 0 ||
             Vector3::dotProduct(newBottomNormal, oldTopNormal) <= 0 ||
             Vector3::dotProduct(newBottomNormal, oldBottomNormal) <= 0)
