@@ -56,9 +56,9 @@ void circle(double x, double y, double z, double r, size_t n, unsigned char flag
 
 size_t dropped(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices)
 {
-    // Rims under 2.0 long, three or more within their own length.
+    // Rims under 2.0 long, five or more within their own length.
     size_t count = 0;
-    const FeatureEdgeSet kept = AutoRemesher::dropSmallClosedLoops(set, vertices, 2.0, 3, 1.0, &count);
+    const FeatureEdgeSet kept = AutoRemesher::dropSmallClosedLoops(set, vertices, 2.0, 5, 1.0, &count);
     if (kept.size() + count != set.size())
         return (size_t)-1;
     return count;
@@ -88,6 +88,13 @@ bool loneHoleKeepsItsRims()
     circle(10, 0, 0, 0.3, 16, 0, &vertices, &set);
     circle(10, 0, 1, 0.3, 16, 0, &vertices, &set);
     ok = check(dropped(set, vertices) == 0, "two holes 10 apart keep their rims") && ok;
+    // Nor is a close pair: four rims within one rim length.
+    std::vector<Vector3> pairVertices;
+    FeatureEdgeSet pair;
+    for (double x : { 0.0, 1.5 })
+        for (double z : { 0.0, 1.0 })
+            circle(x, 0, z, 0.3, 16, 0, &pairVertices, &pair);
+    ok = check(dropped(pair, pairVertices) == 0, "two holes 1.5 apart keep their rims") && ok;
     return ok;
 }
 
@@ -96,33 +103,33 @@ bool largeHardAndOpenChainsAreKept()
     std::vector<Vector3> vertices;
     FeatureEdgeSet set;
     // Large rims (length 6.3 > 2.0) in a crowd.
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < 5; ++i)
         circle(2.5 * i, 0, 0, 1.0, 32, 0, &vertices, &set);
     bool ok = check(dropped(set, vertices) == 0, "rims longer than the limit are kept");
 
     std::vector<Vector3> hardVertices;
     FeatureEdgeSet hard;
-    for (int i = 0; i < 3; ++i)
-        circle(0.7 * i, 0, 0, 0.3, 16, FeatureEdgeSet::Hard, &hardVertices, &hard);
+    for (int i = 0; i < 5; ++i)
+        circle(0.4 * i, 0, 0, 0.15, 16, FeatureEdgeSet::Hard, &hardVertices, &hard);
     ok = check(dropped(hard, hardVertices) == 0, "hard (marked) loops are kept") && ok;
 
     // Open arcs: three small rims with one edge each missing.
     std::vector<Vector3> arcVertices;
     FeatureEdgeSet arcs;
-    for (int i = 0; i < 3; ++i) {
-        circle(0.7 * i, 0, 0, 0.3, 16, 0, &arcVertices, &arcs);
+    for (int i = 0; i < 5; ++i) {
+        circle(0.4 * i, 0, 0, 0.15, 16, 0, &arcVertices, &arcs);
         arcs.edges.pop_back();
         arcs.flags.pop_back();
     }
     ok = check(dropped(arcs, arcVertices) == 0, "open chains are kept") && ok;
 
-    // Three small rims, one of them with a spur at a vertex (a corner of
-    // three crease edges): that one is kept, the two others are not a crowd
-    // of three on their own.
+    // Five small rims, one of them with a spur at a vertex (a corner of
+    // three crease edges): that one is kept, the four others are not a
+    // crowd of five on their own.
     std::vector<Vector3> spurVertices;
     FeatureEdgeSet spur;
-    for (int i = 0; i < 3; ++i)
-        circle(0.7 * i, 0, 0, 0.3, 16, 0, &spurVertices, &spur);
+    for (int i = 0; i < 5; ++i)
+        circle(0.15 * i, 0, 0, 0.3, 16, 0, &spurVertices, &spur);
     spurVertices.push_back(Vector3(0.0, 0.0, 0.5));
     spur.edges.push_back({ 0, spurVertices.size() - 1 });
     spur.flags.push_back(0);

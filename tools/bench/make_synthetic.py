@@ -30,7 +30,8 @@ Meshes (symmetry plane x = 0 where noted):
   plate<m>_d<dd>   the "plates" A/B set (TODO 2.34): a 10 x 10 x 1 plate with m x m round through holes
                    of diameter d (32 segments), every hole rim a closed 90 deg crease. plate1_d06,
                    plate5_d06, plate5_d15, plate8_d06 (genus 1, 25, 25, 64), and plate3_d30 with three
-                   x three holes of diameter 3 (rims many quads around: a control that must not move).
+                   x three holes of diameter 3 (rims many quads around: a control that must not move);
+                   plate2close_d06 with two 0.6 holes 1.5 apart (a close pair, not a perforation).
 """
 import argparse
 import hashlib
@@ -275,15 +276,17 @@ def sha256(path):
 def plates_set():
     from manifold3d import Manifold, OpType
 
-    def plate(m, d):
-        holes = [Manifold.cylinder(3.0, d / 2, d / 2, 32).translate([-5 + (i + 0.5) * 10 / m, -5 + (j + 0.5) * 10 / m, -1])
-                 for i in range(m) for j in range(m)]
+    def plate(m, d, centres=None):
+        centres = centres or [(-5 + (i + 0.5) * 10 / m, -5 + (j + 0.5) * 10 / m) for i in range(m) for j in range(m)]
+        holes = [Manifold.cylinder(3.0, d / 2, d / 2, 32).translate([x, y, -1]) for x, y in centres]
         g = (Manifold.cube([10.0, 10.0, 1.0]).translate([-5.0, -5.0, 0.0])
              - Manifold.batch_boolean(holes, OpType.Add)).to_mesh()
         return np.asarray(g.vert_properties[:, :3], float), np.asarray(g.tri_verts, np.int64)
 
-    return {f"plate{m}_d{str(d).replace('.', '')}": (lambda m=m, d=d: plate(m, d))
+    jobs = {f"plate{m}_d{str(d).replace('.', '')}": (lambda m=m, d=d: plate(m, d))
             for m, d in ((1, 0.6), (5, 0.6), (5, 1.5), (8, 0.6), (3, 3.0))}
+    jobs["plate2close_d06"] = lambda: plate(2, 0.6, [(-0.75, 0.0), (0.75, 0.0)])
+    return jobs
 
 
 def main():

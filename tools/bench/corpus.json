@@ -149,6 +149,7 @@
   {"id": "plate5_d06", "file": "synthetic/plate5_d06.obj", "set": "plates", "category": "perforated plate: 5 x 5 holes of diameter 0.6, 90 deg rims (genus 25)"},
   {"id": "plate5_d15", "file": "synthetic/plate5_d15.obj", "set": "plates", "category": "perforated plate: 5 x 5 holes of diameter 1.5, 90 deg rims (genus 25)"},
   {"id": "plate8_d06", "file": "synthetic/plate8_d06.obj", "set": "plates", "category": "perforated plate: 8 x 8 holes of diameter 0.6, 90 deg rims (genus 64)"},
+  {"id": "plate2close_d06", "file": "synthetic/plate2close_d06.obj", "set": "plates", "category": "two holes of diameter 0.6, 1.5 apart, 90 deg rims (a close pair, genus 2)"},
   {"id": "plate3_d30", "file": "synthetic/plate3_d30.obj", "set": "plates", "category": "perforated plate: 3 x 3 holes of diameter 3, rims many quads around (control, genus 9)"},
   {"id": "ext_nemetona", "file": "external_thin/ext_nemetona.obj", "category": "sculpted figure with wolf: bow with a hair-thin string, horns, bead necklaces and jewellery, cloth strips, wolf tail, branch base; open, non-manifold", "set": "external_thin"},
   {"id": "ext_tarisland_dragon", "file": "external_thin/ext_tarisland_dragon.obj", "category": "creature: membrane wings (thin open shells), horns, spikes, claws, tail", "set": "external_thin"},

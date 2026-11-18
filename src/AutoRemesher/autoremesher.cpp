@@ -1668,11 +1668,13 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     // remesh, the rims stay where they are as surface; on T's set alone the
     // remesh has already bent the surface around them and nothing changes.
     // A lone small hole keeps its rims: without them it closes (a plate with
-    // one 0.6 hole at 2500 quads), so a loop goes only when at least three
-    // such loops lie within its own length (a hole through a thin plate has
-    // two rims, so a lone one never qualifies).
+    // one 0.6 hole at 2500 quads), and so may a pair (two 0.6 holes 1.5
+    // apart at 1000 quads lost the genus in 4 of 6 replicates instead of 2).
+    // So a loop goes only when at least five such loops lie within its own
+    // length: three holes through a thin plate, two rims each, with room
+    // for a hole at the edge of a perforation to see fewer neighbours.
     constexpr double kSmallLoopEdges = 13.0;
-    constexpr size_t kCrowdedLoops = 3;
+    constexpr size_t kCrowdedLoops = 5;
     constexpr double kCrowdRadiusPerLoopLength = 1.0;
     featureEdges = dropSmallClosedLoops(featureEdges, vertices, kSmallLoopEdges * voxelSize, kCrowdedLoops,
         kCrowdRadiusPerLoopLength, nullptr != sharpEdgeStats ? &sharpEdgeStats->smallLoops : nullptr);
