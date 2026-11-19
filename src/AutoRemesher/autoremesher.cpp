@@ -1661,6 +1661,23 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
         isotropicRemesher.setVertexTargetEdgeLengths(&vertexTargetLengths);
     featureEdges = filterDetectedChains(featureEdges, vertices, triangles, voxelSize,
         nullptr != sharpEdgeStats ? &sharpEdgeStats->filtered : nullptr);
+    // Perforations (TODO 2.34): the rims of small holes in a crowd are
+    // creases a few T edges around, and a crease the field must follow that
+    // tightly breaks it (a plate with 8 x 8 holes at 2500 quads: one hole in
+    // six of the output closed, 4 % of the surface lost).  Dropped before the
+    // remesh, the rims stay where they are as surface; on T's set alone the
+    // remesh has already bent the surface around them and nothing changes.
+    // A lone small hole keeps its rims: without them it closes (a plate with
+    // one 0.6 hole at 2500 quads), and so may a pair (two 0.6 holes 1.5
+    // apart at 1000 quads lost the genus in 4 of 6 replicates instead of 2).
+    // So a loop goes only when at least five such loops lie within its own
+    // length: three holes through a thin plate, two rims each, with room
+    // for a hole at the edge of a perforation to see fewer neighbours.
+    constexpr double kSmallLoopEdges = 13.0;
+    constexpr size_t kCrowdedLoops = 5;
+    constexpr double kCrowdRadiusPerLoopLength = 1.0;
+    featureEdges = dropSmallClosedLoops(featureEdges, vertices, kSmallLoopEdges * voxelSize, kCrowdedLoops,
+        kCrowdRadiusPerLoopLength, nullptr != sharpEdgeStats ? &sharpEdgeStats->smallLoops : nullptr);
     isotropicRemesher.setFeatureEdges(featureEdges);
     isotropicRemesher.setSmoothNormalDegrees(smoothNormalDegrees);
     isotropicRemesher.remesh();
@@ -2275,6 +2292,7 @@ bool AutoRemesher::remeshIslands()
         run.features.set("set_decimated_edges", (double)sharpEdgeStats.decimatedEdges);
         run.features.set("set_decimation_dropped", (double)sharpEdgeStats.decimationDropped);
         run.features.set("set_filtered", (double)sharpEdgeStats.filtered);
+        run.features.set("set_small_loops", (double)sharpEdgeStats.smallLoops);
         run.features.set("set_t_carried", (double)sharpEdgeStats.carried);
         run.features.set("set_t_classified", (double)sharpEdgeStats.classified);
         run.features.set("set_t_short", (double)sharpEdgeStats.tShort);

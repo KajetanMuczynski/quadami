@@ -27,6 +27,11 @@ Meshes (symmetry plane x = 0 where noted):
                    90 deg edges), the same box rotated by (23, 37, 11) deg (its right angles compute
                    as 90 +- 1e-7 deg), a box with 45 deg chamfers (all creases below 90 deg), a
                    cylinder with two circular 90 deg rims, a 30/60/90 deg prism, and csg_bracket rotated.
+  plate<m>_d<dd>   the "plates" A/B set (TODO 2.34): a 10 x 10 x 1 plate with m x m round through holes
+                   of diameter d (32 segments), every hole rim a closed 90 deg crease. plate1_d06,
+                   plate5_d06, plate5_d15, plate8_d06 (genus 1, 25, 25, 64), and plate3_d30 with three
+                   x three holes of diameter 3 (rims many quads around: a control that must not move);
+                   plate2close_d06 with two 0.6 holes 1.5 apart (a close pair, not a perforation).
 """
 import argparse
 import hashlib
@@ -268,6 +273,22 @@ def sha256(path):
     return h.hexdigest()
 
 
+def plates_set():
+    from manifold3d import Manifold, OpType
+
+    def plate(m, d, centres=None):
+        centres = centres or [(-5 + (i + 0.5) * 10 / m, -5 + (j + 0.5) * 10 / m) for i in range(m) for j in range(m)]
+        holes = [Manifold.cylinder(3.0, d / 2, d / 2, 32).translate([x, y, -1]) for x, y in centres]
+        g = (Manifold.cube([10.0, 10.0, 1.0]).translate([-5.0, -5.0, 0.0])
+             - Manifold.batch_boolean(holes, OpType.Add)).to_mesh()
+        return np.asarray(g.vert_properties[:, :3], float), np.asarray(g.tri_verts, np.int64)
+
+    jobs = {f"plate{m}_d{str(d).replace('.', '')}": (lambda m=m, d=d: plate(m, d))
+            for m, d in ((1, 0.6), (5, 0.6), (5, 1.5), (8, 0.6), (3, 3.0))}
+    jobs["plate2close_d06"] = lambda: plate(2, 0.6, [(-0.75, 0.0), (0.75, 0.0)])
+    return jobs
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--downloads", required=True, help="folder with spot.obj and koala.obj from fetch_meshes.sh")
@@ -285,6 +306,7 @@ def main():
         "spot_x8": lambda: spot_x8(spot),
         **closed_set(),
         **cad_set(),
+        **plates_set(),
     }
     manifest = {}
     for name, make in jobs.items():

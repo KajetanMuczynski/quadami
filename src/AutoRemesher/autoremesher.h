@@ -485,6 +485,9 @@ public:
         size_t decimationDropped = 0;
         // Detected edges left out of the remesher's chains (filterDetectedChains).
         size_t filtered = 0;
+        // Edges of small crowded closed loops left out of them
+        // (dropSmallClosedLoops).
+        size_t smallLoops = 0;
         // Edges of T that still carry an input edge (split halves included),
         // and the edges of T's own set that pass the sharp test on T
         // (reclassifyFeatureEdges).

@@ -137,6 +137,15 @@ FeatureEdgeSet filterDetectedChains(const FeatureEdgeSet& set,
 FeatureEdgeSet dropShortFeatureComponents(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices,
     double minLength, size_t* dropped = nullptr);
 
+// `set` without its small closed loops: components with no hard edge in
+// which every vertex lies on exactly two of the set's edges, shorter than
+// `maxLength`, when at least `minCrowd` such loops (the loop itself
+// included) have their centres within `crowdFactor` times its length of
+// its centre.
+// `dropped` counts the dropped edges.
+FeatureEdgeSet dropSmallClosedLoops(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices,
+    double maxLength, size_t minCrowd, double crowdFactor, size_t* dropped = nullptr);
+
 // Per corner of `mesh` (the edge from the corner's vertex to the next one):
 // 1 when that edge is in `set` with every bit of `requiredFlags`.  Both
 // corners of an interior edge get it.
