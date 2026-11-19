@@ -8,7 +8,8 @@
                   [--timeout S] [--metrics-timeout S] [--work DIR]
     ab.py compare A B [--set corpus] [--per-run] [--work DIR]
     ab.py build REF [--cmake-arg=... ...] [--work DIR]
-    ab.py lane BASE HEAD [--sets closed,corpus,...] [--replicates 1] [--jobs 2] [--work DIR]
+    ab.py lane BASE HEAD [--sets closed,corpus,...] [--replicates 1] [--jobs 2] [--head-cli-arg=... ...]
+                  [--work DIR]
     ab.py run LABEL --app PATH [--target-map FILE] [run options]    another remesher's binary
 
 REF is any commit-ish of this repository (master, HEAD, a SHA); commit work in progress first. A
@@ -33,6 +34,9 @@ replicate agrees; see "Noise rule" in README.md.
 `lane` decides which test lane a change needs (README.md "Test lanes"): none if BASE and HEAD have the
 same key, light if HEAD's out.obj is byte-identical to BASE's in every run of every set (plain input and one
 float32 replicate by default), full otherwise. It runs both sides without metrics; a later `run` of the same folders adds them.
+`--head-cli-arg` runs only HEAD with that CLI argument, for an option that must not change the output:
+`--head-cli-arg=--input-cache={input_cache}` (each input's first run writes its cache file, the
+others read it; `{input_cache}` names one file per set, mesh and replicate) checks the input cache.
 
 `run --app PATH` runs another remesher instead of building REF (REF is then only a label): a binary with
 the Qt app's headless interface (`-i in.obj -o out.obj --report r.txt --target-quads N`, started with
@@ -366,6 +370,12 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
     os.makedirs(d, exist_ok=True)
     inp = perturbed(src, k, work)
     asked = requested or target
+    # {input_cache} in a CLI argument: one input cache file per input (set, mesh, replicate) of this
+    # run folder, so the first run of a mesh writes it and its other targets and resolutions read it.
+    cache = os.path.join(out, "input-cache", setname, mesh["id"], f"u{k}.qic")
+    if any("{input_cache}" in arg for arg in cli_args):
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+    cli_args = [arg.replace("{input_cache}", cache) for arg in cli_args]
     env = None
     if app:  # the Qt app's headless mode; it has no --resolution
         cmd = [cli, "-i", inp, "-o", os.path.join(d, "out.obj"), "--report", os.path.join(d, "report.txt"),
@@ -897,9 +907,10 @@ def cmd_lane(a):
         for ref in (a.base, a.head):
             # Parsed like a `run` command line, so every run option keeps its default (a hand-built
             # Namespace missed --metrics-timeout and broke lane, 2026-10-28).
+            extra = ["--cli-arg=" + arg for arg in a.head_cli_arg] if ref == a.head else []
             ra = parser().parse_args(["run", ref, "--set", setname, "--replicates", str(a.replicates),
                                       "--jobs", str(a.jobs), "--no-metrics"]
-                                     + (["--timeout", repr(a.timeout)] if a.timeout else []))
+                                     + (["--timeout", repr(a.timeout)] if a.timeout else []) + extra)
             ra.work = a.work
             with open(os.devnull, "w") as quiet:
                 stdout, sys.stdout = sys.stdout, quiet
@@ -908,7 +919,7 @@ def cmd_lane(a):
                 finally:
                     sys.stdout = stdout
         s, d, f = output_diff(load_runs(run_dir(a.base, [], a.work), setname),
-                              load_runs(run_dir(a.head, [], a.work), setname), range(a.replicates + 1))
+                              load_runs(run_dir(a.head, a.head_cli_arg, a.work), setname), range(a.replicates + 1))
         same += s
         differ += [(setname,) + x for x in d]
         failed += [(setname,) + x for x in f]
@@ -972,6 +983,8 @@ def parser():
                     help="float32 1-ulp replicates besides the plain input (default 1: Blender hands the add-on float32)")
     ln.add_argument("--jobs", type=int, default=2)
     ln.add_argument("--timeout", type=float, default=1200)
+    ln.add_argument("--head-cli-arg", action="append", default=[],
+                    help="CLI argument for HEAD's runs only, repeatable; --head-cli-arg=--input-cache={input_cache}")
     for p in (b, r, c, ln):
         p.add_argument("--work", default=argparse.SUPPRESS)
     return ap

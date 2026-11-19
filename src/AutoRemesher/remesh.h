@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 15;
+const int InterfaceVersionMinor = 16;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -123,6 +123,20 @@ struct RemeshRequest {
     // of the triangles is ignored and counted (report warning).  Empty: only
     // the dihedral test of sharpEdgeDegrees finds creases, as before.
     std::vector<uint32_t> featureEdges;
+    // Since 1.16.  A file that keeps the prepared input between runs: the
+    // steps before the target matters (cleanup, orientation, fold survey or
+    // repair, island split; docs/PREVIEW.md §4.2), which a re-run or plan of
+    // the same mesh then skips, with the same output to the bit.  Read when
+    // it holds this request's arrays and fold settings and was written with
+    // inputCacheTag, else (re)written.  It also holds positions, triangles
+    // and featureEdges, so a host may leave all three empty: a file that
+    // cannot give them makes the request InvalidInput with a message that
+    // starts with InputCacheUnusableMessage, and the host then sends the
+    // arrays.  Empty: no cache, as before.
+    std::string inputCachePath;
+    // Since 1.16.  The host's build id: a file written with another tag is
+    // unusable, so one core never reads what another prepared.
+    std::string inputCacheTag;
     // Planned optional inputs, each empty by default so that leaving it out
     // keeps today's behaviour: vertexDensity, faceGroups, guideCurves,
     // symmetry (see INTERFACE.md in the project docs).
@@ -163,6 +177,10 @@ enum class RemeshStatus {
     Cancelled, // stopped through the CancelToken; no mesh
     Failed // ran to the end but produced no faces
 };
+
+// Since 1.16.  How the message of an InvalidInput result starts when the
+// request left its arrays to an input cache that could not give them.
+constexpr const char* InputCacheUnusableMessage = "input cache unusable";
 
 struct RemeshMesh {
     // x0 y0 z0 x1 y1 z1 ...

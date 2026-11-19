@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -40,6 +41,7 @@
 namespace AutoRemesher {
 
 class IsotropicRemesher;
+struct PreparedInput;
 
 enum class ModelType {
     Organic,
@@ -249,6 +251,29 @@ public:
     const std::vector<RemeshedIsland>& remeshedIslands() const
     {
         return m_remeshedIslands;
+    }
+
+    // Starts from `input` (inputcache.h), the state an earlier run of the
+    // same input and fold settings reached before the target first mattered,
+    // instead of the input given to the constructor; its arrays are moved
+    // out.  The constructor's input is then unused and may be empty.
+    void setPreparedInput(std::shared_ptr<PreparedInput> input)
+    {
+        m_preparedInput = std::move(input);
+    }
+
+    // Called with that state once remesh() has worked it out (or, from a
+    // prepared input without a fold survey, added the survey), so a host can
+    // keep it for the next run.  It is valid only during the call.
+    void setPreparedInputSink(std::function<void(const PreparedInput&)> sink)
+    {
+        m_preparedInputSink = std::move(sink);
+    }
+
+    // Whether the last remesh() started from a prepared input.
+    bool usedPreparedInput() const
+    {
+        return m_usedPreparedInput;
     }
 
     // Stop after the decimation and only plan the run: the quad edge
@@ -562,6 +587,9 @@ private:
     bool m_flattenSpikes = false;
     bool m_tangentialQuadSmoothing = false;
     bool m_planOnly = false;
+    std::shared_ptr<PreparedInput> m_preparedInput;
+    std::function<void(const PreparedInput&)> m_preparedInputSink;
+    bool m_usedPreparedInput = false;
     std::vector<float> m_planVertexEdgeLengths;
     std::vector<uint32_t> m_planVertexIslands;
     std::vector<PlanIsland> m_planIslands;
