@@ -124,6 +124,36 @@ public:
         return m_creaseSlides;
     }
 
+    // When a vertex slid, the finish that was not kept (with slides when
+    // creaseSlides() is 0, without them when it is 1), so the caller can
+    // decide again once the island is on its input (TODO 2.35).
+    bool hasCreaseSlideAlternative() const
+    {
+        return !m_alternativePolygons.empty();
+    }
+    const std::vector<Vector3>& alternativeVertices() const
+    {
+        return m_alternativeVertices;
+    }
+    const std::vector<std::vector<size_t>>& alternativeQuads() const
+    {
+        return m_alternativePolygons;
+    }
+
+    // Faces with a corner turned against the face normal (folded), and those
+    // plus quads whose diagonals both cross (twisted): the tests of the slide
+    // decision.
+    static size_t foldedFaceCount(const std::vector<Vector3>& positions,
+        const std::vector<std::vector<size_t>>& polygons);
+    static size_t foldedOrTwistedFaceCount(const std::vector<Vector3>& positions,
+        const std::vector<std::vector<size_t>>& polygons);
+    // Puts the vertices of every folded or twisted face back where
+    // `fallback` has them (the same faces, other positions), and again for
+    // the faces that are then folded or twisted, at most `rounds` times;
+    // returns how many vertices moved.
+    static size_t revertAtBadFaces(std::vector<Vector3>* positions, const std::vector<Vector3>& fallback,
+        const std::vector<std::vector<size_t>>& polygons, size_t rounds);
+
     // Whether libQEx extracted this island, and if not, why.
     const QexOutcome& qexOutcome() const
     {
@@ -205,6 +235,8 @@ private:
     bool m_slideCreases = false;
     size_t m_slidingVertexCount = 0;
     int m_creaseSlides = -1;
+    std::vector<Vector3> m_alternativeVertices;
+    std::vector<std::vector<size_t>> m_alternativePolygons;
     size_t m_targetQuadCount = 0;
     QexOutcome m_qexOutcome;
     std::map<std::pair<size_t, size_t>, ConnectionInfo> m_connectionInfos;
