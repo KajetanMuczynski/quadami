@@ -70,6 +70,43 @@ namespace {
         queryTreeWithBox(tree, node->right, box, indices);
     }
 
+    // Faces the report counts as folded (a corner turning against the area
+    // vector) or twisted (a quad folded under both diagonals), remesh.cpp.
+    size_t foldedOrTwistedFaceCount(const std::vector<Vector3>& positions,
+        const std::vector<std::vector<size_t>>& polygons)
+    {
+        size_t count = 0;
+        for (const auto& face : polygons) {
+            const size_t size = face.size();
+            if (size < 3)
+                continue;
+            Vector3 normal;
+            for (size_t k = 1; k + 1 < size; ++k)
+                normal += Vector3::crossProduct(positions[face[k]] - positions[face[0]],
+                    positions[face[k + 1]] - positions[face[0]]);
+            bool bad = false;
+            for (size_t k = 0; k < size && !bad; ++k) {
+                const Vector3& corner = positions[face[k]];
+                bad = Vector3::dotProduct(Vector3::crossProduct(positions[face[(k + 1) % size]] - corner,
+                                              positions[face[(k + size - 1) % size]] - corner),
+                          normal)
+                    <= 0.0;
+            }
+            if (!bad && 4 == size) {
+                const Vector3& a = positions[face[0]];
+                const Vector3& b = positions[face[1]];
+                const Vector3& c = positions[face[2]];
+                const Vector3& d = positions[face[3]];
+                bad = Vector3::dotProduct(Vector3::crossProduct(b - a, c - a), Vector3::crossProduct(c - a, d - a)) < 0.0
+                    && Vector3::dotProduct(Vector3::crossProduct(c - b, d - b), Vector3::crossProduct(d - b, a - b))
+                        < 0.0;
+            }
+            if (bad)
+                ++count;
+        }
+        return count;
+    }
+
     // The smallest of the face's rotations in both windings, compared as
     // sequences: equal for two faces exactly when they run through the same
     // points in the same cyclic order, either way round.
@@ -360,10 +397,62 @@ void QuadExtractor::finishMesh()
         }
     }
 
+    // Sliding T's crease vertices along their creases (TODO 2.8) keeps the
+    // creases sharp, but on some hard-surface islands the clean-up passes
+    // then leave a few more quads folded or twisted. An island where any
+    // vertex slid is finished again without slides, and that result is kept
+    // when it has fewer folded or twisted faces.
+    const std::vector<Vector3> vertices = m_remeshedVertices;
+    const std::vector<std::vector<size_t>> polygons = m_remeshedPolygons;
+    m_slideCreases = true;
+    m_slidingVertexCount = 0;
+    smoothAndCleanUp(false);
+    m_slideCreases = false;
+    m_creaseSlides = -1;
+    if (m_slidingVertexCount > 0) {
+        const size_t badWith = foldedOrTwistedFaceCount(m_remeshedVertices, m_remeshedPolygons);
+        std::vector<Vector3> verticesWith = std::move(m_remeshedVertices);
+        std::vector<std::vector<size_t>> polygonsWith = std::move(m_remeshedPolygons);
+        m_remeshedVertices = vertices;
+        m_remeshedPolygons = polygons;
+        smoothAndCleanUp(true);
+        if (foldedOrTwistedFaceCount(m_remeshedVertices, m_remeshedPolygons) < badWith) {
+            m_creaseSlides = 0;
+        } else {
+            m_remeshedVertices = std::move(verticesWith);
+            m_remeshedPolygons = std::move(polygonsWith);
+            m_creaseSlides = 1;
+        }
+    }
+    report(1.0f, "");
+
+#if AUTO_REMESHER_DEV
+    {
+        FILE* fp = fopen("debug-quadextractor-quads.obj", "wb");
+        for (size_t i = 0; i < m_remeshedVertices.size(); ++i) {
+            const auto& vertex = m_remeshedVertices[i];
+            fprintf(fp, "v %f %f %f\n", vertex.x(), vertex.y(), vertex.z());
+        }
+        for (const auto& it : m_remeshedPolygons) {
+            fprintf(fp, "f");
+            for (const auto& v : it)
+                fprintf(fp, " %zu", 1 + v);
+            fprintf(fp, "\n");
+        }
+        fclose(fp);
+    }
+#endif
+}
+
+void QuadExtractor::smoothAndCleanUp(bool quiet)
+{
+    const auto report = [this, quiet](float fraction, const char* name) {
+        if (m_progressHandler && !quiet)
+            m_progressHandler(fraction, name);
+    };
+
     report(0.31f, "Smoothing and projecting");
-    std::cerr << "Smooth and project..." << std::endl;
     smoothAndProject(5);
-    std::cerr << "Smooth and project done" << std::endl;
 
     report(0.44f, "Splitting seven edge faces");
     splitSevenEdgeFaces();
@@ -376,7 +465,7 @@ void QuadExtractor::finishMesh()
     cleanupTriangles();
     report(0.53f, "Merging shared five edge faces");
     ProgressHandler mergeProgress;
-    if (m_progressHandler) {
+    if (m_progressHandler && !quiet) {
         mergeProgress = [this](float fraction, const char* name) {
             m_progressHandler(0.53f + (0.85f - 0.53f) * fraction, name);
         };
@@ -410,24 +499,6 @@ void QuadExtractor::finishMesh()
         if (pieces.size() > 1)
             removeIsolatedFaces();
     }
-    report(1.0f, "");
-
-#if AUTO_REMESHER_DEV
-    {
-        FILE* fp = fopen("debug-quadextractor-quads.obj", "wb");
-        for (size_t i = 0; i < m_remeshedVertices.size(); ++i) {
-            const auto& vertex = m_remeshedVertices[i];
-            fprintf(fp, "v %f %f %f\n", vertex.x(), vertex.y(), vertex.z());
-        }
-        for (const auto& it : m_remeshedPolygons) {
-            fprintf(fp, "f");
-            for (const auto& v : it)
-                fprintf(fp, " %zu", 1 + v);
-            fprintf(fp, "\n");
-        }
-        fclose(fp);
-    }
-#endif
 }
 
 bool QuadExtractor::extractWithQexFrontEnd()
@@ -2326,6 +2397,127 @@ void QuadExtractor::smoothAndProject(size_t iterations,
         return false;
     };
 
+    // Vertices on T's sharp edges (TODO 2.8). The smoothing below pulled them
+    // towards their neighbours on both sides and the projection put them back
+    // on T's faces, not its creases, which rounded every crease T kept off by
+    // up to a quad (box isolines on creases 0.99, extracted quads 0.41,
+    // research/crease-preservation-2026-10-26.md section 5). A vertex within
+    // a small tolerance of a sharp edge of T is a crease vertex; an output
+    // edge between two crease vertices whose midpoint is on a sharp edge too
+    // is a crease edge. A crease vertex with exactly two crease edges slides
+    // along the crease: its Laplace step uses only those two neighbours and it
+    // is projected onto the nearest sharp edge. A vertex on a chain end or a
+    // corner where creases meet stays where it is.
+    std::vector<std::pair<size_t, size_t>> creaseNeighbors;
+    std::vector<AxisAlignedBoudingBox> segmentBoxes;
+    std::unique_ptr<AxisAlignedBoudingBoxTree> segmentTree;
+    const double creaseTolerance = 0.02 * averageEdgeLength;
+    // Sharp edges whose boxes meet the cube of half side radius at position
+    const auto segmentsNear = [&](const Vector3& position, double radius, std::vector<size_t>* segments) {
+        AxisAlignedBoudingBox queryBox;
+        queryBox.update(::Vector3(position.x() - radius, position.y() - radius, position.z() - radius));
+        queryBox.update(::Vector3(position.x() + radius, position.y() + radius, position.z() + radius));
+        segments->clear();
+        queryTreeWithBox(*segmentTree, segmentTree->root(), queryBox, segments);
+    };
+    const auto nearestOnSegments = [&](const Vector3& position, double radius, Vector3* nearest) {
+        static thread_local std::vector<size_t> segments;
+        segmentsNear(position, radius, &segments);
+        double minDistance2 = std::numeric_limits<double>::max();
+        for (const auto segment : segments) {
+            const auto& edge = m_featureEdges->edges[segment];
+            const Vector3& a = (*m_vertices)[edge.first];
+            const Vector3& b = (*m_vertices)[edge.second];
+            const Vector3 ab = b - a;
+            const double length2 = ab.lengthSquared();
+            double t = length2 > 0.0 ? Vector3::dotProduct(position - a, ab) / length2 : 0.0;
+            t = std::max(0.0, std::min(1.0, t));
+            const Vector3 candidate = a + ab * t;
+            const double distance2 = (candidate - position).lengthSquared();
+            if (distance2 < minDistance2) {
+                minDistance2 = distance2;
+                *nearest = candidate;
+            }
+        }
+        return minDistance2 <= radius * radius;
+    };
+    // Only the full pass slides; the local passes after the clean-up (a
+    // patch of movable vertices) smooth as before.
+    if (m_slideCreases && nullptr == movableVertices && nullptr != m_featureEdges && !m_featureEdges->empty()) {
+        segmentBoxes.resize(m_featureEdges->size());
+        std::vector<size_t> segmentIndices(m_featureEdges->size());
+        AxisAlignedBoudingBox segmentGroupBox;
+        for (size_t e = 0; e < m_featureEdges->size(); ++e) {
+            for (const auto v : { m_featureEdges->edges[e].first, m_featureEdges->edges[e].second }) {
+                const Vector3& position = (*m_vertices)[v];
+                const ::Vector3 corner(position.x(), position.y(), position.z());
+                segmentBoxes[e].update(corner);
+                segmentGroupBox.update(corner);
+            }
+            segmentBoxes[e].updateCenter();
+            segmentIndices[e] = e;
+        }
+        segmentGroupBox.updateCenter();
+        segmentTree.reset(new AxisAlignedBoudingBoxTree(&segmentBoxes, segmentIndices, segmentGroupBox));
+        std::vector<char> onCrease(m_remeshedVertices.size(), 0);
+        for (size_t i = 0; i < m_remeshedVertices.size(); ++i) {
+            Vector3 nearest;
+            onCrease[i] = nearestOnSegments(m_remeshedVertices[i], creaseTolerance, &nearest) ? 1 : 0;
+        }
+        // Chain corners and ends of T's set (feature valence other than 2)
+        // stay where they are; a crease vertex elsewhere without exactly two
+        // crease edges (the quads cut across the crease) is smoothed like
+        // any other vertex.
+        std::unordered_map<size_t, size_t> featureValence;
+        for (const auto& edge : m_featureEdges->edges) {
+            ++featureValence[edge.first];
+            ++featureValence[edge.second];
+        }
+        const auto isChainCorner = [&](const Vector3& position) {
+            const double radius = creaseTolerance;
+            std::vector<size_t> segments;
+            segmentsNear(position, radius, &segments);
+            for (const auto segment : segments) {
+                for (const auto v : { m_featureEdges->edges[segment].first, m_featureEdges->edges[segment].second }) {
+                    if (2 != featureValence[v] && ((*m_vertices)[v] - position).lengthSquared() <= radius * radius)
+                        return true;
+                }
+            }
+            return false;
+        };
+        creaseNeighbors.assign(m_remeshedVertices.size(),
+            std::make_pair(std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()));
+        for (size_t i = 0; i < m_remeshedVertices.size(); ++i) {
+            if (!onCrease[i] || locked[i] || neighbors[i].empty())
+                continue;
+            std::vector<size_t> along;
+            for (const auto& j : neighbors[i]) {
+                if (!onCrease[j])
+                    continue;
+                Vector3 nearest;
+                // A chord of a curved crease (a cylinder's rim) has its
+                // midpoint off the crease by its sagitta, L^2 / 8R; 0.15 of
+                // its length allows a radius down to about one edge, while an
+                // edge that crosses the crease is off by about half its length.
+                const double chord = (m_remeshedVertices[i] - m_remeshedVertices[j]).length();
+                if (nearestOnSegments((m_remeshedVertices[i] + m_remeshedVertices[j]) * 0.5,
+                        std::max(creaseTolerance, 0.15 * chord), &nearest))
+                    along.push_back(j);
+            }
+            // A chain corner's "neighbours" are itself: its step is zero
+            if (isChainCorner(m_remeshedVertices[i]))
+                creaseNeighbors[i] = std::make_pair(i, i);
+            else if (2 == along.size())
+                creaseNeighbors[i] = std::make_pair(along[0], along[1]);
+            else
+                continue;
+            ++m_slidingVertexCount;
+        }
+    }
+    const auto onCreaseChain = [&](size_t i) {
+        return !creaseNeighbors.empty() && creaseNeighbors[i].first != std::numeric_limits<size_t>::max();
+    };
+
     // Both passes below already read one buffer and write another, and the
     // projection only reads the bounding box tree, so each vertex is independent
     // and the parallel result is the same as the serial one.
@@ -2380,6 +2572,13 @@ void QuadExtractor::smoothAndProject(size_t iterations,
             [&](const tbb::blocked_range<size_t>& range) {
                 for (size_t k = range.begin(); k != range.end(); ++k) {
                     const size_t i = moving[k];
+                    if (onCreaseChain(i)) {
+                        const Vector3 center = (m_remeshedVertices[creaseNeighbors[i].first]
+                                                   + m_remeshedVertices[creaseNeighbors[i].second])
+                            * 0.5;
+                        smoothedVertices[i] = m_remeshedVertices[i] + smoothFactor * (center - m_remeshedVertices[i]);
+                        continue;
+                    }
                     Vector3 center;
                     for (const auto& neighbor : neighbors[i])
                         center += m_remeshedVertices[neighbor];
@@ -2398,6 +2597,13 @@ void QuadExtractor::smoothAndProject(size_t iterations,
                 for (size_t k = range.begin(); k != range.end(); ++k) {
                     const size_t i = moving[k];
                     Vector3 projected;
+                    if (onCreaseChain(i)) {
+                        if (nearestOnSegments(smoothedVertices[i], averageEdgeLength, &projected))
+                            smoothedVertices[i] = projected;
+                        else
+                            smoothedVertices[i] = m_remeshedVertices[i];
+                        continue;
+                    }
                     if (projectToTargetMesh(smoothedVertices[i], &projected))
                         smoothedVertices[i] = projected;
                 }

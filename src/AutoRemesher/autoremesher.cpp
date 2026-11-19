@@ -2394,6 +2394,9 @@ bool AutoRemesher::remeshIslands()
                 record.set("qex_steps", (double)qex.steps);
                 record.set("qex_steps_per_triangle", triangles.empty() ? 0.0 : (double)qex.steps / (double)triangles.size());
                 record.set("qex_faces", (double)qex.faces);
+                // 1 when the island kept the crease slides of TODO 2.8, 0 when it
+                // had creases and finished without them, -1 without creases
+                record.set("crease_slides", (double)extractor.creaseSlides());
                 record.set("qex_non_quads", (double)qex.nonQuads);
                 record.set("qex_dropped_faces", (double)qex.droppedFaces);
                 record.set("qex_cut_vertices", (double)qex.cutVertices);
