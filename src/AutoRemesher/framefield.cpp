@@ -123,12 +123,22 @@ bool FrameField::create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdge
         for (size_t vertexIndex = range.begin(); vertexIndex != range.end(); ++vertexIndex)
             vertexTensor[vertexIndex].fill(0.0);
     });
+#ifdef AR_EXP_CERT
+    // Experiment (exp/heuristic-ab): summed length of the edges each vertex's
+    // tensor holds, so |l1 - l2| / length is a mean anisotropic dihedral (rad).
+    std::vector<double> vertexEdgeLength(mesh.vertexCount(), 0.0);
+#endif
     for (size_t cornerIndex = 0; cornerIndex < mesh.cornerCount(); ++cornerIndex) {
         const size_t oppositeCornerIndex = mesh.oppositeCorner(cornerIndex);
         if (oppositeCornerIndex == SurfaceMesh::npos || oppositeCornerIndex < cornerIndex)
             continue;
         accumulateCurvatureTensor(&vertexTensor[mesh.cornerVertex(cornerIndex)], mesh.edgeVector(cornerIndex), mesh.normalAngle(cornerIndex));
         accumulateCurvatureTensor(&vertexTensor[mesh.cornerVertex(mesh.nextCorner(cornerIndex))], mesh.edgeVector(cornerIndex), mesh.normalAngle(cornerIndex));
+#ifdef AR_EXP_CERT
+        const double edgeLength = mesh.edgeVector(cornerIndex).length();
+        vertexEdgeLength[mesh.cornerVertex(cornerIndex)] += edgeLength;
+        vertexEdgeLength[mesh.cornerVertex(mesh.nextCorner(cornerIndex))] += edgeLength;
+#endif
     }
     double maximumCertainty = 0.0;
     tbb::parallel_for(tbb::blocked_range<size_t>(0, faces), [&](const tbb::blocked_range<size_t>& range) {
@@ -158,13 +168,25 @@ bool FrameField::create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdge
                 periodic[2 * faceIndex] = std::cos(fieldAngle);
                 periodic[2 * faceIndex + 1] = std::sin(fieldAngle);
                 certainty[faceIndex] = std::fabs(eig.eigenvalues()[primaryEigenvectorIndex] - eig.eigenvalues()[secondaryEigenvectorIndex]);
+#ifdef AR_EXP_CERT
+                double totalLength = 0.0;
+                for (size_t cornerIndex = 3 * faceIndex; cornerIndex < 3 * faceIndex + 3; ++cornerIndex)
+                    totalLength += vertexEdgeLength[mesh.cornerVertex(cornerIndex)];
+                const double theta = totalLength > 0.0 ? certainty[faceIndex] / totalLength : 0.0;
+                const double theta0 = (AR_EXP_CERT) * M_PI / 180.0;
+                certainty[faceIndex] = theta * theta / (theta * theta + theta0 * theta0);
+#endif
             }
     });
+#ifndef AR_EXP_CERT
     for (double certaintyValue : certainty)
         maximumCertainty = std::max(maximumCertainty, certaintyValue);
     if (maximumCertainty > 0.0)
         for (double& certaintyValue : certainty)
             certaintyValue /= maximumCertainty;
+#else
+    (void)maximumCertainty;
+#endif
 
     // Around a conical tip the principal directions run radially and around
     // the apex, a field of index 1: four quarter turns where the tip asks for
@@ -257,7 +279,10 @@ bool FrameField::create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdge
     };
 
     std::vector<double> solved;
-    for (size_t iteration = 0; iteration < 5; ++iteration) {
+#ifndef AR_EXP_FIELD_IT
+#define AR_EXP_FIELD_IT 5
+#endif
+    for (size_t iteration = 0; iteration < (AR_EXP_FIELD_IT); ++iteration) {
         size_t rowIndex = 0;
         for (size_t f = 0; f < faces; ++f)
             if (certainty[f] > 0.0) {

@@ -102,7 +102,10 @@ private:
     double m_targetEdgeLength = 0;
     FeatureEdgeSet m_featureEdges;
     double m_smoothNormalDegrees = 0.0;
-    int m_remeshIterations = 3;
+#ifndef AR_EXP_REMESH_IT
+#define AR_EXP_REMESH_IT 3
+#endif
+    int m_remeshIterations = AR_EXP_REMESH_IT;
     ProgressHandler m_progressHandler;
     std::vector<Vector3> m_remeshedVertices;
     std::vector<std::vector<size_t>> m_remeshedTriangles;
