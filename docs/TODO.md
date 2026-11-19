@@ -38,7 +38,7 @@ The baseline (REFERENCE §4.1) confirms this order. UV flips occur in every run 
 
 Release 0.3 is not item **0.3** (licence and name). Merged for it: guides (5.7, #161, #185), crease preservation (2.5, #166), cone tips (2.23, #135), density preview (G7, #164), raise-target hint (#159), panel notes and stall warning (2.27, #169, #171), small-part warning (G13, #181), lace islands (2.22, #184), rounding row deletion (8.8, #172), AMD hash (2.32, #175). Since the cut (checked on GitHub 2026-11-19): fallback cap and clean-up passes (2.30, 8.9, 8.11, #190), untangler projection (8.10, #189), ear flip on guides (5.7, #191), curl ordering (8.12, #192), perforated plates cause 1 (2.34, #193), warm input cache (G7, #194), crease slides (2.8, #195).
 
-Left for 0.3: **2.34** cause 2 (plates below about 10|χ| still break; Kajetan, 2026-11-19: fix it for 0.3 if doable). Everything else on the cut list is merged. Closed head loops (5.7) do not gate 0.3.
+Left for 0.3: nothing from the cut list. 2.34 cause 2 (plates below about 10|χ|) is still open and was not in the cut. Closed head loops (5.7) do not gate 0.3.
 
 Deferred to 0.4: **G14**, **G18**, **2.9b**, **2.31**, **2.33**, **6.1b**; fold repair stays off by default (2.20).
 
