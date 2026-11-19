@@ -124,7 +124,7 @@ above. Results you already made stay in your files; they are ordinary mesh objec
 
 - **Windows:** [windows-test/quadami-update.ps1](windows-test/quadami-update.ps1), described in the
   [Windows test sheet](windows-test/README.md) §4. Quit Blender, then in PowerShell:
-  `powershell -ExecutionPolicy Bypass -File .\quadami-update.ps1 .\quadami-0.2.1-windows-x64.zip "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"`.
+  `powershell -ExecutionPolicy Bypass -File .\quadami-update.ps1 .\quadami-0.3.0-windows-x64.zip "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"`.
   It only lists what it would do; add `-Apply` to do it. Tried only against a stand-in Blender, not
   on real Windows.
 - **Linux:** `quadami-update.sh`, the same for Linux, comes with the maintainer's test builds (it is not
@@ -144,7 +144,7 @@ Please report what happened either way.
 
 ### Which version do I have? (the build line)
 
-Blender's extension list shows the release version (such as 0.2.1) for every build, so it cannot tell builds apart. Use the
+Blender's extension list shows the release version (such as 0.3.0) for every build, so it cannot tell builds apart. Use the
 **build line** instead: a small grey line at the very bottom of the Quadami panel (and in the add-on's
 preferences), for example `Add-on build 4e9cdc7 2026-10-21`. The first part is the code version (a
 commit), the second its date. Copy that line into every bug report.
