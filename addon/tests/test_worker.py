@@ -36,6 +36,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "quadami"))
 import density  # noqa: E402
+import input_cache  # noqa: E402
 import names  # noqa: E402
 import raise_hint  # noqa: E402
 import report  # noqa: E402
@@ -737,11 +738,107 @@ class PlanTest(unittest.TestCase):
         self.assertFalse(density.in_band(5000, 6001))
 
 
+class InputCacheFolderTest(unittest.TestCase):
+    """input_cache.py: one file per mesh and worker, and a small folder."""
+
+    def test_path_follows_mesh_and_worker(self):
+        positions, triangles = uv_sphere(8, 16)
+        positions = positions.astype(np.float32)
+        marked = np.zeros((0, 2), np.int32)
+        a = input_cache.path_for("d", positions, triangles, marked, "w1")
+        self.assertEqual(a, input_cache.path_for("d", positions.copy(), triangles.copy(), marked, "w1"))
+        moved = positions.copy()
+        moved[3, 0] = np.nextafter(moved[3, 0], np.float32(2))
+        self.assertNotEqual(a, input_cache.path_for("d", moved, triangles, marked, "w1"))
+        self.assertNotEqual(a, input_cache.path_for("d", positions, triangles, np.array([[0, 1]], np.int32), "w1"))
+        self.assertNotEqual(a, input_cache.path_for("d", positions, triangles, marked, "w2"))
+
+    def test_prune_keeps_newest_and_the_one_in_use(self):
+        folder = tempfile.mkdtemp()
+        try:
+            paths = []
+            for i in range(7):
+                path = os.path.join(folder, "%d%s" % (i, input_cache.SUFFIX))
+                with open(path, "wb") as f:
+                    f.write(b"x" * 100)
+                os.utime(path, (1000 + i, 1000 + i))
+                paths.append(path)
+            stale = os.path.join(folder, "a.qic.tmp-1")
+            open(stale, "wb").close()
+            os.utime(stale, (1000, 1000))
+            other = os.path.join(folder, "notes.txt")
+            open(other, "wb").close()
+            # The oldest file is in use: kept, with the three newest.
+            input_cache.prune(folder, keep=paths[0], keep_files=4)
+            left = sorted(os.listdir(folder))
+            self.assertEqual(left, sorted(["0.qic", "4.qic", "5.qic", "6.qic", "notes.txt"]))
+            # A byte cap: only what fits.
+            input_cache.prune(folder, keep=None, keep_files=4, keep_bytes=250)
+            self.assertEqual(sorted(os.listdir(folder)), sorted(["5.qic", "6.qic", "notes.txt"]))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
 @unittest.skipIf(EXECUTABLE is None, "set AUTOREMESHER_EXECUTABLE to a built autoremesher-cli")
 class CliTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.positions, cls.triangles = uv_sphere()
+
+    def test_input_cache(self):
+        """A run that writes the cache file, one that reads it without the
+        mesh, and a plan from it give what a run without a cache gives; a
+        damaged file is replaced by a run with the mesh."""
+        folder = tempfile.mkdtemp()
+        try:
+            positions = self.positions.astype(np.float32)
+            path = os.path.join(folder, "mesh" + input_cache.SUFFIX)
+            parameters = {"target_quads": 500}
+            plain = worker.remesh(EXECUTABLE, positions, self.triangles, parameters)
+            self.assertEqual(plain.status, "ok", plain.message)
+
+            job = worker.RemeshJob(EXECUTABLE, positions, self.triangles, parameters, input_cache=path)
+            outcome = self._run(job)
+            self.assertFalse(job.cache_only)
+            self.assertTrue(os.path.isfile(path))
+            self._same(plain, outcome)
+            job = worker.RemeshJob(EXECUTABLE, positions, self.triangles, parameters, input_cache=path)
+            outcome = self._run(job)
+            self.assertTrue(job.cache_only)
+            self.assertEqual(outcome.report["diagnostics"]["input_cache_read"], 1)
+            self._same(plain, outcome)
+
+            plan = worker.remesh(EXECUTABLE, positions, self.triangles, parameters, plan=True)
+            cached_plan = worker.remesh(EXECUTABLE, positions, self.triangles, parameters, plan=True,
+                                        input_cache=path)
+            self.assertEqual(cached_plan.status, "ok", cached_plan.message)
+            self.assertTrue(np.array_equal(plan.plan.edge, cached_plan.plan.edge))
+
+            # A damaged file: the job starts again with the mesh and rewrites it.
+            with open(path, "r+b") as f:
+                f.truncate(100)
+            job = worker.RemeshJob(EXECUTABLE, positions, self.triangles, parameters, input_cache=path)
+            outcome = self._run(job)
+            self.assertFalse(job.cache_only)
+            self._same(plain, outcome)
+            self.assertGreater(os.path.getsize(path), 100)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def _run(self, job):
+        job.start()
+        try:
+            while not job.done:
+                job.poll()
+                time.sleep(0.02)
+            return job.outcome()
+        finally:
+            job.cleanup()
+
+    def _same(self, a, b):
+        self.assertEqual(b.status, "ok", b.message + "\n" + b.log)
+        self.assertTrue(np.array_equal(a.positions, b.positions))
+        self.assertTrue(np.array_equal(a.face_indices, b.face_indices))
 
     def test_version_has_build_id(self):
         self.assertTrue(worker.worker_build_id(EXECUTABLE))

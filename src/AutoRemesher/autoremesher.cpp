@@ -27,6 +27,7 @@
 #include <AutoRemesher/AutoRemesher>
 #include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/FoldRepair>
+#include <AutoRemesher/InputCache>
 #include <AutoRemesher/IsotropicRemesher>
 #include <AutoRemesher/MeshSeparator>
 #include <AutoRemesher/Parameterizer>
@@ -1661,6 +1662,23 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
         isotropicRemesher.setVertexTargetEdgeLengths(&vertexTargetLengths);
     featureEdges = filterDetectedChains(featureEdges, vertices, triangles, voxelSize,
         nullptr != sharpEdgeStats ? &sharpEdgeStats->filtered : nullptr);
+    // Perforations (TODO 2.34): the rims of small holes in a crowd are
+    // creases a few T edges around, and a crease the field must follow that
+    // tightly breaks it (a plate with 8 x 8 holes at 2500 quads: one hole in
+    // six of the output closed, 4 % of the surface lost).  Dropped before the
+    // remesh, the rims stay where they are as surface; on T's set alone the
+    // remesh has already bent the surface around them and nothing changes.
+    // A lone small hole keeps its rims: without them it closes (a plate with
+    // one 0.6 hole at 2500 quads), and so may a pair (two 0.6 holes 1.5
+    // apart at 1000 quads lost the genus in 4 of 6 replicates instead of 2).
+    // So a loop goes only when at least five such loops lie within its own
+    // length: three holes through a thin plate, two rims each, with room
+    // for a hole at the edge of a perforation to see fewer neighbours.
+    constexpr double kSmallLoopEdges = 13.0;
+    constexpr size_t kCrowdedLoops = 5;
+    constexpr double kCrowdRadiusPerLoopLength = 1.0;
+    featureEdges = dropSmallClosedLoops(featureEdges, vertices, kSmallLoopEdges * voxelSize, kCrowdedLoops,
+        kCrowdRadiusPerLoopLength, nullptr != sharpEdgeStats ? &sharpEdgeStats->smallLoops : nullptr);
     isotropicRemesher.setFeatureEdges(featureEdges);
     isotropicRemesher.setSmoothNormalDegrees(smoothNormalDegrees);
     isotropicRemesher.remesh();
@@ -1787,9 +1805,17 @@ bool AutoRemesher::remeshIslands()
     // Validate inputs before any sizing math. In particular a zero target
     // triangle count would divide by zero in initializeVoxelSize().
     const char* invalidInputReason = nullptr;
-    if (m_vertices.empty())
+    // A prepared input from other fold settings would be another input.
+    if (nullptr != m_preparedInput
+        && (m_preparedInput->repairFolds != m_repairInputFolds
+            || m_preparedInput->flattenSpikes != (m_repairInputFolds && m_flattenSpikes)))
+        m_preparedInput.reset();
+    // A prepared input was checked when it was made.
+    const bool prepared = nullptr != m_preparedInput;
+    m_usedPreparedInput = prepared;
+    if (!prepared && m_vertices.empty())
         invalidInputReason = "input mesh has no vertices";
-    else if (m_triangles.empty())
+    else if (!prepared && m_triangles.empty())
         invalidInputReason = "input mesh has no triangles";
     else if (0 == m_targetTriangleCount)
         invalidInputReason = "target triangle count must be greater than zero";
@@ -1805,64 +1831,89 @@ bool AutoRemesher::remeshIslands()
     auto t_start = std::chrono::high_resolution_clock::now();
     const double cpuStart = processCpuSeconds();
     // The plan reports on these; the pinch split appends vertices after them.
-    const size_t givenVertexCount = m_vertices.size();
+    size_t givenVertexCount = m_vertices.size();
+    size_t markedEdgesGiven = m_markedEdges.size();
+    InputCleanupStats cleanup;
+    FoldRepair::Stats folds;
+    bool foldsSurveyed = false;
+    std::vector<std::vector<std::vector<size_t>>> trianglesIslands;
+    if (prepared) {
+        PreparedInput& input = *m_preparedInput;
+        m_vertices = std::move(input.vertices);
+        m_triangles = std::move(input.triangles);
+        m_markedEdges = std::move(input.markedEdges);
+        trianglesIslands = std::move(input.islands);
+        givenVertexCount = input.givenVertexCount;
+        markedEdgesGiven = input.markedEdgesGiven;
+        m_ignoredMarkedEdgeCount = input.ignoredMarkedEdgeCount;
+        cleanup = input.cleanup;
+        folds = input.folds;
+        foldsSurveyed = input.foldsSurveyed;
+        m_preparedInput.reset();
+    } else {
+        // Triangles that use a vertex twice go before anything reads edges: they
+        // have no third edge, and every later step assumes three.
+        const size_t repeatedCornerTriangles = removeRepeatedCornerTriangles(m_triangles);
+        if (0 != repeatedCornerTriangles)
+            std::cerr << "Input cleanup: removed " << repeatedCornerTriangles
+                      << " faces that use a vertex twice" << std::endl;
 
-    // Triangles that use a vertex twice go before anything reads edges: they
-    // have no third edge, and every later step assumes three.
-    const size_t repeatedCornerTriangles = removeRepeatedCornerTriangles(m_triangles);
-    if (0 != repeatedCornerTriangles)
-        std::cerr << "Input cleanup: removed " << repeatedCornerTriangles
-                  << " faces that use a vertex twice" << std::endl;
-
-    // Open seams first: welding can leave zero-length edges and duplicate
-    // triangles, which the next two steps remove.  Pinched vertices are split
-    // last, once no merge can make new ones.
-    // The marked edges follow the weld and the split; a copy of the
-    // triangles is kept only when there are marks.
-    std::vector<std::vector<size_t>> trianglesBefore;
-    if (!m_markedEdges.empty())
-        trianglesBefore = m_triangles;
-    const SeamWeldStats seams = weldSeams(m_vertices, m_triangles,
-        seamWeldRelativeTolerance * usedBoundingDiagonal(m_vertices, m_triangles));
-    if (!m_markedEdges.empty() && 0 != seams.weldedVertices)
-        followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
-    InputCleanupStats cleanup = cleanInput(m_vertices, m_triangles, inputCleanupTolerance(m_vertices));
-    cleanup.repeatedCornerTriangles = repeatedCornerTriangles;
-    cleanup.weldedEdges = seams.weldedEdges;
-    cleanup.weldedVertices = seams.weldedVertices;
-    cleanup.weldKeptParts = seams.keptParts;
-    // A duplicate triangle makes its edges non-manifold, so a mesh without
-    // such an edge skips the sort.
-    if (0 != seams.nonManifoldEdges)
-        cleanup.duplicateTriangles = removeDuplicateTriangles(m_triangles);
-    if (!m_markedEdges.empty())
-        trianglesBefore = m_triangles;
-    cleanup.splitVertices = splitPinchedVertices(m_vertices, m_triangles);
-    if (!m_markedEdges.empty() && 0 != cleanup.splitVertices)
-        followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
-    trianglesBefore = std::vector<std::vector<size_t>>();
-    orientInput(m_vertices, m_triangles, &cleanup);
-    // A marked edge between two vertices the cleanup merged is gone with it.
-    const size_t markedEdgesGiven = m_markedEdges.size();
-    m_ignoredMarkedEdgeCount = m_markedEdges.empty() ? 0 : keepMarkedMeshEdges(m_triangles, &m_markedEdges);
-    if (m_triangles.empty()) {
-        std::cerr << "Input mesh has only degenerate triangles" << std::endl;
-        if (nullptr != m_progressHandler)
-            m_progressHandler(m_tag, 1.0, "Input mesh has only degenerate triangles");
-        return false;
+        // Open seams first: welding can leave zero-length edges and duplicate
+        // triangles, which the next two steps remove.  Pinched vertices are split
+        // last, once no merge can make new ones.
+        // The marked edges follow the weld and the split; a copy of the
+        // triangles is kept only when there are marks.
+        std::vector<std::vector<size_t>> trianglesBefore;
+        if (!m_markedEdges.empty())
+            trianglesBefore = m_triangles;
+        const SeamWeldStats seams = weldSeams(m_vertices, m_triangles,
+            seamWeldRelativeTolerance * usedBoundingDiagonal(m_vertices, m_triangles));
+        if (!m_markedEdges.empty() && 0 != seams.weldedVertices)
+            followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
+        cleanup = cleanInput(m_vertices, m_triangles, inputCleanupTolerance(m_vertices));
+        cleanup.repeatedCornerTriangles = repeatedCornerTriangles;
+        cleanup.weldedEdges = seams.weldedEdges;
+        cleanup.weldedVertices = seams.weldedVertices;
+        cleanup.weldKeptParts = seams.keptParts;
+        // A duplicate triangle makes its edges non-manifold, so a mesh without
+        // such an edge skips the sort.
+        if (0 != seams.nonManifoldEdges)
+            cleanup.duplicateTriangles = removeDuplicateTriangles(m_triangles);
+        if (!m_markedEdges.empty())
+            trianglesBefore = m_triangles;
+        cleanup.splitVertices = splitPinchedVertices(m_vertices, m_triangles);
+        if (!m_markedEdges.empty() && 0 != cleanup.splitVertices)
+            followCornerChanges(trianglesBefore, m_triangles, &m_markedEdges);
+        trianglesBefore = std::vector<std::vector<size_t>>();
+        orientInput(m_vertices, m_triangles, &cleanup);
+        // A marked edge between two vertices the cleanup merged is gone with it.
+        m_ignoredMarkedEdgeCount = m_markedEdges.empty() ? 0 : keepMarkedMeshEdges(m_triangles, &m_markedEdges);
+        if (m_triangles.empty()) {
+            std::cerr << "Input mesh has only degenerate triangles" << std::endl;
+            if (nullptr != m_progressHandler)
+                m_progressHandler(m_tag, 1.0, "Input mesh has only degenerate triangles");
+            return false;
+        }
     }
 
     // After orientation: the fold test is a sign test.  Moves vertices only.
     // Always detected, so the report can say where the input folds; only
     // repaired when asked for.
-    if (nullptr != m_progressHandler)
-        m_progressHandler(m_tag, 0.0f, m_repairInputFolds ? "Repairing folded input" : "Checking for folded input");
-    FoldRepair::Options foldOptions;
-    foldOptions.flattenSpikes = m_flattenSpikes;
-    // A plan has no report to put the survey in (5.6 s of a 2M-triangle plan).
-    const FoldRepair::Stats folds = m_repairInputFolds
-        ? FoldRepair::repair(&m_vertices, m_triangles, foldOptions)
-        : (m_planOnly ? FoldRepair::Stats() : FoldRepair::survey(m_vertices, m_triangles, foldOptions));
+    // A prepared input has had its repair, and its survey unless a plan
+    // made it.
+    bool foldsSurveyAdded = false;
+    if (!prepared || (!foldsSurveyed && !m_planOnly)) {
+        if (nullptr != m_progressHandler)
+            m_progressHandler(m_tag, 0.0f, m_repairInputFolds ? "Repairing folded input" : "Checking for folded input");
+        FoldRepair::Options foldOptions;
+        foldOptions.flattenSpikes = m_flattenSpikes;
+        // A plan has no report to put the survey in (5.6 s of a 2M-triangle plan).
+        folds = m_repairInputFolds
+            ? FoldRepair::repair(&m_vertices, m_triangles, foldOptions)
+            : (m_planOnly ? FoldRepair::Stats() : FoldRepair::survey(m_vertices, m_triangles, foldOptions));
+        foldsSurveyed = m_repairInputFolds || !m_planOnly;
+        foldsSurveyAdded = prepared;
+    }
     // The spikes' largest drop in quad edges: sqrt(area per target quad).
     double spikeDropQuads = 0.0;
     if (folds.flattenedSpikes > 0 && m_targetTriangleCount > 0) {
@@ -1885,9 +1936,38 @@ bool AutoRemesher::remeshIslands()
 
     if (nullptr != m_progressHandler)
         m_progressHandler(m_tag, 0.01f, "Splitting mesh into islands");
-    std::vector<std::vector<std::vector<size_t>>> trianglesIslands;
     auto t_splitStart = std::chrono::high_resolution_clock::now();
-    MeshSeparator::splitToIslands(m_triangles, trianglesIslands);
+    if (!prepared)
+        MeshSeparator::splitToIslands(m_triangles, trianglesIslands);
+    if (m_preparedInputSink && (!prepared || foldsSurveyAdded)) {
+        // Lent to the sink and taken back, so nothing is copied.
+        PreparedInput state;
+        state.repairFolds = m_repairInputFolds;
+        state.flattenSpikes = m_repairInputFolds && m_flattenSpikes;
+        state.vertices = std::move(m_vertices);
+        state.triangles = std::move(m_triangles);
+        state.markedEdges = std::move(m_markedEdges);
+        state.islands = std::move(trianglesIslands);
+        state.givenVertexCount = givenVertexCount;
+        state.markedEdgesGiven = markedEdgesGiven;
+        state.ignoredMarkedEdgeCount = m_ignoredMarkedEdgeCount;
+        state.cleanup = cleanup;
+        state.foldsSurveyed = foldsSurveyed;
+        state.folds = folds;
+        const auto takeBack = [&]() {
+            m_vertices = std::move(state.vertices);
+            m_triangles = std::move(state.triangles);
+            m_markedEdges = std::move(state.markedEdges);
+            trianglesIslands = std::move(state.islands);
+        };
+        try {
+            m_preparedInputSink(state);
+        } catch (...) {
+            takeBack();
+            throw;
+        }
+        takeBack();
+    }
     auto t_afterSplit = std::chrono::high_resolution_clock::now();
 
     if (trianglesIslands.empty()) {
@@ -2275,6 +2355,7 @@ bool AutoRemesher::remeshIslands()
         run.features.set("set_decimated_edges", (double)sharpEdgeStats.decimatedEdges);
         run.features.set("set_decimation_dropped", (double)sharpEdgeStats.decimationDropped);
         run.features.set("set_filtered", (double)sharpEdgeStats.filtered);
+        run.features.set("set_small_loops", (double)sharpEdgeStats.smallLoops);
         run.features.set("set_t_carried", (double)sharpEdgeStats.carried);
         run.features.set("set_t_classified", (double)sharpEdgeStats.classified);
         run.features.set("set_t_short", (double)sharpEdgeStats.tShort);
@@ -2376,6 +2457,9 @@ bool AutoRemesher::remeshIslands()
                 record.set("qex_steps", (double)qex.steps);
                 record.set("qex_steps_per_triangle", triangles.empty() ? 0.0 : (double)qex.steps / (double)triangles.size());
                 record.set("qex_faces", (double)qex.faces);
+                // 1 when the island kept the crease slides of TODO 2.8, 0 when it
+                // had creases and finished without them, -1 without creases
+                record.set("crease_slides", (double)extractor.creaseSlides());
                 record.set("qex_non_quads", (double)qex.nonQuads);
                 record.set("qex_dropped_faces", (double)qex.droppedFaces);
                 record.set("qex_cut_vertices", (double)qex.cutVertices);

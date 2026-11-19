@@ -206,6 +206,31 @@ prefix, ~28 %), which is still far below a run.
   speed-memory §1). Needs its own A/B (byte-identical output is the bar).
 - G17 Finer / Coarser after a run: the realised result's detail, with numbers.
 
+**Built 2026-11-18 (warm input cache, `feat/warm-input-cache`).** `--input-cache <file>`
+(`RemeshRequest::inputCachePath`, interface 1.16) keeps the input after cleanup, orientation, fold survey
+or repair and island split, plus the raw mesh (the report compares the output with it), keyed in the file
+by the worker's build id, the mesh and the fold settings. The add-on names one file per mesh and worker in
+its extension user folder (4 newest, at most 1.5 GB) and writes no OBJ on a hit; a file the worker cannot
+use is removed and the run starts again with the mesh. Decimation is not cached (it depends on the
+target). A plan has no fold survey; the first run from its file adds it and rewrites the file.
+
+- Output: `ab.py lane` light (790 public runs and 44 private, u0 + u1, byte-identical), and the same 834
+  runs with `--head-cli-arg=--input-cache={input_cache}` (302 wrote the file, 532 read it) byte-identical
+  to the base without a cache [M].
+- Time, CLI only, 10k quads, 2 sequential repeats on the cloud container (the add-on also skips its OBJ
+  write, 0.4 s at 0.4M and 1.2 s at 1.1M triangles) [M]:
+
+  | input | run, no cache → hit | plan, no cache → hit | file |
+  |---|---|---|---|
+  | tentacle 0.39M tris | 12.0 → 5.9 s (−51 %) | 5.1 → 4.5 s (−11 %) | 24 MB |
+  | happy 1.09M tris | 32.2 → 28.0 s (−13 %) | 11.4 → 8.5 s (−25 %) | 65 MB |
+  | private head 0.14M tris | 6.8 → 6.4 s (noise) | 5.4 → 5.4 s | 8 MB |
+
+- Reading [I]: the gain is the fold survey (5.6 s of tentacle's run; a plan skips it anyway) plus the
+  cleanup and split, so it is far below the 44-55 % this section estimated from whole-run shares, and
+  nothing below about 0.2M triangles. The survey's cost on tentacle is a first-run problem too; making it
+  cheaper would help every run, cached or not.
+
 ### 4.3 Small wording fix (in this PR)
 User guide, Advanced > Resolution: Quality takes about twice as long as Fast (§3.1), and Fast is
 not a preview of the Quality result (a third of the poles move). New text: "Fast to try settings

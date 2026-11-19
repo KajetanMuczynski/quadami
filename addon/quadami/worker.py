@@ -80,6 +80,12 @@ RUN_FLAGS = {
 # configured worker would reject the flag.
 LOST_PARTS_REFERENCE_INTERFACE = (1, 12)
 
+# The interface version that brought --input-cache, and how the report's
+# message starts when a run left the mesh to a cache file that could not
+# give it (the core's InputCacheUnusableMessage).
+INPUT_CACHE_INTERFACE = (1, 16)
+INPUT_CACHE_UNUSABLE = "input cache unusable"
+
 _PROGRESS_LINE = re.compile(r"^(\d+)% done\.(?: (.*))?$")
 
 
@@ -313,8 +319,17 @@ class RemeshJob:
     then outcome(). cancel() may be called at any time.
     """
 
-    def __init__(self, executable, positions, triangles, parameters, marked_edges=None, plan=False):
+    def __init__(self, executable, positions, triangles, parameters, marked_edges=None, plan=False,
+                 input_cache=None):
         self.executable = executable
+        # A file the worker keeps the prepared input in (--input-cache,
+        # input_cache.py). When it exists the mesh is not written out; if the
+        # worker cannot use it, the job removes it and starts again once with
+        # the mesh.
+        self.input_cache = input_cache
+        # True while the worker reads the mesh from that file alone.
+        self.cache_only = False
+        self._cache_checked = False
         # Only plan the run (--plan-only): the outcome carries a Plan, no mesh.
         self.plan = plan
         self.positions = positions
@@ -344,12 +359,19 @@ class RemeshJob:
         if unknown:
             raise ValueError("unknown parameters: " + ", ".join(sorted(unknown)))
         self._workdir = tempfile.mkdtemp(prefix="quadami-")
-        write_obj(self._path("input.obj"), self.positions, self.triangles, self.marked_edges)
-        args = [self.executable,
-                "-i", self._path("input.obj"),
-                "-o", self._path("plan.bin" if self.plan else "output.obj"),
-                "--report-json", self._path("report.json"),
-                "--stdin-control"] + (["--plan-only"] if self.plan else [])
+        self.cache_only = bool(self.input_cache) and os.path.isfile(self.input_cache)
+        self._launch(flags)
+
+    def _launch(self, flags):
+        args = [self.executable]
+        if not self.cache_only:
+            write_obj(self._path("input.obj"), self.positions, self.triangles, self.marked_edges)
+            args += ["-i", self._path("input.obj")]
+        if self.input_cache:
+            args += ["--input-cache", self.input_cache]
+        args += ["-o", self._path("plan.bin" if self.plan else "output.obj"),
+                 "--report-json", self._path("report.json"),
+                 "--stdin-control"] + (["--plan-only"] if self.plan else [])
         for name, value in self.parameters.items():
             if name == "target_quads":
                 value = int(value)
@@ -365,6 +387,35 @@ class RemeshJob:
         self._start_time = time.monotonic()
         self._reader = threading.Thread(target=self._read_output, daemon=True)
         self._reader.start()
+
+    def _relaunch_if_cache_unusable(self):
+        """After a run from the cache file alone ended: if the worker could
+        not use the file, remove it and start again with the mesh. True if it
+        started again."""
+        if not self.cache_only or self.cancel_requested or self._cache_checked:
+            return False
+        self._cache_checked = True
+        try:
+            with open(self._path("report.json"), "r", encoding="utf-8") as f:
+                report = json.load(f)
+        except (OSError, ValueError):
+            return False
+        if report.get("status") != "invalid_input" or \
+                not str(report.get("message", "")).startswith(INPUT_CACHE_UNUSABLE):
+            return False
+        for path in (self.input_cache, self._path("report.json")):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        for stream in (self._process.stdin, self._process.stdout):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+        self.cache_only = False
+        self._launch(dict(PARAMETER_FLAGS, **RUN_FLAGS))
+        return True
 
     @property
     def elapsed(self):
@@ -422,8 +473,11 @@ class RemeshJob:
 
     @property
     def done(self):
-        return (self._process is not None and self._process.poll() is not None
-                and not self._reader.is_alive())
+        """True once the worker has ended. Checking may start the worker again
+        (without the cache file it could not use), and then it is False."""
+        if (self._process is None or self._process.poll() is None or self._reader.is_alive()):
+            return False
+        return not self._relaunch_if_cache_unusable()
 
     def outcome(self):
         """Read the result once the job is done; removes the temporary folder."""
@@ -490,12 +544,12 @@ class RemeshJob:
 
 
 def remesh(executable, positions, triangles, parameters, on_progress=None, interval=0.05,
-           marked_edges=None, plan=False):
+           marked_edges=None, plan=False, input_cache=None):
     """Blocking convenience wrapper: run a job to the end and return its Outcome.
 
     on_progress(fraction, step) may return True to request a cancel.
     """
-    job = RemeshJob(executable, positions, triangles, parameters, marked_edges, plan=plan)
+    job = RemeshJob(executable, positions, triangles, parameters, marked_edges, plan=plan, input_cache=input_cache)
     job.start()
     try:
         while not job.done:

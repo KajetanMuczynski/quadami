@@ -25,6 +25,7 @@ The add-on's name and ids come from names.py.
 import collections
 import json
 import os
+import tempfile
 
 import blf
 import bpy
@@ -33,6 +34,7 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, Po
 
 from . import density
 from . import guide_tool
+from . import input_cache
 from . import transfer
 from . import worker
 from . import raise_hint
@@ -63,6 +65,27 @@ _syncing = False
 # The last run of this session, for Copy Report: the panel's settings, the
 # input's triangle count, the worker's last lines and the result's name.
 _last_run = None
+
+
+def _input_cache_path(executable, positions, triangles, marked):
+    """The worker's prepared-input file for this mesh (input_cache.py), or
+    None when the worker cannot keep one. Prunes the folder."""
+    if (worker.worker_interface(executable) or (0, 0)) < worker.INPUT_CACHE_INTERFACE:
+        return None
+    try:
+        directory = bpy.utils.extension_path_user(__package__, path="input-cache", create=True)
+    except (AttributeError, ValueError, OSError):
+        # Installed as a legacy add-on, where the extension folder does not exist.
+        directory = os.path.join(tempfile.gettempdir(), "quadami-input-cache")
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except OSError:
+            return None
+    key = input_cache.worker_key(executable, worker.worker_build_id(executable) or "")
+    path = input_cache.path_for(directory, positions, triangles, marked, key)
+    input_cache.touch(path)
+    input_cache.prune(directory, keep=path)
+    return path
 
 
 def _preferences(context):
@@ -617,7 +640,8 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
                                                 parameters["target_quads"])
         if reference and (worker.worker_interface(executable) or (0, 0)) >= worker.LOST_PARTS_REFERENCE_INTERFACE:
             parameters["lost_parts_reference"] = reference
-        job = worker.RemeshJob(executable, positions, triangles, parameters, marked)
+        job = worker.RemeshJob(executable, positions, triangles, parameters, marked,
+                               input_cache=_input_cache_path(executable, positions, triangles, marked))
         try:
             job.start()
         except (OSError, ValueError) as error:
@@ -821,7 +845,8 @@ class OBJECT_OT_density_preview(bpy.types.Operator):
         if len(triangles) == 0:
             self.report({"ERROR"}, "The mesh has no faces")
             return {"CANCELLED"}
-        job = worker.RemeshJob(executable, positions, triangles, settings.parameters(), marked, plan=True)
+        job = worker.RemeshJob(executable, positions, triangles, settings.parameters(), marked, plan=True,
+                               input_cache=_input_cache_path(executable, positions, triangles, marked))
         try:
             job.start()
         except (OSError, ValueError) as error:

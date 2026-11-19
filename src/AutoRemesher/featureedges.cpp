@@ -472,4 +472,75 @@ FeatureEdgeSet dropShortFeatureComponents(const FeatureEdgeSet& set, const std::
     return result;
 }
 
+FeatureEdgeSet dropSmallClosedLoops(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices,
+    double maxLength, size_t minCrowd, double crowdFactor, size_t* dropped)
+{
+    if (nullptr != dropped)
+        *dropped = 0;
+    if (set.empty() || !(maxLength > 0.0))
+        return set;
+    std::vector<size_t> parent(vertices.size());
+    for (size_t v = 0; v < parent.size(); ++v)
+        parent[v] = v;
+    const auto find = [&](size_t v) {
+        while (parent[v] != v)
+            v = parent[v] = parent[parent[v]];
+        return v;
+    };
+    std::vector<unsigned> degree(vertices.size(), 0);
+    for (const auto& edge : set.edges) {
+        parent[find(edge.first)] = find(edge.second);
+        ++degree[edge.first];
+        ++degree[edge.second];
+    }
+    // Per component (indexed by its root): length, centre of its edges'
+    // midpoints weighted by length, and whether it is a candidate.
+    std::vector<double> length(vertices.size(), 0.0);
+    std::vector<Vector3> centre(vertices.size(), Vector3(0.0, 0.0, 0.0));
+    std::vector<char> candidate(vertices.size(), 1);
+    for (size_t e = 0; e < set.size(); ++e) {
+        const auto& edge = set.edges[e];
+        const size_t c = find(edge.first);
+        const double l = (vertices[edge.second] - vertices[edge.first]).length();
+        length[c] += l;
+        centre[c] += (vertices[edge.first] + vertices[edge.second]) * (0.5 * l);
+        if (0 != (set.flags[e] & FeatureEdgeSet::Hard) || 2 != degree[edge.first] || 2 != degree[edge.second])
+            candidate[c] = 0;
+    }
+    std::vector<size_t> loops;
+    for (size_t v = 0; v < vertices.size(); ++v) {
+        if (0 == degree[v] || find(v) != v)
+            continue;
+        if (candidate[v] && length[v] < maxLength && length[v] > 0.0) {
+            centre[v] = centre[v] / length[v];
+            loops.push_back(v);
+        } else {
+            candidate[v] = 0;
+        }
+    }
+    // A loop is dropped when at least `minCrowd` loops (itself included)
+    // have their centres within `crowdFactor` times its length of its
+    // centre.  Quadratic in the loops under `maxLength` only (a plate with
+    // 8 x 8 holes has 128).
+    std::vector<char> drop(vertices.size(), 0);
+    for (const size_t a : loops) {
+        size_t near = 0;
+        for (const size_t b : loops)
+            if ((centre[a] - centre[b]).length() <= crowdFactor * length[a])
+                ++near;
+        drop[a] = near >= minCrowd ? 1 : 0;
+    }
+    FeatureEdgeSet result;
+    for (size_t e = 0; e < set.size(); ++e) {
+        if (drop[find(set.edges[e].first)]) {
+            if (nullptr != dropped)
+                ++*dropped;
+            continue;
+        }
+        result.edges.push_back(set.edges[e]);
+        result.flags.push_back(set.flags[e]);
+    }
+    return result;
+}
+
 }
