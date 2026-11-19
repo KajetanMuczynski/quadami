@@ -1,5 +1,38 @@
 # Changelog
 
+## Quadami 0.3.0
+
+Feature release (release notes: [docs/releases/0.3.0.md](docs/releases/0.3.0.md)).
+Changes since 0.2.1. Results differ from 0.2.1 on hard-surface parts, cones, perforated plates,
+lace and guided runs. Interface 1.11 -> 1.16.
+
+Blender add-on
+- Guides: Draw Guide tool, Mark/Clear Guide, Clear Guides, overlay; guide counts in the result box (#161)
+- Preview Density from the core's sizing plan, ±20 % Change control (#164, interface 1.13)
+- Next Target Quads hint with Set N after lost parts (#159, interface 1.12)
+- Prepared input cached between runs (`input-cache`, 4 newest, 1.5 GB cap) (#194, interface 1.16)
+- Panel notes: run time after 30 s, no-progress warning, how to clear imported Sharp marks (#169, #171)
+- Missing-surface share in Missing parts and its warning (#178, interface 1.14); small-part floor
+  warning (#181, warning only); warnings for sharp edges not kept, guides dropped, voxel-shell parts
+- CI presses Remesh, Copy Report and Cancel in a real Blender 4.5 window (#170)
+
+Remeshing
+- Creases kept through the isotropic remesh (#166); crease vertices slide along T's creases in
+  the smoothing (#195); cone apexes kept (#135)
+- Islands: rerun without sharp edges when they break topology (#165); handle-heavy islands on a
+  voxel envelope (#177, interface 1.15); lace islands closed further while broken (#184); small
+  crowded hole rims dropped before the remesh (#193)
+- Guides: drop only self-folding guides (#185); ear flips off guide lines (#191)
+- Fixes: faces with a repeated vertex removed, no libQEx heap corruption (#173); Eigen AMD
+  supervariable hash in 64 bits, no hang/segfault at 400k quads (#175)
+- Speed: held rows deleted from the factor instead of refactorizing (#172), allocation-free
+  untangler projection (#189), incremental clean-up after extraction (#190), nested dissection or
+  AMD for large curl systems (#192)
+
+Benchmarks and CI
+- Release gate decides by a per-case sign test (#180); coverage and handle metrics fixed (#174,
+  #182); `plates` set
+
 ## Quadami 0.2.1
 
 Fix release with one new button (release notes: [docs/releases/0.2.1.md](docs/releases/0.2.1.md)).
