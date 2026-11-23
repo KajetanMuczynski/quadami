@@ -18,7 +18,8 @@ Blender add-on
 
 Remeshing
 - Creases kept through the isotropic remesh (#166); crease vertices slide along T's creases in
-  the smoothing (#195); cone apexes kept (#135)
+  the smoothing (#195), and the finish with fewer folds on the input is kept (#199); cone apexes
+  kept (#135)
 - Islands: rerun without sharp edges when they break topology (#165); handle-heavy islands on a
   voxel envelope (#177, interface 1.15); lace islands closed further while broken (#184); small
   crowded hole rims dropped before the remesh (#193)
@@ -27,7 +28,7 @@ Remeshing
   supervariable hash in 64 bits, no hang/segfault at 400k quads (#175)
 - Speed: held rows deleted from the factor instead of refactorizing (#172), allocation-free
   untangler projection (#189), incremental clean-up after extraction (#190), nested dissection or
-  AMD for large curl systems (#192)
+  AMD for large curl systems (#192), faster geodesic pass of the input fold survey (#198)
 
 Benchmarks and CI
 - Release gate decides by a per-case sign test (#180); coverage and handle metrics fixed (#174,
