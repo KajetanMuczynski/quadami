@@ -240,7 +240,7 @@ edge loops differ." The Resolution tooltip in the add-on says "about twice as lo
 ### 4.4 Built: plan-only core and the overlay (2026-10-31)
 
 *Superseded in part by §4.5 (2026-11-04): the plan now comes from the continuous cover solve, and the
-Change bar spans ±20 %. The numbers below are those of the first plan (the size law on the decimated mesh).*
+overlay follows Target Quads within ±20 %. The numbers below are those of the first plan (the size law on the decimated mesh).*
 
 Thread "Build density preview overlay", branch `feat/density-overlay`. Kajetan's ask: a swipe check
 around a typed Target Quads (for example 4k-6k around 5k) that shows which details keep their quads,
@@ -369,7 +369,7 @@ of the cover (`QuadParameterizer::parameterize(..., planFaceEdges)`; the roundin
 extraction are skipped) and takes per face of T the edge of a unit cell of that map,
 √(3D area / uv area). 8 Jacobi steps of log smoothing on T (was 32 on the decimated mesh), the count
 kept, nearest-vertex transfer as before. If the cover fails on an island, that island falls back to
-the size law. The add-on's Change bar spans ±20 % and the overlay asks for a new preview outside it;
+the size law. The overlay follows Target Quads within ±20 % and asks for a new preview outside it;
 Anisotropy is now a planning setting.
 
 **Measured** (`tools/bench/plan_report.py`, new columns `rerr` = median |log₂ run / plan| of 16-quad
@@ -495,6 +495,19 @@ density-coarse-disprover-2026-11-05): survives. Low-poly sets old / fitted / uni
 **What I did not re-check**
 - Fast plans on primitives and usage; Follow Marks or Adaptivity ≠ default; the add-on in Blender
   (unchanged code, same arrays).
+
+### 4.7 Change bar removed (2026-11-23)
+
+Kajetan's hand test of the 0.3 build: the **Change** bar wrote Target Quads behind the user's back, and
+Blender filled it from 0 to +20 %, so every negative value looked like no change. The bar is gone; the
+overlay follows Target Quads inside the same ±20 % band (it already did when the count was typed), and
+the panel names that range. One number, which the preview never writes, so Remesh uses what the panel
+shows. A separate trial count with an Apply button was rejected: two counts that can disagree, and
+Remesh would run the one the user is not looking at.
+
+Not changed here (0.4 candidates): within ±20 % the overlay barely moves (+13 % quads is about −6 %
+edge, about 4 % of the colour ramp, and the checker steps by 19 % in edge), and it replaces the
+model's own shading.
 
 ## 5. Design critique (what may have been missed)
 

@@ -115,6 +115,15 @@ _draw_handle = None
 # The running Draw Guide operator, whose draft the overlay draws too.
 _active_tool = None
 
+# Set by the add-on: obj -> the original a remesh result was made from, or
+# None. Remesh on a result remeshes that original and reads the guides from
+# it, so guides go on the original, never on a result.
+source_of = None
+
+
+def _result_source(obj):
+    return source_of(obj) if source_of is not None and obj is not None else None
+
 
 @bpy.app.handlers.persistent
 def invalidate_overlay(*_args):
@@ -212,7 +221,7 @@ class OBJECT_OT_quadami_draw_guide(bpy.types.Operator):
     def poll(cls, context):
         obj = context.active_object
         return (obj is not None and obj.type == "MESH" and obj.mode == "OBJECT"
-                and len(obj.data.polygons) > 0 and _active_tool is None)
+                and len(obj.data.polygons) > 0 and _active_tool is None and _result_source(obj) is None)
 
     def invoke(self, context, event):
         global _active_tool
@@ -405,7 +414,7 @@ class OBJECT_OT_quadami_mark_guide(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         obj = context.active_object
-        return obj is not None and obj.type == "MESH" and obj.mode == "EDIT"
+        return obj is not None and obj.type == "MESH" and obj.mode == "EDIT" and _result_source(obj) is None
 
     def execute(self, context):
         obj = context.active_object
@@ -441,6 +450,35 @@ class OBJECT_OT_quadami_clear_guides(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class OBJECT_OT_quadami_select_source(bpy.types.Operator):
+    """Show and select the original this result was made from, and hide the
+    result, to draw guides on the original"""
+    bl_idname = "object.%s_select_source" % ID
+    bl_label = "Select Original"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        source = _result_source(obj)
+        return (source is not None and obj.mode == "OBJECT"
+                and source.name in context.view_layer.objects and not source.hide_viewport)
+
+    def execute(self, context):
+        result = context.active_object
+        source = _result_source(result)
+        # The reverse of what Remesh does when it shows a result.
+        for selected in list(context.view_layer.objects.selected):
+            selected.select_set(False)
+        source.hide_set(False)
+        source.hide_render = False
+        result.hide_set(True)
+        result.hide_render = True
+        source.select_set(True)
+        context.view_layer.objects.active = source
+        return {"FINISHED"}
+
+
 def draw_panel(layout, context, enabled):
     """The panel's Guides section."""
     obj = context.active_object
@@ -451,6 +489,13 @@ def draw_panel(layout, context, enabled):
     row.label(text="Guides")
     row.prop(settings, "show_guides", text="", icon="HIDE_OFF" if settings.show_guides else "HIDE_ON")
     if obj is None or obj.type != "MESH":
+        return
+    source = _result_source(obj)
+    if source is not None:
+        # A guide on a result would be ignored: Remesh reads the original's.
+        column.label(text="Draw guides on the original,", icon="INFO")
+        column.label(text="\"%s\": Remesh reads them there" % source.name, icon="BLANK1")
+        column.operator(OBJECT_OT_quadami_select_source.bl_idname, icon="RESTRICT_SELECT_OFF")
         return
     if obj.mode == "EDIT":
         row = column.row(align=True)
@@ -474,6 +519,7 @@ classes = (
     OBJECT_OT_quadami_draw_guide,
     OBJECT_OT_quadami_mark_guide,
     OBJECT_OT_quadami_clear_guides,
+    OBJECT_OT_quadami_select_source,
 )
 
 
