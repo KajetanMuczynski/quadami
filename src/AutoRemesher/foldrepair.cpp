@@ -232,6 +232,57 @@ namespace {
 
     const double M_PI_VALUE = 3.14159265358979323846;
 
+    // A 4-ary min-heap: shallower than a binary one, so fewer moves per
+    // push and pop.  It pops in the order of `Item::operator<` like any
+    // other min-heap, which is a total order here.
+    template <typename Item>
+    class QuadHeap {
+    public:
+        bool empty() const { return items.empty(); }
+        const Item& top() const { return items.front(); }
+        void clear() { items.clear(); }
+        void push(const Item& item)
+        {
+            size_t i = items.size();
+            items.push_back(item);
+            while (i > 0) {
+                const size_t parent = (i - 1) / 4;
+                if (!(item < items[parent]))
+                    break;
+                items[i] = items[parent];
+                i = parent;
+            }
+            items[i] = item;
+        }
+        void pop()
+        {
+            const Item last = items.back();
+            items.pop_back();
+            const size_t size = items.size();
+            if (0 == size)
+                return;
+            size_t i = 0;
+            for (;;) {
+                const size_t first = 4 * i + 1;
+                if (first >= size)
+                    break;
+                size_t best = first;
+                const size_t end = std::min(first + 4, size);
+                for (size_t c = first + 1; c < end; ++c)
+                    if (items[c] < items[best])
+                        best = c;
+                if (!(items[best] < last))
+                    break;
+                items[i] = items[best];
+                i = best;
+            }
+            items[i] = last;
+        }
+
+    private:
+        std::vector<Item> items;
+    };
+
     struct DetectScratch {
         std::vector<double> distance;
         std::vector<size_t> touched;
@@ -415,6 +466,28 @@ namespace {
             }
         });
 
+        // Each triangle's area, and the length of each step between edge
+        // neighbours, once (the same expressions as before, so the same bits).
+        const std::vector<Vector3>& areas = geometry.areas;
+        const std::vector<size_t>& nearStart = topology.faceFaceStart;
+        const std::vector<size_t>& near = topology.faceFaces;
+        std::vector<double> masses(faceCount);
+        std::vector<double> steps(near.size());
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, faceCount), [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t f = range.begin(); f != range.end(); ++f) {
+                masses[f] = areas[f].length();
+                for (size_t k = nearStart[f]; k < nearStart[f + 1]; ++k)
+                    steps[k] = (geometry.centroids[near[k]] - geometry.centroids[f]).length();
+            }
+        });
+        struct Item {
+            double distance;
+            size_t face;
+            bool operator<(const Item& other) const
+            {
+                return distance < other.distance || (distance == other.distance && face < other.face);
+            }
+        };
         tbb::enumerable_thread_specific<DetectScratch> scratch([&]() {
             DetectScratch s;
             s.distance.assign(faceCount, std::numeric_limits<double>::infinity());
@@ -422,16 +495,20 @@ namespace {
         });
         tbb::parallel_for(tbb::blocked_range<size_t>(0, faceCount), [&](const tbb::blocked_range<size_t>& range) {
             DetectScratch& s = scratch.local();
-            typedef std::pair<double, size_t> Item;
-            std::priority_queue<Item, std::vector<Item>, std::greater<Item>> heap;
+            QuadHeap<Item> heap;
             for (size_t start = range.begin(); start != range.end(); ++start) {
                 if (!candidate[start])
                     continue;
                 // The bound rises by the positive terms as the disc fills;
                 // once it is above -tolerance * area so far the triangle
-                // cannot be flagged.
+                // cannot be flagged.  Every triangle that enters the queue
+                // ends up in the disc, so the positive terms of those count
+                // already when they enter (`seen`); half the tolerance
+                // leaves room for the rounding of the other summation order.
                 const Vector3& n = geometry.normals[start];
                 double lower = bound[start];
+                double seenLower = bound[start];
+                double seenMass = masses[start];
                 Vector3 sum;
                 double mass = 0.0;
                 s.distance[start] = 0.0;
@@ -440,35 +517,41 @@ namespace {
                 while (!heap.empty()) {
                     const Item item = heap.top();
                     heap.pop();
-                    const size_t f = item.second;
-                    if (item.first > s.distance[f])
+                    const size_t f = item.face;
+                    if (item.distance > s.distance[f])
                         continue;
-                    sum += geometry.areas[f];
-                    mass += geometry.areas[f].length();
+                    sum += areas[f];
+                    mass += masses[f];
                     if (f != start) {
-                        lower += std::max(0.0, Vector3::dotProduct(n, geometry.areas[f]));
+                        lower += std::max(0.0, Vector3::dotProduct(n, areas[f]));
                         if (lower >= -tolerance * mass)
                             break;
                     }
-                    for (size_t k = topology.faceFaceStart[f]; k < topology.faceFaceStart[f + 1]; ++k) {
-                        const size_t g = topology.faceFaces[k];
-                        const double next = item.first + (geometry.centroids[g] - geometry.centroids[f]).length();
+                    for (size_t k = nearStart[f]; k < nearStart[f + 1]; ++k) {
+                        const size_t g = near[k];
+                        const double next = item.distance + steps[k];
                         // The triangles sharing an edge with the start always
                         // count, for triangles larger than the radius.
                         if ((next <= radius || f == start) && next < s.distance[g]) {
-                            if (std::isinf(s.distance[g]))
+                            if (std::isinf(s.distance[g])) {
                                 s.touched.push_back(g);
+                                seenLower += std::max(0.0, Vector3::dotProduct(n, areas[g]));
+                                seenMass += masses[g];
+                            }
                             s.distance[g] = next;
                             heap.push({ next, g });
                         }
+                    }
+                    if (seenLower >= -0.5 * tolerance * seenMass) {
+                        lower = 0.0;
+                        break;
                     }
                 }
                 for (size_t g : s.touched)
                     s.distance[g] = std::numeric_limits<double>::infinity();
                 s.touched.clear();
                 folded[start] = lower < -tolerance * mass && Vector3::dotProduct(n, sum) < -tolerance * mass;
-                while (!heap.empty())
-                    heap.pop();
+                heap.clear();
             }
         });
         return folded;
