@@ -72,38 +72,40 @@ namespace {
 
     // Faces the report counts as folded (a corner turning against the area
     // vector) or twisted (a quad folded under both diagonals), remesh.cpp.
+    bool isFoldedOrTwistedFace(const std::vector<Vector3>& positions, const std::vector<size_t>& face,
+        bool countTwisted)
+    {
+        const size_t size = face.size();
+        if (size < 3)
+            return false;
+        Vector3 normal;
+        for (size_t k = 1; k + 1 < size; ++k)
+            normal += Vector3::crossProduct(positions[face[k]] - positions[face[0]],
+                positions[face[k + 1]] - positions[face[0]]);
+        for (size_t k = 0; k < size; ++k) {
+            const Vector3& corner = positions[face[k]];
+            if (Vector3::dotProduct(Vector3::crossProduct(positions[face[(k + 1) % size]] - corner,
+                                        positions[face[(k + size - 1) % size]] - corner),
+                    normal)
+                <= 0.0)
+                return true;
+        }
+        if (4 != size || !countTwisted)
+            return false;
+        const Vector3& a = positions[face[0]];
+        const Vector3& b = positions[face[1]];
+        const Vector3& c = positions[face[2]];
+        const Vector3& d = positions[face[3]];
+        return Vector3::dotProduct(Vector3::crossProduct(b - a, c - a), Vector3::crossProduct(c - a, d - a)) < 0.0
+            && Vector3::dotProduct(Vector3::crossProduct(c - b, d - b), Vector3::crossProduct(d - b, a - b)) < 0.0;
+    }
+
     size_t foldedOrTwistedFaceCount(const std::vector<Vector3>& positions,
-        const std::vector<std::vector<size_t>>& polygons)
+        const std::vector<std::vector<size_t>>& polygons, bool countTwisted = true)
     {
         size_t count = 0;
-        for (const auto& face : polygons) {
-            const size_t size = face.size();
-            if (size < 3)
-                continue;
-            Vector3 normal;
-            for (size_t k = 1; k + 1 < size; ++k)
-                normal += Vector3::crossProduct(positions[face[k]] - positions[face[0]],
-                    positions[face[k + 1]] - positions[face[0]]);
-            bool bad = false;
-            for (size_t k = 0; k < size && !bad; ++k) {
-                const Vector3& corner = positions[face[k]];
-                bad = Vector3::dotProduct(Vector3::crossProduct(positions[face[(k + 1) % size]] - corner,
-                                              positions[face[(k + size - 1) % size]] - corner),
-                          normal)
-                    <= 0.0;
-            }
-            if (!bad && 4 == size) {
-                const Vector3& a = positions[face[0]];
-                const Vector3& b = positions[face[1]];
-                const Vector3& c = positions[face[2]];
-                const Vector3& d = positions[face[3]];
-                bad = Vector3::dotProduct(Vector3::crossProduct(b - a, c - a), Vector3::crossProduct(c - a, d - a)) < 0.0
-                    && Vector3::dotProduct(Vector3::crossProduct(c - b, d - b), Vector3::crossProduct(d - b, a - b))
-                        < 0.0;
-            }
-            if (bad)
-                ++count;
-        }
+        for (const auto& face : polygons)
+            count += isFoldedOrTwistedFace(positions, face, countTwisted) ? 1 : 0;
         return count;
     }
 
@@ -409,6 +411,8 @@ void QuadExtractor::finishMesh()
     smoothAndCleanUp(false);
     m_slideCreases = false;
     m_creaseSlides = -1;
+    m_alternativeVertices.clear();
+    m_alternativePolygons.clear();
     if (m_slidingVertexCount > 0) {
         const size_t badWith = foldedOrTwistedFaceCount(m_remeshedVertices, m_remeshedPolygons);
         std::vector<Vector3> verticesWith = std::move(m_remeshedVertices);
@@ -418,7 +422,11 @@ void QuadExtractor::finishMesh()
         smoothAndCleanUp(true);
         if (foldedOrTwistedFaceCount(m_remeshedVertices, m_remeshedPolygons) < badWith) {
             m_creaseSlides = 0;
+            m_alternativeVertices = std::move(verticesWith);
+            m_alternativePolygons = std::move(polygonsWith);
         } else {
+            m_alternativeVertices = std::move(m_remeshedVertices);
+            m_alternativePolygons = std::move(m_remeshedPolygons);
             m_remeshedVertices = std::move(verticesWith);
             m_remeshedPolygons = std::move(polygonsWith);
             m_creaseSlides = 1;
@@ -5569,6 +5577,50 @@ void QuadExtractor::mergeSharedFiveEdgeFaces(const ProgressHandler* progressHand
     // The two pentagons closed up around the merged point, pull the patch back
     // onto the source mesh
     smoothAroundVertices(compactedMergedVertices, 3, 5);
+}
+
+size_t QuadExtractor::foldedOrTwistedFaceCount(const std::vector<Vector3>& positions,
+    const std::vector<std::vector<size_t>>& polygons)
+{
+    return AutoRemesher::foldedOrTwistedFaceCount(positions, polygons);
+}
+
+size_t QuadExtractor::foldedFaceCount(const std::vector<Vector3>& positions,
+    const std::vector<std::vector<size_t>>& polygons)
+{
+    return AutoRemesher::foldedOrTwistedFaceCount(positions, polygons, false);
+}
+
+size_t QuadExtractor::revertAtBadFaces(std::vector<Vector3>* positions, const std::vector<Vector3>& fallback,
+    const std::vector<std::vector<size_t>>& polygons, size_t rounds)
+{
+    const auto moved = [&](size_t v) {
+        const Vector3& a = (*positions)[v];
+        const Vector3& b = fallback[v];
+        return a.x() != b.x() || a.y() != b.y() || a.z() != b.z();
+    };
+    size_t reverted = 0;
+    std::vector<size_t> moving;
+    for (size_t round = 0; round < rounds; ++round) {
+        moving.clear();
+        for (const auto& face : polygons) {
+            if (!isFoldedOrTwistedFace(*positions, face, true))
+                continue;
+            for (const size_t v : face) {
+                if (moved(v))
+                    moving.push_back(v);
+            }
+        }
+        if (moving.empty())
+            break;
+        for (const size_t v : moving) {
+            if (moved(v)) {
+                (*positions)[v] = fallback[v];
+                ++reverted;
+            }
+        }
+    }
+    return reverted;
 }
 
 }

@@ -2477,65 +2477,131 @@ bool AutoRemesher::remeshIslands()
                 }
                 run.remeshedVertices = extractor.remeshedVertices();
                 run.remeshedQuads = extractor.remeshedQuads();
-                // The quad vertices on T's hard edges (guides, marks) before
-                // projection moves them: relax() keeps them (TODO 5.7).
-                std::vector<char> pinned;
-                if (!run.isotropicFeatureEdges.empty()) {
-                    const double meanLength = featureEdgeLength(run.isotropicFeatureEdges, vertices)
-                        / run.isotropicFeatureEdges.size();
-                    pinned = pointsOnFeatureEdges(run.remeshedVertices, run.isotropicFeatureEdges, vertices,
-                        FeatureEdgeSet::Hard, QuadExtractor::kPinnedToleranceOfEdge * meanLength);
+                // Puts an extracted island onto its input: projection, relax
+                // and, for an enveloped island, back onto the input itself.
+                const auto finishOnInput = [&](std::vector<Vector3>* positions,
+                                               const std::vector<std::vector<size_t>>& quads,
+                                               std::vector<DiagnosticRecord>* records) {
+                    // The quad vertices on T's hard edges (guides, marks) before
+                    // projection moves them: relax() keeps them (TODO 5.7).
+                    std::vector<char> pinned;
+                    if (!run.isotropicFeatureEdges.empty()) {
+                        const double meanLength = featureEdgeLength(run.isotropicFeatureEdges, vertices)
+                            / run.isotropicFeatureEdges.size();
+                        pinned = pointsOnFeatureEdges(*positions, run.isotropicFeatureEdges, vertices,
+                            FeatureEdgeSet::Hard, QuadExtractor::kPinnedToleranceOfEdge * meanLength);
+                    }
+                    // The extractor leaves the output on T; this puts it on the
+                    // island's own input faces (TODO 2.8).
+                    const auto projectStart = std::chrono::high_resolution_clock::now();
+                    FeatureEdgeSet creases;
+                    const FeatureEdgeSet islandCreases = islandFeatureEdges(ctx);
+                    for (const auto& edge : islandCreases.edges)
+                        creases.edges.emplace_back(ctx.inputVertices[edge.first], ctx.inputVertices[edge.second]);
+                    creases.flags = islandCreases.flags;
+                    creases.normalize();
+                    SurfaceProjector projector(ctx.enveloped ? &ctx.envelopeVertices : &m_vertices,
+                        ctx.enveloped ? &ctx.envelopeTriangles : &trianglesIslands[islandIndex], &creases);
+                    const auto projection = projector.project(positions, quads);
+                    DiagnosticRecord record("surface_projection");
+                    record.set("vertices", (double)projection.vertices);
+                    record.set("projected", (double)projection.projected);
+                    record.set("kept_unmatched", (double)projection.keptUnmatched);
+                    record.set("kept_far", (double)projection.keptFar);
+                    record.set("kept_folding", (double)projection.keptFolding);
+                    record.set("mean_move_edges", projection.meanMove);
+                    record.set("max_move_edges", projection.maxMove);
+                    record.set("seconds", std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - projectStart).count());
+                    records->push_back(std::move(record));
+                    // Projection pulls vertices apart where T's chords were
+                    // uneven; even the quads out again along M, with the
+                    // vertices next to creases put onto them.
+                    const auto relaxStart = std::chrono::high_resolution_clock::now();
+                    const auto relaxation = projector.relax(positions, quads, surfaceRelaxIterations,
+                        &pinned);
+                    DiagnosticRecord relaxRecord("surface_relax");
+                    relaxRecord.set("snapped", (double)relaxation.snapped);
+                    relaxRecord.set("snap_folding", (double)relaxation.snapFolding);
+                    relaxRecord.set("free", (double)relaxation.free);
+                    relaxRecord.set("moves", (double)relaxation.moves);
+                    relaxRecord.set("kept_folding", (double)relaxation.keptFolding);
+                    relaxRecord.set("seconds", std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - relaxStart).count());
+                    records->push_back(std::move(relaxRecord));
+                    if (ctx.enveloped) {
+                        // The envelope lies a quarter quad outside the input;
+                        // where the input faces the same way within reach (not
+                        // the back of a single-sided sheet's slab, not a closed
+                        // gap) the vertices go back onto it.
+                        const SurfaceProjector input(&m_vertices, &trianglesIslands[islandIndex]);
+                        const auto onInput = input.project(positions, quads);
+                        DiagnosticRecord inputRecord("input_projection");
+                        inputRecord.set("projected", (double)onInput.projected);
+                        inputRecord.set("kept_unmatched", (double)onInput.keptUnmatched);
+                        inputRecord.set("kept_far", (double)onInput.keptFar);
+                        inputRecord.set("kept_folding", (double)onInput.keptFolding);
+                        records->push_back(std::move(inputRecord));
+                    }
+                };
+                std::vector<DiagnosticRecord> finishRecords;
+                finishOnInput(&run.remeshedVertices, run.remeshedQuads, &finishRecords);
+                if (extractor.hasCreaseSlideAlternative()) {
+                    // The extractor kept the finish with or without crease
+                    // slides by its folded and twisted faces on T; the
+                    // projection and relax can still untangle one and not the
+                    // other (spot_noisy 10k: one fold left with slides, none
+                    // without, TODO 2.35), so both go onto the input and the
+                    // one with fewer folded faces there is kept, then fewer
+                    // folded or twisted ones. When both have the same faces,
+                    // a third candidate keeps the slides except around the
+                    // faces they leave folded or twisted (one bad face cost
+                    // the corset's slides on a whole island). Ties keep the
+                    // most slides.
+                    std::vector<Vector3> otherVertices = extractor.alternativeVertices();
+                    const auto& otherQuads = extractor.alternativeQuads();
+                    std::vector<DiagnosticRecord> otherRecords;
+                    finishOnInput(&otherVertices, otherQuads, &otherRecords);
+                    const bool slid = 1 == extractor.creaseSlides();
+                    const auto badFaces = [](const std::vector<Vector3>& positions,
+                                              const std::vector<std::vector<size_t>>& quads) {
+                        return std::make_pair(QuadExtractor::foldedFaceCount(positions, quads),
+                            QuadExtractor::foldedOrTwistedFaceCount(positions, quads));
+                    };
+                    const auto bad = badFaces(run.remeshedVertices, run.remeshedQuads);
+                    const auto otherBad = badFaces(otherVertices, otherQuads);
+                    const auto& slidBad = slid ? bad : otherBad;
+                    const auto& plainBad = slid ? otherBad : bad;
+                    // 1 slides, 0 none, 2 slides except around bad faces
+                    int kept = plainBad < slidBad ? 0 : 1;
+                    std::vector<Vector3> merged;
+                    size_t reverted = 0;
+                    if (otherQuads == run.remeshedQuads && slidBad.second > 0) {
+                        merged = slid ? run.remeshedVertices : otherVertices;
+                        reverted = QuadExtractor::revertAtBadFaces(&merged,
+                            slid ? otherVertices : run.remeshedVertices, run.remeshedQuads, 3);
+                        const auto mergedBad = badFaces(merged, run.remeshedQuads);
+                        if (reverted > 0 && mergedBad < slidBad && !(plainBad < mergedBad))
+                            kept = 2;
+                    }
+                    if (2 == kept) {
+                        run.remeshedVertices = std::move(merged);
+                        if (!slid)
+                            finishRecords.swap(otherRecords);
+                    } else if ((1 == kept) != slid) {
+                        run.remeshedVertices = std::move(otherVertices);
+                        run.remeshedQuads = otherQuads;
+                        finishRecords.swap(otherRecords);
+                    }
+                    for (auto it = run.diagnostics.rbegin(); it != run.diagnostics.rend(); ++it) {
+                        if ("extractor" == it->stage) {
+                            it->set("crease_slides", 0 == kept ? 0.0 : 1.0);
+                            it->set("crease_slides_on_t", slid ? 1.0 : 0.0);
+                            it->set("crease_slides_reverted", 2 == kept ? (double)reverted : 0.0);
+                            break;
+                        }
+                    }
                 }
-                // The extractor leaves the output on T; this puts it on the
-                // island's own input faces (TODO 2.8).
-                const auto projectStart = std::chrono::high_resolution_clock::now();
-                FeatureEdgeSet creases;
-                const FeatureEdgeSet islandCreases = islandFeatureEdges(ctx);
-                for (const auto& edge : islandCreases.edges)
-                    creases.edges.emplace_back(ctx.inputVertices[edge.first], ctx.inputVertices[edge.second]);
-                creases.flags = islandCreases.flags;
-                creases.normalize();
-                SurfaceProjector projector(ctx.enveloped ? &ctx.envelopeVertices : &m_vertices,
-                    ctx.enveloped ? &ctx.envelopeTriangles : &trianglesIslands[islandIndex], &creases);
-                const auto projection = projector.project(&run.remeshedVertices, run.remeshedQuads);
-                DiagnosticRecord record("surface_projection");
-                record.set("vertices", (double)projection.vertices);
-                record.set("projected", (double)projection.projected);
-                record.set("kept_unmatched", (double)projection.keptUnmatched);
-                record.set("kept_far", (double)projection.keptFar);
-                record.set("kept_folding", (double)projection.keptFolding);
-                record.set("mean_move_edges", projection.meanMove);
-                record.set("max_move_edges", projection.maxMove);
-                record.set("seconds", std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - projectStart).count());
-                run.diagnostics.push_back(std::move(record));
-                // Projection pulls vertices apart where T's chords were
-                // uneven; even the quads out again along M, with the
-                // vertices next to creases put onto them.
-                const auto relaxStart = std::chrono::high_resolution_clock::now();
-                const auto relaxation = projector.relax(&run.remeshedVertices, run.remeshedQuads, surfaceRelaxIterations,
-                    &pinned);
-                DiagnosticRecord relaxRecord("surface_relax");
-                relaxRecord.set("snapped", (double)relaxation.snapped);
-                relaxRecord.set("snap_folding", (double)relaxation.snapFolding);
-                relaxRecord.set("free", (double)relaxation.free);
-                relaxRecord.set("moves", (double)relaxation.moves);
-                relaxRecord.set("kept_folding", (double)relaxation.keptFolding);
-                relaxRecord.set("seconds", std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - relaxStart).count());
-                run.diagnostics.push_back(std::move(relaxRecord));
-                if (ctx.enveloped) {
-                    // The envelope lies a quarter quad outside the input;
-                    // where the input faces the same way within reach (not
-                    // the back of a single-sided sheet's slab, not a closed
-                    // gap) the vertices go back onto it.
-                    const SurfaceProjector input(&m_vertices, &trianglesIslands[islandIndex]);
-                    const auto onInput = input.project(&run.remeshedVertices, run.remeshedQuads);
-                    DiagnosticRecord inputRecord("input_projection");
-                    inputRecord.set("projected", (double)onInput.projected);
-                    inputRecord.set("kept_unmatched", (double)onInput.keptUnmatched);
-                    inputRecord.set("kept_far", (double)onInput.keptFar);
-                    inputRecord.set("kept_folding", (double)onInput.keptFolding);
-                    run.diagnostics.push_back(std::move(inputRecord));
-                }
+                for (auto& record : finishRecords)
+                    run.diagnostics.push_back(std::move(record));
             }
         }
         updateProgress(islandIndex, 1.0f);
