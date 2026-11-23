@@ -7,8 +7,8 @@ Changes since 0.2.1. Results differ from 0.2.1 on hard-surface parts, cones, per
 lace and guided runs. Interface 1.11 -> 1.16.
 
 Blender add-on
-- Guides: Draw Guide tool, Mark/Clear Guide, Clear Guides, overlay; guide counts in the result box (#161)
-- Preview Density from the core's sizing plan, ±20 % Change control (#164, interface 1.13)
+- Guides: Draw Guide tool, Mark/Clear Guide, Clear Guides, overlay; guide counts in the result box (#161); greyed on a result, Select Original (#200)
+- Preview Density from the core's sizing plan; follows Target Quads within ±20 % (#164, interface 1.13; Change bar removed in #200)
 - Next Target Quads hint with Set N after lost parts (#159, interface 1.12)
 - Prepared input cached between runs (`input-cache`, 4 newest, 1.5 GB cap) (#194, interface 1.16)
 - Panel notes: run time after 30 s, no-progress warning, how to clear imported Sharp marks (#169, #171)
