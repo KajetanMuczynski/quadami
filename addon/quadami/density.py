@@ -35,9 +35,9 @@ import numpy as np
 PLAN_SETTINGS = ("adaptivity", "sharp_edge_degrees", "resolution", "anisotropy", "edge_scaling",
                  "smooth_normal_degrees", "follow_marks")
 
-# The preview's range around the count it was planned at, in percent:
-# Change goes from -BAND to +BAND.  +-20 % quads moves the quad edge by -9 to
-# +12 %; a region of the plan is about 4 % off the run there (about 3 % at
+# The preview's range around the count it was planned at, in percent: the
+# overlay follows Target Quads from -BAND to +BAND.  +-20 % quads moves the
+# quad edge by -9 to +12 %; a region of the plan is about 4 % off the run there (about 3 % at
 # the planned count, close to the 2-5 % two runs of the same mesh differ by),
 # so the difference shows.  Farther out the rescaled plan drifts from a
 # fresh one (about 6 % at 2x), so the panel asks for a new preview
@@ -50,20 +50,9 @@ BAND = 20.0
 PUSH_EDGES = 0.25
 
 
-# The Change bar's limits in percent.
-CHANGE_MIN = -BAND
-CHANGE_MAX = BAND
-
-
 def in_band(planned, quads):
     """Whether Target Quads `quads` lies within the preview's band around `planned`."""
-    return planned * (1.0 + CHANGE_MIN / 100.0) - 0.5 <= quads <= planned * (1.0 + CHANGE_MAX / 100.0) + 0.5
-
-
-def change_quads(planned, change):
-    """Target Quads for a Change of `change` percent from the planned count."""
-    change = max(CHANGE_MIN, min(CHANGE_MAX, change))
-    return max(1, int(round(planned * (1.0 + change / 100.0))))
+    return planned * (1.0 - BAND / 100.0) - 0.5 <= quads <= planned * (1.0 + BAND / 100.0) + 0.5
 
 
 def settings_key(settings):

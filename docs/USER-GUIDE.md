@@ -243,7 +243,10 @@ A guide is a line you draw on the model; the quads keep a row of edges along it.
 limb, an eye, a belt), it is meant to come out as an edge loop that Alt+click selects whole, instead of a loop that
 spirals over the model.
 
-1. Select the model and stay in **Object Mode** (Tab toggles; Draw Guide does not work in Sculpt or Edit Mode).
+1. Select the original model and stay in **Object Mode** (Tab toggles; Draw Guide does not work in Sculpt or Edit
+   Mode). Guides go on the original, not on a result: Remesh on a result remeshes its original and reads the
+   guides from there. With a result selected, the Guides section says so and **Select Original** shows and
+   selects the original (and hides the result).
 2. In the Quadami panel, under **Guides**, click **Draw Guide**.
 3. Click points on the surface, or hold the left mouse button and drag. The points are joined along the model's
    own edges (blue line). Middle mouse, the scroll wheel, Alt + left drag and the navigation circles at the top right
@@ -277,8 +280,9 @@ long as a Remesh at the same Target Quads. Then:
 - Orange parts get smaller quads, blue parts larger ones; the panel says about how many quads are planned
   and the quad edge length in scene units. **Checker** draws squares about one quad across, so you can see
   whether a detail (an ear, a finger, a ridge) gets one quad or several.
-- Drag **Change** (±20 %) or type a new Target Quads within that range: the colours and squares follow
-  at once, nothing is recomputed. Change sets Target Quads, so Remesh then uses the count you settled on.
+- Type or drag a new **Target Quads** within ±20 % of the planned count (the panel names the range): the
+  colours and squares follow at once, nothing is recomputed. The preview never changes Target Quads
+  itself, so Remesh uses exactly the count the panel shows.
 - It is a plan, not the result, but a close one: a region's quads usually come out within about 5 % of
   the shown size, about as close as two Remesh runs of the same model are to each other. Small flat parts
   (leaves, flower cards) and flat CAD faces can be 10-30 % off, and at low Target Quads two runs of a
