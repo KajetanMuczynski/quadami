@@ -19,6 +19,7 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *  SOFTWARE.
  */
+#include <cstdlib>
 #include <algorithm>
 #include <string>
 #include <iostream>
@@ -618,6 +619,22 @@ void IsotropicRemesher::relaxSmoothHardChains()
             Vector3 move = (item.first->position + item.second->position) * 0.5 - item.vertex->position;
             move = move - item.vertex->_normal * Vector3::dotProduct(move, item.vertex->_normal);
             targets[i] = item.vertex->position + move * factor;
+        }
+        for (size_t i = 0; i < chain.size(); ++i) {
+            const Vector3 &target = targets[i];
+            if (target.containsNan() || target.containsInf())
+                continue;
+            m_halfedgeMesh->moveVertexIfValid(chain[i].vertex, target);
+        }
+    }
+    // EXPERIMENT (guide closure): plain Laplacian fairing rounds, AR_CHAIN_FAIR.
+    static const int fairRounds = std::getenv("AR_CHAIN_FAIR") ? std::atoi(std::getenv("AR_CHAIN_FAIR")) : 0;
+    for (int round = 0; round < fairRounds; ++round) {
+        for (size_t i = 0; i < chain.size(); ++i) {
+            const ChainVertex &item = chain[i];
+            Vector3 move = (item.first->position + item.second->position) * 0.5 - item.vertex->position;
+            move = move - item.vertex->_normal * Vector3::dotProduct(move, item.vertex->_normal);
+            targets[i] = item.vertex->position + move * 0.5;
         }
         for (size_t i = 0; i < chain.size(); ++i) {
             const Vector3 &target = targets[i];

@@ -28,6 +28,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <queue>
+#include <limits>
+#include <cstdlib>
+#include <functional>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
@@ -198,6 +202,50 @@ bool FrameField::create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdge
         }
     }
 
+    // EXPERIMENT (guide closure): no curvature guidance within AR_GUIDE_FREE T edges of a mark.
+    size_t markFreeFaces = 0;
+    {
+        static const double guideFree = std::getenv("AR_GUIDE_FREE") ? std::atof(std::getenv("AR_GUIDE_FREE")) : 0.0;
+        if (guideFree > 0.0) {
+            const std::vector<char> markCorners = featureCornerFlags(mesh, sharpEdges, FeatureEdgeSet::Hard);
+            const double radius = guideFree * mesh.averageEdgeLength();
+            std::vector<double> dist(mesh.vertexCount(), std::numeric_limits<double>::infinity());
+            using Item = std::pair<double, size_t>;
+            std::priority_queue<Item, std::vector<Item>, std::greater<Item>> queue;
+            for (size_t c = 0; c < mesh.cornerCount(); ++c)
+                if (markCorners[c])
+                    for (const size_t v : { mesh.cornerVertex(c), mesh.cornerVertex(mesh.nextCorner(c)) })
+                        if (dist[v] > 0.0) {
+                            dist[v] = 0.0;
+                            queue.push({ 0.0, v });
+                        }
+            while (!queue.empty()) {
+                const Item item = queue.top();
+                queue.pop();
+                if (item.first > dist[item.second] || item.first > radius)
+                    continue;
+                for (const size_t c : mesh.cornersAroundVertex(item.second)) {
+                    const size_t u = mesh.cornerVertex(mesh.nextCorner(c));
+                    const double d = item.first + (mesh.position(u) - mesh.position(item.second)).length();
+                    if (d < dist[u]) {
+                        dist[u] = d;
+                        queue.push({ d, u });
+                    }
+                }
+            }
+            for (size_t f = 0; f < faces; ++f) {
+                if (locked[f] || certainty[f] <= 0.0)
+                    continue;
+                for (size_t c = 3 * f; c < 3 * f + 3; ++c)
+                    if (dist[mesh.cornerVertex(c)] < radius) {
+                        certainty[f] = 0.0;
+                        ++markFreeFaces;
+                        break;
+                    }
+            }
+        }
+    }
+
     const auto normalizePeriodic = [&]() {
         tbb::parallel_for(tbb::blocked_range<size_t>(0, faces), [&](const tbb::blocked_range<size_t>& range) {
             for (size_t faceIndex = range.begin(); faceIndex != range.end(); ++faceIndex) {
@@ -244,6 +292,7 @@ bool FrameField::create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdge
     for (size_t f = 0; f < faces; ++f)
         if (locked[f])
             ++lockedFaces;
+    record.set("mark_free_faces", (double)markFreeFaces);
     record.set("faces", (double)faces).set("locked_faces", (double)lockedFaces).set("tip_unguided_faces", (double)unguidedFaces);
     // Faces whose solved periodic vector was (near) zero, so the
     // normalisation had to leave it as is: an undefined direction.

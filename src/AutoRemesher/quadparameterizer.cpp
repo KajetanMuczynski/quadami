@@ -29,6 +29,9 @@
 #include <AutoRemesher/Untangler>
 
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <string>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -1659,6 +1662,45 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     result->diagnostics.push_back(std::move(curlDiagnostics));
     const std::vector<char> seam = computeSeam(mesh, rotation);
 
+    if (const char* dumpPrefix = std::getenv("AR_DUMP_T")) { // EXPERIMENT ONLY (guide closure)
+        static std::atomic<int> dumpCounter { 0 };
+        size_t hardCount = 0;
+        for (size_t c = 0; c < corners; ++c)
+            hardCount += hardCorners[c] ? 1 : 0;
+        if (hardCount > 0) {
+            FILE* fp = std::fopen((std::string(dumpPrefix) + "." + std::to_string(dumpCounter++) + ".txt").c_str(), "w");
+            if (fp) {
+                std::fprintf(fp, "scale %.9g\n", scale);
+                for (size_t v = 0; v < mesh.vertexCount(); ++v) {
+                    const Vector3 p = mesh.position(v);
+                    std::fprintf(fp, "v %.9g %.9g %.9g\n", p.x(), p.y(), p.z());
+                }
+                for (size_t f = 0; f < mesh.faceCount(); ++f)
+                    std::fprintf(fp, "f %zu %zu %zu\n", mesh.cornerVertex(3 * f), mesh.cornerVertex(3 * f + 1), mesh.cornerVertex(3 * f + 2));
+                for (size_t c = 0; c < corners; ++c) {
+                    if (!hardCorners[c])
+                        continue;
+                    const size_t o = mesh.oppositeCorner(c);
+                    if (o != SurfaceMesh::npos && o < c)
+                        continue;
+                    std::fprintf(fp, "h %zu %zu %d %d\n", mesh.cornerVertex(c), mesh.cornerVertex(mesh.nextCorner(c)),
+                        (int)cornerConstraints[c], o == SurfaceMesh::npos ? -1 : (int)cornerConstraints[o]);
+                }
+                for (size_t v = 0; v < mesh.vertexCount(); ++v) {
+                    int sum = 0;
+                    bool closed = true;
+                    for (const size_t c : mesh.cornersAroundVertex(v)) {
+                        if (mesh.oppositeCorner(c) == SurfaceMesh::npos)
+                            closed = false;
+                        sum += (rotation[c] % 4 + 4) % 4;
+                    }
+                    if (closed && sum % 4 != 0)
+                        std::fprintf(fp, "c %zu %d\n", v, sum % 4);
+                }
+                std::fclose(fp);
+            }
+        }
+    }
     const CoverContext ctx { mesh, result->field, normals, rotation, seam, cornerConstraints,
         activeScalingU, activeScalingV, faceScaling, scale, planFaceEdges };
 
