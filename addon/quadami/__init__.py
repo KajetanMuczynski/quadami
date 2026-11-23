@@ -24,6 +24,7 @@ The add-on's name and ids come from names.py.
 
 import collections
 import json
+import math
 import os
 import tempfile
 
@@ -60,8 +61,6 @@ _last_report = None
 # The running density plan (Preview Density), and whether the panel's Cancel asked to stop it.
 _plan_job = None
 _cancel_plan_from_panel = False
-# Set while one of Target Quads and the preview's Change sets the other.
-_syncing = False
 # The last run of this session, for Copy Report: the panel's settings, the
 # input's triangle count, the worker's last lines and the result's name.
 _last_run = None
@@ -125,33 +124,10 @@ def _overlay_state():
 
 
 def _target_changed(settings, context):
-    # Typing a count inside the preview's range moves the Change bar with it.
-    global _syncing
-    preview = density.current()
-    if _syncing or preview is None:
-        return
-    _syncing = True
-    try:
-        change = 100.0 * (settings.target_quads / preview.plan.quads - 1.0)
-        if density.CHANGE_MIN <= change <= density.CHANGE_MAX:
-            settings.preview_change = change
-    finally:
-        _syncing = False
-    _redraw(context)
-
-
-def _change_changed(settings, context):
-    # The Change bar sets Target Quads, so the next Remesh uses what the overlay shows.
-    global _syncing
-    preview = density.current()
-    if _syncing or preview is None:
-        return
-    _syncing = True
-    try:
-        settings.target_quads = density.change_quads(preview.plan.quads, settings.preview_change)
-    finally:
-        _syncing = False
-    _redraw(context)
+    # The density preview follows Target Quads inside its range; it never
+    # sets Target Quads itself.
+    if density.current() is not None:
+        _redraw(context)
 
 
 class RemeshPreferences(bpy.types.AddonPreferences):
@@ -294,12 +270,7 @@ class RemeshSettings(bpy.types.PropertyGroup):
                     "faces come out distorted). For a fresh map, keep the seams (above) and unwrap "
                     "the result again instead")
 
-    # Not remesh parameters: the density preview's controls.
-    preview_change: FloatProperty(
-        name="Change", subtype="PERCENTAGE", default=0.0, precision=0,
-        min=density.CHANGE_MIN, max=density.CHANGE_MAX, update=_change_changed,
-        description="Try a nearby Target Quads on the preview: drag to see the quad size at more or "
-                    "fewer quads. Sets Target Quads. Outside this range, preview again")
+    # Not a remesh parameter: the density preview's checker.
     preview_cells: BoolProperty(
         name="Checker", default=True, update=lambda self, context: _redraw(context),
         description="Draw a checker whose squares are about one planned quad across")
@@ -876,7 +847,6 @@ class OBJECT_OT_density_preview(bpy.types.Operator):
             context.workspace.status_text_set("%s: planning %d%%   (Esc to cancel)" % (NAME, round(_plan_job.fraction * 100)))
             _redraw(context)
             return {"PASS_THROUGH"}
-        global _syncing
         outcome = _plan_job.outcome()
         self._stop(context)
         if not outcome.ok:
@@ -886,11 +856,6 @@ class OBJECT_OT_density_preview(bpy.types.Operator):
             return {"CANCELLED"}
         density.show(density.Preview(self._object_name, self._key, outcome.plan, self._positions,
                                      self._triangles, outcome.report))
-        _syncing = True
-        try:
-            _settings(context).preview_change = 0.0
-        finally:
-            _syncing = False
         return {"FINISHED"}
 
     def _stop(self, context):
@@ -949,7 +914,6 @@ def _draw_density(layout, context, settings, room):
                                                   room.measure)):
             column.label(text=line, icon="INFO" if i == 0 else "BLANK1")
         return
-    column.prop(settings, "preview_change", slider=True)
     quads = settings.target_quads
     low, middle, high = preview.edge_range(quads)
     lines = ["About %s quads planned (%s asked)" % (format(round(preview.plan.planned_quads(quads)), ","),
@@ -957,7 +921,10 @@ def _draw_density(layout, context, settings, room):
              "Quad edge %s to %s, median %s" % (_length_text(context, preview, low),
                                                 _length_text(context, preview, high),
                                                 _length_text(context, preview, middle)),
-             "Orange: smaller quads, blue: larger; planned, not the result"]
+             "Orange: smaller quads, blue: larger; planned, not the result",
+             "Change Target Quads to see %s to %s quads without planning again"
+             % (format(math.ceil(preview.plan.quads * (1.0 - density.BAND / 100.0)), ","),
+                format(math.floor(preview.plan.quads * (1.0 + density.BAND / 100.0)), ","))]
     # The core's small-part floor (TODO G13): many tiny loose parts each get a
     # minimum that Target Quads does not lower; the core warns above the same share.
     parts, extra = preview.plan.floor_parts(quads)
@@ -1225,6 +1192,7 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     guide_tool.register()
+    guide_tool.source_of = _source
     density.draw_state = _overlay_state
     bpy.app.handlers.depsgraph_update_post.append(density.geometry_changed)
     bpy.app.handlers.load_post.append(_file_loaded)
@@ -1249,5 +1217,6 @@ def unregister():
     delattr(bpy.types.Object, SOURCE_PROPERTY)
     delattr(bpy.types.Scene, ID)
     guide_tool.unregister()
+    guide_tool.source_of = None
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

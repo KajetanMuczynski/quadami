@@ -271,7 +271,7 @@ try:
     source.scale = (1.0, 1.0, 1.0)
     bpy.context.view_layer.update()
 
-    # Density preview: the source planned, shown, and Change sets Target Quads
+    # Density preview: the source planned and shown; it follows Target Quads
     # within the plan's range; another setting or a mesh edit takes it down.
     positions, triangles, smooth, marked, flooded, _guide_edges = addon._mesh_arrays(bpy.context, source, settings.follow_marks)
     planned = worker.remesh(executable, positions, triangles, settings.parameters(), marked_edges=marked, plan=True)
@@ -279,13 +279,13 @@ try:
     assert planned.plan.quads == settings.target_quads == 2000
     density_module.show(density_module.Preview(source.name, density_module.settings_key(settings), planned.plan,
                                                positions, triangles, planned.report))
-    settings.preview_change = 10.0
-    assert settings.target_quads == 2200, settings.target_quads
+    assert settings.target_quads == 2000, settings.target_quads  # the preview never sets it
     labels = panel_labels()
-    assert "quads planned" in labels and "Quad edge" in labels, labels
+    assert "quads planned" in labels and "Quad edge" in labels and "1,600 to 2,400" in labels, labels
+    settings.target_quads = 2200
     assert addon._overlay_state() == (2200, True)
     settings.target_quads = 1800
-    assert abs(settings.preview_change + 10.0) < 1e-6, settings.preview_change
+    assert addon._overlay_state() == (1800, True)
     settings.target_quads = 4500
     assert addon._overlay_state() is None and "outside the preview" in panel_labels()
     settings.target_quads = 2000
@@ -366,6 +366,20 @@ try:
     assert bpy.ops.object.quadami_clear_guides.poll()
     assert bpy.ops.object.quadami_clear_guides() == {"FINISHED"}
     assert sphere.data.attributes.get(guide_tool.GUIDE) is None
+    # On a result, Remesh reads the original's guides: Draw Guide and Mark
+    # Guide refuse, and the panel offers to select the original instead.
+    result = sphere.copy()
+    result.data = sphere.data.copy()
+    bpy.context.collection.objects.link(result)
+    setattr(result, addon.SOURCE_PROPERTY, sphere)
+    sphere.hide_set(True)
+    bpy.context.view_layer.objects.active = result
+    assert not guide_tool.OBJECT_OT_quadami_draw_guide.poll(bpy.context)
+    labels = panel_labels()
+    assert "Draw guides on the original" in labels and sphere.name in labels, labels
+    assert bpy.ops.object.quadami_select_source() == {"FINISHED"}
+    assert bpy.context.view_layer.objects.active == sphere and not sphere.hide_get() and result.hide_get()
+    assert guide_tool.OBJECT_OT_quadami_draw_guide.poll(bpy.context)
     print("blender_smoke: OK, Blender %s" % bpy.app.version_string)
 finally:
     if installed:

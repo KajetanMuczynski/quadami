@@ -725,12 +725,6 @@ class PlanTest(unittest.TestCase):
             np.testing.assert_allclose(density.shader_edges(a, share, floor, quads), plan.edge_at(quads),
                                        rtol=1e-5)
 
-    def test_change_limits(self):
-        self.assertEqual(density.change_quads(5000, 0.0), 5000)
-        self.assertEqual(density.change_quads(5000, density.CHANGE_MAX), 6000)
-        self.assertEqual(density.change_quads(5000, density.CHANGE_MIN), 4000)
-        self.assertEqual(density.change_quads(5000, 1000.0), 6000)
-
     def test_band(self):
         self.assertTrue(density.in_band(5000, 4000))
         self.assertTrue(density.in_band(5000, 6000))
