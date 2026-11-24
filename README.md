@@ -8,7 +8,7 @@ It is made for people who sculpt or model in Blender and need clean, even topolo
 (to animate, UV-unwrap, keep sculpting at a lower resolution, or hand over). You do not need to be
 a programmer to use it: the [user guide](docs/USER-GUIDE.md) is written for Blender beginners.
 
-> **Status: 0.2.1, a release with known limits.** It works on the sculpts we test with, but
+> **Status: 0.3.0, a release with known limits.** It works on the sculpts we test with, but
 > expect rough edges. Read [Limits and warnings](#limits-and-warnings) before you rely
 > on it, and send the panel's build line with every bug report.
 

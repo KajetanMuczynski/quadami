@@ -59,7 +59,7 @@ Copy into the release PR's description and tick each line there.
    - [ ] master CI green on the commit to tag (Actions > ci, branch master).
    - [ ] TARGETS release check ([TARGETS.md](TARGETS.md) §2.5, §5 "Releases") on all three
          platforms: **Actions > release-check > Run workflow**, `ref` = the commit to tag, `baseline`
-         = the previous release's tag (`v0.2.0` for 0.2.1, the default; `v0.1.0` for 0.2.0; 0.1.0 used `877891d`, see below). Each
+         = the previous release's tag (`v0.2.1` for 0.3.0, the default; `v0.2.0` for 0.2.1; `v0.1.0` for 0.2.0; 0.1.0 used `877891d`, see below). Each
          platform builds both, runs corpus and closed sets with 5 replicates (about an hour; macOS
          longer) and `tools/bench/release_gate.py` decides in the job **verdict**, pooled over the platforms
          (TARGETS §5 "Releases"): per measure and set, a sign test over the cases that got worse or
@@ -75,7 +75,9 @@ Copy into the release PR's description and tick each line there.
          data, sanitizer, sharp-edge tolerance, hang and crash guards, opt-in smoothing, the
          thin-part wording and lower memory; cone tips and crease preservation moved to 0.3. For 0.2.1
          (Kajetan, 2026-10-31): the fallback tracer cap (#153), no copying of flooded marks (#154) and
-         Copy Report (#160); 2026-11-03: the twisted-quad count (#167).
+         Copy Report (#160); 2026-11-03: the twisted-quad count (#167). For 0.3.0 (Kajetan,
+         2026-11-16, docs/TODO.md "Release 0.3 scope"): fallback cap (2.30), perforated-plate fix
+         (2.34), perf items 8.9-8.12; closed head loops do not gate it.
 2. **Real-machine checks** (CI runs Blender without a window): install the master zip from CI on
    Kajetan's Linux laptop and remesh a sculpt; Windows and a Mac when one is at hand (unsigned
    program: SmartScreen and Gatekeeper behaviour are untested, write down what happened).
