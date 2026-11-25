@@ -1,3 +1,6 @@
+#include <cstdio>
+#include <cstdlib>
+#include <cmath>
 /*
  *  Copyright (c) 2020-2021 Jeremy HU <jeremy-at-dust3d dot org>. All rights reserved. 
  *
@@ -625,6 +628,59 @@ void IsotropicRemesher::relaxSmoothHardChains()
                 continue;
             m_halfedgeMesh->moveVertexIfValid(chain[i].vertex, target);
         }
+    }
+    // exp/loop-c3: AR_KINK_ROUNDS=n extra Laplacian moves only at chain vertices turning more than 40 degrees.
+    if (const char *kinkEnv = std::getenv("AR_KINK_ROUNDS")) {
+        const int rounds = std::atoi(kinkEnv);
+        const auto turn = [](const ChainVertex &item) {
+            Vector3 a = item.vertex->position - item.first->position, b = item.second->position - item.vertex->position;
+            const double la = a.length(), lb = b.length();
+            if (la <= 0 || lb <= 0)
+                return 0.0;
+            return std::acos(std::max(-1.0, std::min(1.0, Vector3::dotProduct(a, b) / (la * lb)))) * 180.0 / M_PI;
+        };
+        size_t moved = 0, refused = 0;
+        if (std::getenv("AR_KINK_ALL")) {
+            // also chain vertices the smooth test rejects (sharp dihedral), as long as exactly two hard edges meet
+            chain.clear();
+            for (IsotropicHalfedgeMesh::Vertex *vertex = m_halfedgeMesh->moveToNextVertex(nullptr);
+                    nullptr != vertex; vertex = m_halfedgeMesh->moveToNextVertex(vertex)) {
+                if (vertex->featureCorner || vertex->pinned)
+                    continue;
+                std::vector<IsotropicHalfedgeMesh::Vertex *> hardNeighbours;
+                bool ok = true;
+                m_halfedgeMesh->iterateVertexHalfedges(vertex, [&](IsotropicHalfedgeMesh::Halfedge *halfedge) {
+                    if (!halfedge->feature)
+                        return true;
+                    if (!halfedge->hard() || nullptr == halfedge->oppositeHalfedge) {
+                        ok = false;
+                        return false;
+                    }
+                    hardNeighbours.push_back(halfedge->nextHalfedge->startVertex);
+                    return true;
+                });
+                if (ok && 2 == hardNeighbours.size())
+                    chain.push_back({vertex, hardNeighbours[0], hardNeighbours[1]});
+            }
+        }
+        for (int round = 0; round < rounds; ++round) {
+            for (size_t i = 0; i < chain.size(); ++i) {
+                const ChainVertex &item = chain[i];
+                if (turn(item) <= 40.0)
+                    continue;
+                Vector3 move = (item.first->position + item.second->position) * 0.5 - item.vertex->position;
+                move = move - item.vertex->_normal * Vector3::dotProduct(move, item.vertex->_normal);
+                if (m_halfedgeMesh->moveVertexIfValid(item.vertex, item.vertex->position + move * 0.5))
+                    ++moved;
+                else
+                    ++refused;
+            }
+        }
+        size_t left = 0;
+        for (const auto &item : chain)
+            if (turn(item) > 45.0)
+                ++left;
+        std::fprintf(stderr, "kink pass: chain %zu moved %zu refused %zu left_over45 %zu\n", chain.size(), moved, refused, left);
     }
 }
 

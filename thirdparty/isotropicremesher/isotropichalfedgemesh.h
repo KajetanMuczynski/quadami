@@ -229,7 +229,9 @@ private:
         Face *removedFaceTwo);
     void collectVerticesAroundVertex(Vertex *vertex,
         std::set<Vertex *> *vertices);
+public:
     void iterateVertexHalfedges(Vertex *vertex, std::function<bool(Halfedge *halfedge)> handler);
+private:
 };
 
 #endif

@@ -2094,7 +2094,75 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     // exp/loop-c3 avenue 1: AR_FIX_SWITCH="v u w sign;..." re-rounds one non-hard fan edge of chain vertex v on
     // the side from edge v->w round to v->u (the side whose map angle is one quarter short), by sign quarters.
     // The edge with the largest field residual is picked; the cone this puts on v is then pushed off the chain.
-    if (const char* fixText = std::getenv("AR_FIX_SWITCH")) {
+    // exp/loop-c3: AR_AUTO_SWITCH=1 builds the AR_FIX_SWITCH spec itself: every vertex with exactly two hard edges
+    // turning more than 45 degrees gets "v a b +1", the fan walked ccw from v->a to v->b being its long side.
+    std::string autoSpec;
+    if (std::getenv("AR_AUTO_SWITCH")) {
+        static int autoCall = 0;
+        if (0 == autoCall++) {
+            std::vector<std::vector<size_t>> hardOut(mesh.vertexCount());
+            for (size_t c = 0; c < mesh.cornerCount(); ++c)
+                if (hardCorners[c])
+                    hardOut[mesh.cornerVertex(c)].push_back(mesh.cornerVertex(mesh.nextCorner(c)));
+            const auto sweep = [&](size_t v, size_t from, size_t to) {
+                double sum = 0.0;
+                size_t c = SurfaceMesh::npos;
+                for (const size_t k : mesh.cornersAroundVertex(v))
+                    if (mesh.cornerVertex(mesh.nextCorner(k)) == from)
+                        c = k;
+                for (size_t step = 0; c != SurfaceMesh::npos && step < 64; ++step) {
+                    const Vector3 e1 = mesh.position(mesh.cornerVertex(mesh.nextCorner(c))) - mesh.position(v);
+                    const Vector3 e2 = mesh.position(mesh.cornerVertex(mesh.previousCorner(c))) - mesh.position(v);
+                    sum += std::acos(std::max(-1.0, std::min(1.0, Vector3::dotProduct(e1, e2) / std::max(1e-30, e1.length() * e2.length()))));
+                    const size_t pc = mesh.previousCorner(c);
+                    if (mesh.cornerVertex(pc) == to)
+                        return sum;
+                    const size_t oc = mesh.oppositeCorner(pc);
+                    if (oc == SurfaceMesh::npos || mesh.cornerVertex(oc) != v)
+                        return -1.0;
+                    c = oc;
+                }
+                return -1.0;
+            };
+            size_t kinks = 0;
+            std::vector<char> onGuide(mesh.vertexCount(), std::getenv("AR_GUIDE_VERTS") ? 0 : 1);
+            if (const char* gv = std::getenv("AR_GUIDE_VERTS"))
+                if (FILE* file = std::fopen(gv, "r")) {
+                    unsigned long x;
+                    while (1 == std::fscanf(file, "%lu", &x))
+                        if (x < onGuide.size())
+                            onGuide[x] = 1;
+                    std::fclose(file);
+                }
+            for (size_t v = 0; v < mesh.vertexCount(); ++v) {
+                if (!onGuide[v])
+                    continue;
+                // hard edges are stored on both sides; dedupe neighbours
+                std::vector<size_t> nb;
+                for (const size_t x : hardOut[v])
+                    if (std::find(nb.begin(), nb.end(), x) == nb.end())
+                        nb.push_back(x);
+                if (nb.size() != 2)
+                    continue;
+                const Vector3 a = mesh.position(nb[0]) - mesh.position(v), b = mesh.position(nb[1]) - mesh.position(v);
+                const double inner = std::acos(std::max(-1.0, std::min(1.0, Vector3::dotProduct(a, b) / std::max(1e-30, a.length() * b.length()))));
+                const double turnDeg = 180.0 - inner * 180.0 / M_PI;
+                if (turnDeg <= 45.0)
+                    continue;
+                const double s01 = sweep(v, nb[0], nb[1]), s10 = sweep(v, nb[1], nb[0]);
+                if (s01 < 0 || s10 < 0)
+                    continue;
+                const size_t from = s01 > s10 ? nb[0] : nb[1], to = s01 > s10 ? nb[1] : nb[0];
+                // AR_FIX_SWITCH walks ccw from v->w to v->u: w = from, u = to
+                autoSpec += std::to_string(v) + " " + std::to_string(to) + " " + std::to_string(from) + " "
+                    + (std::getenv("AR_AUTO_SIGN") ? std::getenv("AR_AUTO_SIGN") : "1") + ";";
+                ++kinks;
+            }
+            std::cerr << "AUTO_SWITCH kinks " << kinks << " spec " << autoSpec << std::endl;
+        }
+    }
+    const char* fixText = autoSpec.empty() ? std::getenv("AR_FIX_SWITCH") : autoSpec.c_str();
+    if (fixText) {
         const double quarter = .5 * M_PI;
         const auto edgeAngle = [&](size_t face, const Vector3& edge) {
             const Vector3 u = result->field[face], v = Vector3::crossProduct(normals[face], u);
