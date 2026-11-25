@@ -1,3 +1,4 @@
+#include <cstdio>
 /*
  *  Copyright (c) 2026 Jeremy HU <jeremy-at-dust3d dot org>. All rights reserved.
  *  Modifications Copyright (C) 2026 Quadami contributors, GPL-3.0-or-later (see LICENSE).
@@ -1264,6 +1265,37 @@ namespace {
                 s.addEnergy(2 * n + 1, 1, 2 * c + 1, -1, target.y(), weight);
             }
         }
+        // Research (exp/loop-c3): AR_C3_ROWS=file adds stiff rows "rhs n (index coef)*"
+        // (cone transverse offset from a guide = integer >= 1), weight AR_C3_WEIGHT x mean face weight.
+        if (const char* rowsEnv = std::getenv("AR_C3_ROWS")) {
+            static int rowsCall = 0;
+            if (0 == rowsCall++) {
+                double meanWeight = 0.0;
+                for (size_t f = 0; f < mesh.faceCount(); ++f)
+                    meanWeight += frames[f].su * frames[f].sv;
+                meanWeight /= std::max<size_t>(1, mesh.faceCount());
+                const double factor = std::getenv("AR_C3_WEIGHT") ? std::atof(std::getenv("AR_C3_WEIGHT")) : 1000.0;
+                size_t added = 0;
+                if (FILE* file = std::fopen(rowsEnv, "r")) {
+                    double rhs;
+                    int count;
+                    while (2 == std::fscanf(file, "%lf %d", &rhs, &count)) {
+                        std::vector<std::pair<size_t, double>> row;
+                        for (int i = 0; i < count; ++i) {
+                            unsigned long index;
+                            double coef;
+                            if (2 != std::fscanf(file, "%lu %lf", &index, &coef))
+                                break;
+                            row.push_back({ (size_t)index, coef });
+                        }
+                        s.addEnergy(row, rhs, factor * meanWeight);
+                        ++added;
+                    }
+                    std::fclose(file);
+                }
+                std::fprintf(stderr, "c3 rows added: %zu\n", added);
+            }
+        }
         s.addConstraint(0, 1);
         s.addConstraint(1, 1);
         size_t hardCoordinateCount = 0;
@@ -1407,6 +1439,37 @@ namespace {
                 return false;
             if (0 == iteration) {
                 result->set("continuous_rescale", matchCellCount(mesh, expectedCells, &s));
+                // Research (exp/loop-c3): AR_DUMP_CONT=prefix writes mesh, rotations and the
+                // continuous cover to prefix.<call>.cont.bin (format of exp/tmesh-quant).
+                if (const char* dumpEnv = std::getenv("AR_DUMP_CONT")) {
+                    static int dumpCall = 0;
+                    char name[4096];
+                    std::snprintf(name, sizeof(name), "%s.%d.cont.bin", dumpEnv, dumpCall++);
+                    if (const char* untangleEnv = std::getenv("AR_DUMP_UNTANGLE")) {
+                        DiagnosticRecord scratch("continuous_untangle");
+                        untangleCover(mesh, frames, (size_t)std::atoi(untangleEnv), &s, &scratch);
+                        for (const auto& item : scratch.values)
+                            std::fprintf(stderr, "continuous untangle: %s %g\n", item.first.c_str(), item.second);
+                    }
+                    if (FILE* file = std::fopen(name, "wb")) {
+                        const uint64_t header[4] = { (uint64_t)mesh.vertexCount(), (uint64_t)mesh.faceCount(), (uint64_t)variables, (uint64_t)uvVariables };
+                        std::fwrite(header, sizeof(header), 1, file);
+                        for (size_t v = 0; v < mesh.vertexCount(); ++v) {
+                            const double p[3] = { mesh.position(v).x(), mesh.position(v).y(), mesh.position(v).z() };
+                            std::fwrite(p, sizeof(p), 1, file);
+                        }
+                        for (size_t c = 0; c < corners; ++c) {
+                            const int64_t row[3] = { (int64_t)mesh.cornerVertex(c),
+                                mesh.oppositeCorner(c) == SurfaceMesh::npos ? -1 : (int64_t)mesh.oppositeCorner(c), (int64_t)rotation[c] };
+                            std::fwrite(row, sizeof(row), 1, file);
+                        }
+                        for (size_t i = 0; i < variables; ++i) {
+                            const double x = s.value(i);
+                            std::fwrite(&x, sizeof(x), 1, file);
+                        }
+                        std::fclose(file);
+                    }
+                }
                 result->set("continuous_energy", s.energy());
                 appendSizeFidelity(result, "continuous", mesh, s, faceScaling, scale);
                 // Nothing is fixed in the first pass, so its solution is the
@@ -1440,6 +1503,16 @@ namespace {
         result->set("converged", s.converged() ? 1.0 : 0.0);
         result->set("integrality_residual", s.integralityResidual());
         result->set("rounded_energy", s.energy());
+        if (const char* dumpEnv = std::getenv("AR_DUMP_ROUND")) {
+            static int roundCall = 0;
+            char name[4096];
+            std::snprintf(name, sizeof(name), "%s.%d.round.txt", dumpEnv, roundCall++);
+            if (FILE* file = std::fopen(name, "w")) {
+                for (size_t i = 0; i < variables; ++i)
+                    std::fprintf(file, "%.17g\n", s.value(i));
+                std::fclose(file);
+            }
+        }
         result->set("constraint_residual", constraintResidual);
         result->set("violated_constraints", (double)violatedConstraints);
         {
@@ -1587,6 +1660,30 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     const size_t corners = mesh.cornerCount();
     const size_t uvVariables = 2 * corners;
     const std::vector<char> hardCorners = featureCornerFlags(mesh, hardEdges);
+    // Research (exp/loop-c3): AR_DENSE_FACES=file of face ids, AR_DENSE_FACTOR=edge factor there.
+    std::vector<double> denseScaling;
+    if (const char* denseEnv = std::getenv("AR_DENSE_FACES")) {
+        static int denseCall = 0;
+        if (0 == denseCall++) {
+            denseScaling.assign(mesh.faceCount(), 1.0);
+            if (faceScaling && faceScaling->size() == mesh.faceCount())
+                denseScaling = *faceScaling;
+            const double factor = std::getenv("AR_DENSE_FACTOR") ? std::atof(std::getenv("AR_DENSE_FACTOR")) : 0.5;
+            size_t count = 0;
+            if (FILE* file = std::fopen(denseEnv, "r")) {
+                unsigned long f;
+                double faceFactor;
+                while (2 == std::fscanf(file, "%lu %lf", &f, &faceFactor))
+                    if (f < denseScaling.size()) {
+                        denseScaling[f] *= faceFactor * factor;
+                        ++count;
+                    }
+                std::fclose(file);
+            }
+            std::fprintf(stderr, "dense faces: %zu\n", count);
+            faceScaling = &denseScaling;
+        }
+    }
     const double scale = std::max(1e-12, quadEdgeLength);
 
     std::vector<Vector3> normals;
