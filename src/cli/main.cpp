@@ -22,9 +22,14 @@
 #include "objfile.h"
 #include "stdincontrol.h"
 #include <AutoRemesher/Remesh>
+#include <array>
+#include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <locale>
+#include <sstream>
 #include <string>
 #include <vector>
 #ifdef _WIN32
@@ -83,6 +88,12 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "                              also count lost parts in the report at the quad\n"
                           "                              width of this target (an earlier run's), so its\n"
                           "                              losses can be tracked (default 0: off)\n"
+                          "  --symmetry <planes>         mirror symmetry: x, y, z or a comma list (x,y);\n"
+                          "                              a minus keeps the negative side (-x). The\n"
+                          "                              kept part is remeshed at the target halved per\n"
+                          "                              plane and mirrored back, welded on the planes\n"
+                          "                              (default: none)\n"
+                          "  --symmetry-center <x,y,z>   where the planes cross the axes (default 0,0,0)\n"
                           "  --input-cache <file>        keep the prepared input (cleanup, fold check,\n"
                           "                              island split) in this file: read when it holds\n"
                           "                              the same mesh and fold settings from this build,\n"
@@ -98,6 +109,55 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "Progress goes to stdout as \"<percent>% done. <step>\" lines.\n"
                           "Exit status: 0 remeshed, 1 bad arguments or files, 2 the remesh did not\n"
                           "succeed (rejected input, cancelled or no faces; see the report).\n";
+
+// "x", "-x,y": RemeshParameters::symmetryAxes and symmetryKeepNegative.
+bool parseSymmetry(const std::string& text, RemeshParameters* parameters)
+{
+    uint32_t axes = 0, negative = 0;
+    std::string item;
+    std::istringstream stream(text);
+    while (std::getline(stream, item, ',')) {
+        bool minus = false;
+        if (!item.empty() && ('-' == item[0] || '+' == item[0])) {
+            minus = '-' == item[0];
+            item.erase(0, 1);
+        }
+        if (1 != item.size())
+            return false;
+        const char c = (char)std::tolower((unsigned char)item[0]);
+        if (c < 'x' || c > 'z')
+            return false;
+        const uint32_t bit = 1u << (c - 'x');
+        if (axes & bit)
+            return false;
+        axes |= bit;
+        if (minus)
+            negative |= bit;
+    }
+    if (0 == axes)
+        return false;
+    parameters->symmetryAxes = axes;
+    parameters->symmetryKeepNegative = negative;
+    return true;
+}
+
+bool parseCenter(const std::string& text, std::array<double, 3>* center)
+{
+    std::istringstream stream(text);
+    stream.imbue(std::locale::classic());
+    std::string item;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (!std::getline(stream, item, ','))
+            return false;
+        std::istringstream number(item);
+        number.imbue(std::locale::classic());
+        double value = 0.0;
+        if (!(number >> value) || !std::isfinite(value))
+            return false;
+        (*center)[axis] = value;
+    }
+    return !std::getline(stream, item, ',');
+}
 
 struct Options {
     std::string inputPath;
@@ -201,6 +261,15 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
             valid = parseDouble(value, &parameters.smoothNormalDegrees);
         else if ("--lost-parts-reference" == name)
             valid = parseCount(value, &parameters.lostPartsReferenceTarget);
+        else if ("--symmetry" == name) {
+            if (!parseSymmetry(value, &parameters)) {
+                std::fprintf(stderr, "Error: --symmetry must be x, y, z or a comma list of them, each "
+                                     "with an optional minus, not %s\n",
+                    value.c_str());
+                return 1;
+            }
+        } else if ("--symmetry-center" == name)
+            valid = parseCenter(value, &parameters.symmetryCenter);
         else if ("--extractor" == name) {
             if (!parseExtractor(value, &parameters.extractor)) {
                 std::fprintf(stderr, "Error: --extractor must be qex or trace, not %s\n", value.c_str());

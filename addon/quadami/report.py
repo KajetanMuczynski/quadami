@@ -82,6 +82,14 @@ def summary_rows(report):
             holes = islands.get("holes", 0)
             rows.append(("Holes", "%d (%d open edges)" % (holes, islands.get("hole_edges", 0))
                          if holes else "0", holes > 0))
+        # Mirror symmetry (interface 1.17): the planes and whether the halves
+        # joined everywhere on them.
+        mirror = report.get("symmetry")
+        if mirror:
+            planes = ", ".join(part.upper() for part in mirror.get("planes", "").split(",") if part)
+            gaps = mirror.get("open_seam_edges", 0)
+            rows.append(("Symmetry", "%s, %d open seam edges" % (planes, gaps) if gaps else planes + ", welded",
+                         gaps > 0))
         # Handles (tunnels) against the input, per island; reports from cores
         # before interface 1.7 don't have them.
         if "handles_lost" in islands:

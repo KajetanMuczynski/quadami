@@ -14,7 +14,8 @@
   "external_thin": {"targets": [], "resolutions": ["quality"]},
   "usage": {"targets": [1000, 5000], "resolutions": ["quality"]},
   "marked": {"targets": [1000, 5000], "resolutions": ["quality"]},
-  "guides": {"targets": [1000, 3000], "resolutions": ["quality"]}
+  "guides": {"targets": [1000, 3000], "resolutions": ["quality"]},
+  "symmetry": {"targets": [2000, 8000], "resolutions": ["quality"]}
  },
  "meshes": [
   {"id": "spot", "file": "downloads/spot.obj", "category": "organic, clean, genus 0"},
@@ -173,6 +174,11 @@
   {"id": "guides_icosphere_ring", "file": "guides/guides_icosphere_ring.obj", "category": "icosphere, 4 subdivisions, a guide loop off the centre", "set": "guides"},
   {"id": "guides_torus_tube", "file": "guides/guides_torus_tube.obj", "category": "torus 96x48, a tilted guide loop around the tube between grid lines", "set": "guides"},
   {"id": "guides_capsule_rings", "file": "guides/guides_capsule_rings.obj", "category": "capsule, two tilted guide loops on the body", "set": "guides"},
-  {"id": "guides_blob_eye", "file": "guides/guides_blob_eye.obj", "category": "bumpy icosphere (20k triangles), a small guide loop around a bump and a large one", "set": "guides"}
- ]
+  {"id": "guides_blob_eye", "file": "guides/guides_blob_eye.obj", "category": "bumpy icosphere (20k triangles), a small guide loop around a bump and a large one", "set": "guides"},
+  {"id": "spot", "file": "downloads/spot.obj", "set": "symmetry", "sym": ["x", 0.0], "category": "symmetry: nearly symmetric (reflection error 3e-4 diag)"},
+  {"id": "koala", "file": "downloads/koala.obj", "set": "symmetry", "sym": ["x", 0.0], "category": "symmetry: symmetric sculpt"},
+  {"id": "csg_bracket", "file": "synthetic/csg_bracket.obj", "set": "symmetry", "sym": ["x", 0.0], "category": "symmetry: CAD part, plane through holes and boss"},
+  {"id": "blob_sym", "file": "synthetic/blob_sym.obj", "set": "symmetry", "sym": ["x", 0.0], "category": "symmetry: exactly symmetric control"},
+  {"id": "ext_skull", "file": "external/ext_skull.obj", "set": "symmetry", "sym": ["x", "auto"], "category": "symmetry: off-centre plane (x = -0.051), genus > 0"}
+]
 }

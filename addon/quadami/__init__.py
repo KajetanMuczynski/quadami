@@ -40,6 +40,7 @@ from . import transfer
 from . import worker
 from . import raise_hint
 from . import report as report_rows
+from . import symmetry
 from .names import ID, NAME
 
 REPORT_PROPERTY = ID + "_report"
@@ -275,6 +276,29 @@ class RemeshSettings(bpy.types.PropertyGroup):
         name="Checker", default=True, update=lambda self, context: _redraw(context),
         description="Draw a checker whose squares are about one planned quad across")
 
+    # Mirror symmetry (symmetry.py; sent as run flags, not core parameters
+    # of every run).
+    symmetry_x: BoolProperty(name="X", description="Remesh the +X half (or -X, see Keep) and mirror it across "
+                             "the object's YZ plane, so the result is exactly symmetric in X")
+    symmetry_y: BoolProperty(name="Y", description="Remesh one half in Y and mirror it across the XZ plane")
+    symmetry_z: BoolProperty(name="Z", description="Remesh one half in Z and mirror it across the XY plane")
+    symmetry_side: EnumProperty(
+        name="Keep", default="POSITIVE",
+        items=(("POSITIVE", "+", "Keep the + side of each plane and mirror it onto the - side"),
+               ("NEGATIVE", "-", "Keep the - side of each plane and mirror it onto the + side")),
+        description="Which side of the mirror planes is remeshed and copied. Where the sides differ, the "
+                    "result copies this one, and its folds or lost parts with it")
+    symmetry_fit: BoolProperty(
+        name="Fit Plane",
+        description="Put each mirror plane where the mesh is most symmetric along its axis, instead of "
+                    "through the object's origin (for a mesh whose origin is off its middle)")
+
+    def symmetry_axes(self):
+        return {axis for axis, on in enumerate((self.symmetry_x, self.symmetry_y, self.symmetry_z)) if on}
+
+    def symmetry_negative(self):
+        return self.symmetry_axes() if self.symmetry_side == "NEGATIVE" else set()
+
     def parameters(self):
         return {name: getattr(self, name) for name in worker.PARAMETER_FLAGS}
 
@@ -434,6 +458,54 @@ def _scale_ratio(obj):
     values, so shear from a rotated parent counts too); 0 if degenerate."""
     stretch = np.linalg.svd(np.array(obj.matrix_world.to_3x3()), compute_uv=False)
     return float(stretch[0] / stretch[-1]) if stretch[-1] > 0 else 0.0
+
+
+def _object_symmetry(obj):
+    """The axes an enabled Mirror modifier mirrors, and those of the mesh's
+    own symmetry (Sculpt and Edit Mode X/Y/Z)."""
+    mirror = set()
+    for modifier in obj.modifiers:
+        if modifier.type == "MIRROR" and modifier.show_viewport and modifier.mirror_object is None:
+            mirror |= {axis for axis in range(3) if modifier.use_axis[axis]}
+    mesh = obj.data
+    own = {axis for axis, name in enumerate(("use_mirror_x", "use_mirror_y", "use_mirror_z")) if getattr(mesh, name, False)}
+    return mirror, own
+
+
+def _symmetry_rows(context, obj, positions, axes, center=(0.0, 0.0, 0.0)):
+    """symmetry.check() on the evaluated mesh (object space, as remeshed)."""
+    from mathutils.bvhtree import BVHTree
+    tree = BVHTree.FromObject(obj, context.evaluated_depsgraph_get())
+
+    def nearest(point):
+        found = tree.find_nearest(point)
+        return found[3] if found[0] is not None else 0.0
+
+    return symmetry.check(positions, axes, center, nearest)
+
+
+# The last symmetry check per object name: (axes, side, fit, lines).
+_symmetry_checked = {}
+
+
+def _symmetry_lines(context, obj, settings, positions):
+    """Panel and report lines of the symmetry check, and the plane centre to
+    send (fitted with Fit Plane)."""
+    axes, negative = settings.symmetry_axes(), settings.symmetry_negative()
+    rows = _symmetry_rows(context, obj, positions, axes)
+    center = (0.0, 0.0, 0.0)
+    lines = []
+    if settings.symmetry_fit:
+        center = symmetry.fitted_center(rows, center)
+        moved = [row for row in rows if row["fit"] is not None]
+        if moved:
+            rows = _symmetry_rows(context, obj, positions, axes, center)
+            lines += [("Mirror plane fitted at %s = %.4g" % (symmetry.AXES[row["axis"]].upper(), row["fit"]), False)
+                      for row in moved]
+            rows = [dict(row, fit=None) for row in rows]
+    lines = symmetry.check_lines(rows, negative) + lines
+    _symmetry_checked[obj.name] = (tuple(sorted(axes)), settings.symmetry_side, settings.symmetry_fit, lines)
+    return lines, center
 
 
 def _uneven_scale_warning(obj):
@@ -604,6 +676,15 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             parameters["repair_folds"] = True
             if self.flatten_spikes:
                 parameters["flatten_spikes"] = True
+        symmetry_warnings = []
+        if settings.symmetry_axes():
+            if (worker.worker_interface(executable) or (0, 0)) < worker.SYMMETRY_INTERFACE:
+                self.report({"ERROR"}, "The configured remesher has no Symmetry; use the one bundled with the add-on")
+                return {"CANCELLED"}
+            lines, center = _symmetry_lines(context, obj, settings, positions)
+            symmetry_warnings = [text for text, warning in lines if warning]
+            parameters["symmetry"] = symmetry.planes_text(settings.symmetry_axes(), settings.symmetry_negative())
+            parameters["symmetry_center"] = symmetry.center_text(center)
         # After a run that lost parts, measure this one against that run's
         # quad width too, so the panel can say whether those parts came back.
         self._history_key = raise_hint.input_key(positions, triangles, marked, parameters)
@@ -611,8 +692,10 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
                                                 parameters["target_quads"])
         if reference and (worker.worker_interface(executable) or (0, 0)) >= worker.LOST_PARTS_REFERENCE_INTERFACE:
             parameters["lost_parts_reference"] = reference
+        # The input cache holds the whole mesh; a symmetric run remeshes a cut part.
         job = worker.RemeshJob(executable, positions, triangles, parameters, marked,
-                               input_cache=_input_cache_path(executable, positions, triangles, marked))
+                               input_cache=None if "symmetry" in parameters else
+                               _input_cache_path(executable, positions, triangles, marked))
         try:
             job.start()
         except (OSError, ValueError) as error:
@@ -626,7 +709,7 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         _last_run = {"settings": dict(parameters, **self._addon_settings), "input_triangles": len(triangles),
                      "log": None, "result": None}
         self._source_name = obj.name
-        self._warnings = [w for w in (_uneven_scale_warning(obj), _flood_warning(flooded)) if w]
+        self._warnings = [w for w in (_uneven_scale_warning(obj), _flood_warning(flooded)) if w] + symmetry_warnings
         self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
         self._status_text(context)
@@ -1064,6 +1147,7 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         column.enabled = _job is None
         for name in MAIN_PARAMETERS:
             column.prop(settings, name)
+        _draw_symmetry(layout, context, settings)
         _draw_density(layout, context, settings, _text_room(context))
         # The label on its own line: beside the three toggles the sidebar
         # cut it off with an ellipsis.
@@ -1169,6 +1253,89 @@ class VIEW3D_PT_remesh_quads(bpy.types.Panel):
         _draw_build(layout, worker.find_executable(bpy.path.abspath(preferences.executable) if preferences else ""))
 
 
+def _wrapped(column, text, icon, room):
+    for i, part in enumerate(report_rows.wrap(text, room.panel - room.icon - room.pad, room.measure)):
+        column.label(text=part, icon=icon if 0 == i else "BLANK1")
+
+
+def _draw_symmetry(layout, context, settings):
+    # The label on its own line, as Follow Marks: beside the toggles the
+    # sidebar cuts it off.
+    column = layout.column(align=True)
+    column.enabled = _job is None
+    column.label(text="Symmetry")
+    row = column.row(align=True)
+    for name in ("symmetry_x", "symmetry_y", "symmetry_z"):
+        row.prop(settings, name, toggle=True)
+    axes = settings.symmetry_axes()
+    if axes:
+        row = column.row(align=True)
+        row.prop(settings, "symmetry_side", expand=True)
+        row.prop(settings, "symmetry_fit", toggle=True)
+    obj = context.active_object
+    if obj is None or obj.type != "MESH":
+        return
+    target = _source(obj) or obj
+    room = _text_room(context)
+    hint = symmetry.object_hint(*_object_symmetry(target), axes)
+    if hint:
+        column = layout.column(align=True)
+        column.enabled = _job is None
+        _wrapped(column, hint, "INFO", room)
+        column.operator(OBJECT_OT_symmetry_from_object.bl_idname, icon="MOD_MIRROR")
+    if axes:
+        column = layout.column(align=True)
+        column.enabled = _job is None
+        checked = _symmetry_checked.get(target.name)
+        if checked and checked[:3] == (tuple(sorted(axes)), settings.symmetry_side, settings.symmetry_fit):
+            for text, warning in checked[3]:
+                _wrapped(column, text, "ERROR" if warning else "INFO", room)
+        column.operator(OBJECT_OT_symmetry_check.bl_idname, icon="VIEWZOOM")
+
+
+class OBJECT_OT_symmetry_from_object(bpy.types.Operator):
+    """Turn on Symmetry for the axes of the object's Mirror modifier and of its mesh symmetry"""
+    bl_idname = "object." + ID + "_symmetry_from_object"
+    bl_label = "Use Object's Symmetry"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object is not None and context.active_object.type == "MESH"
+
+    def execute(self, context):
+        obj = _source(context.active_object) or context.active_object
+        mirror, own = _object_symmetry(obj)
+        settings = _settings(context)
+        for axis in mirror | own:
+            setattr(settings, "symmetry_" + symmetry.AXES[axis], True)
+        return {"FINISHED"}
+
+
+class OBJECT_OT_symmetry_check(bpy.types.Operator):
+    """Measure how far the two sides of each mirror plane differ (the result copies the kept side)"""
+    bl_idname = "object." + ID + "_symmetry_check"
+    bl_label = "Check Symmetry"
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj is not None and obj.type == "MESH" and context.mode == "OBJECT" and \
+            _settings(context).symmetry_axes()
+
+    def execute(self, context):
+        obj = _source(context.active_object) or context.active_object
+        positions = _mesh_arrays(context, obj)[0]
+        if len(positions) == 0:
+            self.report({"ERROR"}, "The mesh has no vertices")
+            return {"CANCELLED"}
+        lines, _center = _symmetry_lines(context, obj, _settings(context), positions)
+        self.report({"WARNING"} if any(warning for _text, warning in lines) else {"INFO"},
+                    "; ".join(text for text, _warning in lines))
+        _redraw(context)
+        return {"FINISHED"}
+
+
 classes = (
     RemeshPreferences,
     RemeshSettings,
@@ -1179,6 +1346,8 @@ classes = (
     OBJECT_OT_set_target_quads,
     OBJECT_OT_keep_quads,
     OBJECT_OT_copy_report,
+    OBJECT_OT_symmetry_from_object,
+    OBJECT_OT_symmetry_check,
     VIEW3D_PT_remesh_quads,
 )
 

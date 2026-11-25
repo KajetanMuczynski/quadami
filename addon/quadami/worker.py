@@ -74,6 +74,8 @@ RUN_FLAGS = {
     "repair_folds": "--fold-repair",
     "flatten_spikes": "--flatten-spikes",
     "lost_parts_reference": "--lost-parts-reference",
+    "symmetry": "--symmetry",
+    "symmetry_center": "--symmetry-center",
 }
 
 # The interface version that brought --lost-parts-reference; an older
@@ -84,6 +86,8 @@ LOST_PARTS_REFERENCE_INTERFACE = (1, 12)
 # message starts when a run left the mesh to a cache file that could not
 # give it (the core's InputCacheUnusableMessage).
 INPUT_CACHE_INTERFACE = (1, 16)
+# The interface version that brought --symmetry and --symmetry-center.
+SYMMETRY_INTERFACE = (1, 17)
 INPUT_CACHE_UNUSABLE = "input cache unusable"
 
 _PROGRESS_LINE = re.compile(r"^(\d+)% done\.(?: (.*))?$")

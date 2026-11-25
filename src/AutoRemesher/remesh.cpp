@@ -23,6 +23,7 @@
 #include <AutoRemesher/Remesh>
 #include <AutoRemesher/RemeshPreview>
 #include <AutoRemesher/SurfaceProjector>
+#include <AutoRemesher/Symmetry>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -931,6 +932,22 @@ namespace {
         return out;
     }
 
+    // "x,-y": the planes, a minus where the negative side is kept; "" without.
+    std::string symmetryText(const RemeshParameters& parameters)
+    {
+        std::string text;
+        for (int axis = 0; axis < 3; ++axis) {
+            if (!(parameters.symmetryAxes & (1u << axis)))
+                continue;
+            if (!text.empty())
+                text += ",";
+            if (parameters.symmetryKeepNegative & (1u << axis))
+                text += "-";
+            text += "xyz"[axis];
+        }
+        return text;
+    }
+
     std::string jsonCount(size_t value)
     {
         return std::to_string(value);
@@ -1450,6 +1467,8 @@ RemeshResult remeshWithPreview(const RemeshRequest& request,
 
 RemeshResult remesh(const RemeshRequest& request, const RemeshCallbacks& callbacks)
 {
+    if (0 != request.parameters.symmetryAxes)
+        return remeshSymmetric(request, callbacks);
     return remeshWithPreview(request, callbacks, nullptr);
 }
 
@@ -1544,6 +1563,7 @@ std::string toJson(const RemeshResult& result)
         << ", \"extractor\": " << jsonString(toString(parameters.extractor))
         << ", \"quad_smoothing\": " << jsonString(toString(parameters.quadSmoothing))
         << ", \"lost_parts_reference\": " << parameters.lostPartsReferenceTarget
+        << ", \"symmetry\": " << jsonString(symmetryText(parameters))
         << "},\n";
     out << "  \"input\": {"
         << "\"vertices\": " << jsonCount(report.inputVertexCount)
@@ -1584,6 +1604,23 @@ std::string toJson(const RemeshResult& result)
         << ", \"smallest_collapsed_faces\": " << jsonCount(report.smallestCollapsedIslandFaces)
         << ", \"smallest_collapsed_target_quads\": " << jsonCount(report.smallestCollapsedIslandTargetQuads)
         << "},\n";
+    if (0 != report.symmetryAxes) {
+        out << "  \"symmetry\": {"
+            << "\"planes\": " << jsonString(symmetryText(parameters))
+            << ", \"center\": [" << jsonNumber(parameters.symmetryCenter[0]) << ", "
+            << jsonNumber(parameters.symmetryCenter[1]) << ", " << jsonNumber(parameters.symmetryCenter[2]) << "]"
+            << ", \"in_plane_triangles\": " << jsonCount(report.symmetryInPlaneTriangleCount)
+            << ", \"dropped_feature_edges\": " << jsonCount(report.symmetryDroppedFeatureEdgeCount)
+            << ",\n               \"seam_vertices\": " << jsonCount(report.symmetrySeamVertexCount)
+            << ", \"notches\": " << jsonCount(report.symmetryNotchCount)
+            << ", \"notch_depth_max\": " << jsonNumber(report.symmetryNotchDepthMax)
+            << ", \"crossed_vertices\": " << jsonCount(report.symmetryCrossedVertexCount)
+            << ", \"flat_faces\": " << jsonCount(report.symmetryFlatFaceCount)
+            << ",\n               \"pinned_corners\": " << jsonCount(report.symmetryPinnedCornerCount)
+            << ",\n               \"straightened_vertices\": " << jsonCount(report.symmetryStraightenedVertexCount)
+            << ", \"open_seam_edges\": " << jsonCount(report.symmetryOpenSeamEdgeCount)
+            << "},\n";
+    }
     out << "  \"lost_parts\": {"
         << "\"farthest_input_quad_widths\": " << jsonNumber(report.farthestInputQuadWidths)
         << ", \"far_input_vertices\": " << jsonCount(report.farInputVertexCount)

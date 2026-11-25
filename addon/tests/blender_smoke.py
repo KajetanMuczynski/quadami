@@ -299,6 +299,37 @@ try:
     bpy.context.view_layer.update()
     assert density_module.current() is None, "a mesh edit drops the plan"
 
+    # Symmetry (symmetry.py, --symmetry): a sphere with a Mirror modifier in X
+    # asks for Symmetry X; the button turns it on, the check finds the sides
+    # equal, and the run comes back closed with the halves welded.
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=48, ring_count=24, location=(0.0, 8.0, 0.0))
+    mirrored = bpy.context.active_object
+    import bmesh
+    half = bmesh.new()
+    half.from_mesh(mirrored.data)
+    bmesh.ops.delete(half, geom=[v for v in half.verts if v.co.x < -1e-6], context="VERTS")
+    half.to_mesh(mirrored.data)
+    half.free()
+    mirrored.modifiers.new("Mirror", "MIRROR")  # merge on by default: the whole sphere again
+    bpy.context.view_layer.update()
+    assert addon._object_symmetry(mirrored)[0] == {0}
+    assert not settings.symmetry_axes()
+    hint = addon.symmetry.object_hint(*addon._object_symmetry(mirrored), settings.symmetry_axes())
+    assert hint and "Mirror modifier" in hint, hint
+    assert bpy.ops.object.quadami_symmetry_from_object() == {"FINISHED"} and settings.symmetry_axes() == {0}
+    sym_positions, sym_triangles = addon._mesh_arrays(bpy.context, mirrored)[:2]
+    lines, center = addon._symmetry_lines(bpy.context, mirrored, settings, sym_positions)
+    assert lines == [("Symmetric across X", False)] and tuple(center) == (0.0, 0.0, 0.0), (lines, center)
+    parameters = dict(settings.parameters(), target_quads=1000, symmetry="x",
+                      symmetry_center=addon.symmetry.center_text(center))
+    outcome = worker.remesh(executable, sym_positions, sym_triangles, parameters)
+    assert outcome.ok, (outcome.status, outcome.message, outcome.log)
+    assert outcome.report["symmetry"]["open_seam_edges"] == 0, outcome.report["symmetry"]
+    assert outcome.report["output"]["boundary_edges"] == 0, outcome.report["output"]
+    assert ("Symmetry", "X, welded", False) in addon.report_rows.summary_rows(outcome.report)
+    settings.symmetry_x = False
+    bpy.data.objects.remove(mirrored)
+
     # Guides (guide_tool.py). Draw Guide's modal handler, driven with
     # stand-ins for the viewport: each click picks the next vertex of a ring
     # tilted across the sphere's rings, and the last click lands on the
