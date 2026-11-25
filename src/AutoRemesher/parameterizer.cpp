@@ -23,6 +23,7 @@
 #include <AutoRemesher/FrameField>
 #include <AutoRemesher/MapCheck>
 #include <AutoRemesher/Parameterizer>
+#include <cstdlib>
 #include <AutoRemesher/QuadParameterizer>
 #include <AutoRemesher/SingularitySimplifier>
 #include <AutoRemesher/SurfaceMesh>
@@ -356,7 +357,7 @@ bool Parameterizer::parameterize()
     }
 
     SingularitySimplifier simplifier(topology, &field);
-    if (m_singularitySimplification) {
+    if (m_singularitySimplification && !std::getenv("AR_NO_SIMPLIFY")) {
         report(0.17f, "Simplifying singularities");
         simplifier.setFeatureEdges(featureEdges);
         simplifier.setMaximumPairDistance(m_maximumSingularityPairDistance);

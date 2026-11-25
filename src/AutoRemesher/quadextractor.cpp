@@ -23,6 +23,7 @@
 #include <AutoRemesher/MeshSeparator>
 #include <AutoRemesher/PositionKey>
 #include <AutoRemesher/QuadExtractor>
+#include <cstdlib>
 #include <AutoRemesher/SurfaceProjector>
 #include <algorithm>
 #include <array>
@@ -336,6 +337,21 @@ void QuadExtractor::finishMesh()
             m_progressHandler(fraction, name);
     };
 
+    if (const char* dumpPath = std::getenv("AR_DUMP_RAW")) { // EXPERIMENT border-corner-ban
+        static int rawCall = 0; char rawName[4096]; snprintf(rawName, sizeof(rawName), "%s.%d.obj", dumpPath, rawCall++);
+        FILE* fp = fopen(rawName, "wb");
+        if (fp) {
+            for (const auto& vertex : m_remeshedVertices)
+                fprintf(fp, "v %.9g %.9g %.9g\n", vertex.x(), vertex.y(), vertex.z());
+            for (const auto& it : m_remeshedPolygons) {
+                fprintf(fp, "f");
+                for (const auto& v : it)
+                    fprintf(fp, " %zu", 1 + v);
+                fprintf(fp, "\n");
+            }
+            fclose(fp);
+        }
+    }
     report(0.29f, "Fixing holes");
     fixHoles();
 
@@ -513,6 +529,20 @@ bool QuadExtractor::extractWithQexFrontEnd()
 {
     if (m_progressHandler)
         m_progressHandler(0.0f, "Extracting quads");
+    if (const char* dumpPath = std::getenv("AR_DUMP_UV")) { // EXPERIMENT border-corner-ban
+        FILE* fp = fopen(dumpPath, "wb");
+        if (fp) {
+            for (const auto& vertex : *m_vertices)
+                fprintf(fp, "v %.9g %.9g %.9g\n", vertex.x(), vertex.y(), vertex.z());
+            for (const auto& tri : *m_triangleUvs)
+                for (const auto& uv : tri)
+                    fprintf(fp, "vt %.12g %.12g\n", uv.x(), uv.y());
+            for (size_t t = 0; t < m_triangles->size(); ++t)
+                fprintf(fp, "f %zu/%zu %zu/%zu %zu/%zu\n", 1 + (*m_triangles)[t][0], 1 + 3 * t, 1 + (*m_triangles)[t][1], 2 + 3 * t,
+                    1 + (*m_triangles)[t][2], 3 + 3 * t);
+            fclose(fp);
+        }
+    }
     QexLimits limits;
     limits.maxSteps = QexStepsPerTriangle * (m_triangles->size() + 100);
     if (m_targetQuadCount > 0)

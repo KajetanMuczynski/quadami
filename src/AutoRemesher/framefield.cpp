@@ -21,6 +21,9 @@
  *  SOFTWARE.
  */
 #include <AutoRemesher/FrameField>
+#include <cstdlib>
+#include <limits>
+#include <queue>
 
 #include <AutoRemesher/ConstrainedLeastSquares>
 #include <AutoRemesher/SurfaceMesh>
@@ -117,6 +120,63 @@ bool FrameField::create(const SurfaceMesh& mesh, const FeatureEdgeSet& sharpEdge
             periodic[2 * faceIndex + 1] = std::sin(fieldAngle);
             locked[faceIndex] = 1;
         }
+
+    // EXPERIMENT (border corner ban): lock every face within AR_BORDER_BAND
+    // mean edge lengths of the border to the direction of its nearest border
+    // edge, so the field has no singularity next to a border.
+    if (const char* bandText = std::getenv("AR_BORDER_BAND")) {
+        const double band = std::atof(bandText) * mesh.averageEdgeLength();
+        std::vector<size_t> boundaryCorners;
+        for (size_t c = 0; c < mesh.cornerCount(); ++c)
+            if (mesh.oppositeCorner(c) == SurfaceMesh::npos)
+                boundaryCorners.push_back(c);
+        if (!boundaryCorners.empty() && band > 0.0) {
+            // multi-source Dijkstra over faces (centroid to centroid), source = border faces
+            std::vector<double> dist(faces, std::numeric_limits<double>::infinity());
+            std::vector<size_t> source(faces, SurfaceMesh::npos);
+            typedef std::pair<double, size_t> Item;
+            std::priority_queue<Item, std::vector<Item>, std::greater<Item>> heap;
+            const auto centroid = [&](size_t f) {
+                return (mesh.position(mesh.cornerVertex(3 * f)) + mesh.position(mesh.cornerVertex(3 * f + 1))
+                           + mesh.position(mesh.cornerVertex(3 * f + 2))) / 3.0;
+            };
+            for (const size_t c : boundaryCorners) {
+                const size_t f = mesh.cornerFace(c);
+                if (dist[f] > 0.0) {
+                    dist[f] = 0.0;
+                    source[f] = c;
+                    heap.push({ 0.0, f });
+                }
+            }
+            while (!heap.empty()) {
+                const Item top = heap.top();
+                heap.pop();
+                const size_t f = top.second;
+                if (top.first > dist[f])
+                    continue;
+                for (size_t c = 3 * f; c < 3 * f + 3; ++c) {
+                    const size_t oc = mesh.oppositeCorner(c);
+                    if (oc == SurfaceMesh::npos)
+                        continue;
+                    const size_t g = mesh.cornerFace(oc);
+                    const double d = top.first + (centroid(g) - centroid(f)).length();
+                    if (d < dist[g]) {
+                        dist[g] = d;
+                        source[g] = source[f];
+                        heap.push({ d, g });
+                    }
+                }
+            }
+            for (size_t f = 0; f < faces; ++f) {
+                if (locked[f] || source[f] == SurfaceMesh::npos || !(dist[f] <= band))
+                    continue;
+                const double fieldAngle = kSymmetry * tangentAngle(mesh.edgeVector(source[f]), facetBases[f]);
+                periodic[2 * f] = std::cos(fieldAngle);
+                periodic[2 * f + 1] = std::sin(fieldAngle);
+                locked[f] = 1;
+            }
+        }
+    }
 
     std::vector<std::array<double, 6>> vertexTensor(mesh.vertexCount());
     tbb::parallel_for(tbb::blocked_range<size_t>(0, vertexTensor.size()), [&](const tbb::blocked_range<size_t>& range) {

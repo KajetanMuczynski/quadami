@@ -315,6 +315,355 @@ namespace {
         return count;
     }
 
+    // EXPERIMENT (border corner ban): the map's turn at each boundary vertex
+    // in quarter turns, from the field frames and the corner rotations:
+    // 2 = straight border, 1 = convex corner, 3 = concave corner.
+    std::vector<int> boundaryTurnQuarters(const SurfaceMesh& mesh, const std::vector<Vector3>& field,
+        const std::vector<Vector3>& normals, const std::vector<int>& rotation)
+    {
+        const double quarter = .5 * M_PI;
+        const auto phi = [&](size_t f, const Vector3& x) {
+            const Vector3 u = field[f], v = Vector3::crossProduct(normals[f], u);
+            return std::atan2(Vector3::dotProduct(x, v), Vector3::dotProduct(x, u));
+        };
+        std::vector<int> turns(mesh.vertexCount(), -1);
+        for (size_t vertex = 0; vertex < mesh.vertexCount(); ++vertex) {
+            size_t ca = SurfaceMesh::npos, boundaryOut = 0;
+            for (const size_t c : mesh.cornersAroundVertex(vertex)) {
+                if (mesh.oppositeCorner(c) == SurfaceMesh::npos)
+                    ++boundaryOut;
+                if (mesh.oppositeCorner(mesh.previousCorner(c)) == SurfaceMesh::npos)
+                    ca = c;
+            }
+            if (boundaryOut != 1 || ca == SurfaceMesh::npos)
+                continue;
+            double total = 0.0;
+            size_t c = ca, steps = 0;
+            bool ok = false;
+            while (steps++ <= mesh.cornersAroundVertex(vertex).size()) {
+                const size_t f = mesh.cornerFace(c);
+                const Vector3 dNext = mesh.edgeVector(c), dPrev = -mesh.edgeVector(mesh.previousCorner(c));
+                total += std::remainder(phi(f, dNext) - phi(f, dPrev), 2.0 * M_PI);
+                const size_t oc = mesh.oppositeCorner(c);
+                if (oc == SurfaceMesh::npos) {
+                    ok = true;
+                    break;
+                }
+                const Vector3 e = mesh.edgeVector(c);
+                const double residual = std::remainder(phi(f, e) - phi(mesh.cornerFace(oc), e) + quarter * rotation[c], 2.0 * M_PI);
+                total -= residual;
+                c = mesh.nextCorner(oc);
+            }
+            if (ok)
+                turns[vertex] = (int)std::lround(std::fabs(total) / quarter);
+        }
+        return turns;
+    }
+
+    // EXPERIMENT (border corner ban, research/border-corner-ban-2026-11-25):
+    // a boundary vertex whose map turns by other than two quarter turns is a
+    // corner of the border: a cone that sits on the border. Re-round one
+    // non-hard interior edge of its fan to an interior neighbour so that the
+    // border runs straight there and the quarter turn becomes a cone at that
+    // neighbour (valence 3 for a convex corner, 5 for a concave one).
+    size_t banBorderCorners(const SurfaceMesh& mesh, const std::vector<Vector3>& field,
+        const std::vector<Vector3>& normals, const std::vector<signed char>& cornerConstraints,
+        std::vector<int>* rotation, std::vector<char>* rerounded, size_t* unresolved)
+    {
+        const double quarter = .5 * M_PI;
+        const auto edgeAngle = [&](size_t face, const Vector3& edge) {
+            const Vector3 u = field[face], v = Vector3::crossProduct(normals[face], u);
+            return std::atan2(Vector3::dotProduct(edge, v), Vector3::dotProduct(edge, u));
+        };
+        const auto residual = [&](size_t c) {
+            const Vector3 edge = mesh.edgeVector(c);
+            double turn = edgeAngle(mesh.cornerFace(c), edge) - edgeAngle(mesh.cornerFace(mesh.oppositeCorner(c)), edge)
+                + quarter * (*rotation)[c];
+            return std::remainder(turn, 2.0 * M_PI);
+        };
+        std::vector<char> boundaryVertex(mesh.vertexCount(), 0);
+        for (size_t c = 0; c < mesh.cornerCount(); ++c)
+            if (mesh.oppositeCorner(c) == SurfaceMesh::npos) {
+                boundaryVertex[mesh.cornerVertex(c)] = 1;
+                boundaryVertex[mesh.cornerVertex(mesh.nextCorner(c))] = 1;
+            }
+        // The map's angle at a boundary vertex in quarter turns (2 = straight),
+        // -1 if the fan is not one simple boundary fan.
+        const auto borderTurn = [&](size_t vertex) {
+            size_t ca = SurfaceMesh::npos, boundaryOut = 0;
+            for (const size_t c : mesh.cornersAroundVertex(vertex)) {
+                if (mesh.oppositeCorner(c) == SurfaceMesh::npos)
+                    ++boundaryOut;
+                if (mesh.oppositeCorner(mesh.previousCorner(c)) == SurfaceMesh::npos)
+                    ca = c;
+            }
+            if (boundaryOut != 1 || ca == SurfaceMesh::npos)
+                return -1;
+            double angle = 0.0;
+            size_t c = ca, steps = 0;
+            while (steps++ <= mesh.cornersAroundVertex(vertex).size()) {
+                const Vector3 out = mesh.edgeVector(c), in = -mesh.edgeVector(mesh.previousCorner(c));
+                angle += std::atan2(Vector3::crossProduct(out, in).length(), Vector3::dotProduct(out, in));
+                const size_t oc = mesh.oppositeCorner(c);
+                if (oc == SurfaceMesh::npos)
+                    return (int)std::lround(angle / quarter);
+                angle += residual(c);
+                c = mesh.nextCorner(oc);
+            }
+            return -1;
+        };
+        const auto turnEdge = [&](size_t c, int by) {
+            const size_t oc = mesh.oppositeCorner(c);
+            (*rotation)[c] = (((*rotation)[c] + by) % 4 + 4) % 4;
+            (*rotation)[oc] = (4 - (*rotation)[c]) % 4;
+        };
+        size_t count = 0;
+        *unresolved = 0;
+        for (size_t vertex = 0; vertex < mesh.vertexCount(); ++vertex) {
+            if (!boundaryVertex[vertex])
+                continue;
+            int turn = borderTurn(vertex);
+            if (turn < 0 || turn == 2)
+                continue;
+            size_t best = SurfaceMesh::npos;
+            int bestBy = 0;
+            double bestCost = 0.0;
+            for (const size_t c : mesh.cornersAroundVertex(vertex)) {
+                const size_t oc = mesh.oppositeCorner(c);
+                if (oc == SurfaceMesh::npos || (*rerounded)[c])
+                    continue;
+                if (ConstraintNone != cornerConstraints[c] || ConstraintNone != cornerConstraints[oc])
+                    continue;
+                const size_t w = mesh.cornerVertex(mesh.nextCorner(c));
+                if (boundaryVertex[w])
+                    continue;
+                const auto hasBoundaryEdge = [&](size_t f) {
+                    for (size_t k = 3 * f; k < 3 * f + 3; ++k)
+                        if (mesh.oppositeCorner(k) == SurfaceMesh::npos)
+                            return true;
+                    return false;
+                };
+                // Between two faces that keep a border edge the field cannot follow the new turn.
+                const double heldPenalty = (hasBoundaryEdge(mesh.cornerFace(c)) && hasBoundaryEdge(mesh.cornerFace(oc))) ? 10.0 : 0.0;
+                for (const int by : { 1, -1 }) {
+                    turnEdge(c, by);
+                    const int newTurn = borderTurn(vertex);
+                    int q = 0;
+                    const bool interior = FrameField::coneQuarters(mesh, w, residual, &q);
+                    const double cost = std::fabs(residual(c)) + heldPenalty;
+                    turnEdge(c, -by);
+                    if (newTurn != 2 || !interior || q < 3 || q > 5)
+                        continue;
+                    if (best == SurfaceMesh::npos || cost < bestCost) {
+                        best = c;
+                        bestBy = by;
+                        bestCost = cost;
+                    }
+                }
+            }
+            if (best == SurfaceMesh::npos) {
+                ++*unresolved;
+                continue;
+            }
+            turnEdge(best, bestBy);
+            (*rerounded)[best] = (*rerounded)[mesh.oppositeCorner(best)] = 1;
+            ++count;
+        }
+        return count;
+    }
+
+    // EXPERIMENT (border corner ban): cones closer to the border than `reach`
+    // quad edges are walked inward, one edge at a time, by re-rounding the
+    // edge they cross, until they are `reach` quad edges from the border.
+    // Integer rounding puts every cone on a grid point; one closer than half
+    // a quad to the straight border isoline lands on it or folds the border.
+    size_t pushConesInward(const SurfaceMesh& mesh, const std::vector<Vector3>& field,
+        const std::vector<Vector3>& normals, const std::vector<signed char>& cornerConstraints,
+        const std::vector<double>* faceScaling, double scale, double reach,
+        std::vector<int>* rotation, std::vector<char>* rerounded, size_t* stuck)
+    {
+        const double quarter = .5 * M_PI;
+        const auto edgeAngle = [&](size_t face, const Vector3& edge) {
+            const Vector3 u = field[face], v = Vector3::crossProduct(normals[face], u);
+            return std::atan2(Vector3::dotProduct(edge, v), Vector3::dotProduct(edge, u));
+        };
+        const auto residual = [&](size_t c) {
+            const Vector3 edge = mesh.edgeVector(c);
+            double turn = edgeAngle(mesh.cornerFace(c), edge) - edgeAngle(mesh.cornerFace(mesh.oppositeCorner(c)), edge)
+                + quarter * (*rotation)[c];
+            return std::remainder(turn, 2.0 * M_PI);
+        };
+        const size_t n = mesh.vertexCount();
+        std::vector<double> dist(n, std::numeric_limits<double>::infinity());
+        typedef std::pair<double, size_t> Item;
+        std::priority_queue<Item, std::vector<Item>, std::greater<Item>> heap;
+        if (const char* guideVerts = std::getenv("AR_GUIDE_VERTS")) {
+            // exp/loop-c3: push away from the guide chain's vertices instead of the open border
+            if (FILE* file = std::fopen(guideVerts, "r")) {
+                unsigned long v;
+                while (1 == std::fscanf(file, "%lu", &v))
+                    if (v < n && dist[v] != 0.0) {
+                        dist[v] = 0.0;
+                        heap.push({ 0.0, (size_t)v });
+                    }
+                std::fclose(file);
+            }
+        } else
+        for (size_t c = 0; c < mesh.cornerCount(); ++c)
+            if (mesh.oppositeCorner(c) == SurfaceMesh::npos)
+                for (const size_t v : { mesh.cornerVertex(c), mesh.cornerVertex(mesh.nextCorner(c)) })
+                    if (dist[v] != 0.0) {
+                        dist[v] = 0.0;
+                        heap.push({ 0.0, v });
+                    }
+        if (heap.empty())
+            return 0;
+        // local quad edge per vertex
+        std::vector<double> size(n, scale);
+        if (faceScaling && faceScaling->size() == mesh.faceCount())
+            for (size_t v = 0; v < n; ++v) {
+                double sum = 0.0;
+                size_t k = 0;
+                for (const size_t c : mesh.cornersAroundVertex(v)) {
+                    sum += (*faceScaling)[mesh.cornerFace(c)];
+                    ++k;
+                }
+                if (k)
+                    size[v] = scale * sum / k;
+            }
+        // neighbours by corners whose edge leaves v, and the ones arriving
+        while (!heap.empty()) {
+            const Item top = heap.top();
+            heap.pop();
+            if (top.first > dist[top.second])
+                continue;
+            for (const size_t c : mesh.cornersAroundVertex(top.second)) {
+                const size_t w = mesh.cornerVertex(mesh.nextCorner(c));
+                const size_t u = mesh.cornerVertex(mesh.previousCorner(c));
+                for (const size_t x : { w, u }) {
+                    const double d = top.first + (mesh.position(x) - mesh.position(top.second)).length() / size[top.second];
+                    if (d < dist[x]) {
+                        dist[x] = d;
+                        heap.push({ d, x });
+                    }
+                }
+            }
+        }
+        const auto turnEdge = [&](size_t c, int by) {
+            const size_t oc = mesh.oppositeCorner(c);
+            (*rotation)[c] = (((*rotation)[c] + by) % 4 + 4) % 4;
+            (*rotation)[oc] = (4 - (*rotation)[c]) % 4;
+        };
+        size_t moves = 0;
+        *stuck = 0;
+        for (size_t start = 0; start < n; ++start) {
+            if (!(dist[start] > 0.0) || !(dist[start] < reach))
+                continue;
+            int q0 = 4;
+            if (!FrameField::coneQuarters(mesh, start, residual, &q0) || q0 == 4)
+                continue;
+            size_t v = start;
+            for (size_t step = 0; step < 64 && dist[v] < reach; ++step) {
+                int qv = 4;
+                FrameField::coneQuarters(mesh, v, residual, &qv);
+                size_t best = SurfaceMesh::npos;
+                int bestBy = 0;
+                double bestDist = dist[v];
+                for (const size_t c : mesh.cornersAroundVertex(v)) {
+                    const size_t oc = mesh.oppositeCorner(c);
+                    if (oc == SurfaceMesh::npos)
+                        continue;
+                    if (ConstraintNone != cornerConstraints[c] || ConstraintNone != cornerConstraints[oc])
+                        continue;
+                    const size_t x = mesh.cornerVertex(mesh.nextCorner(c));
+                    if (!(dist[x] > bestDist) || dist[x] == 0.0)
+                        continue;
+                    int qx = 4;
+                    if (!FrameField::coneQuarters(mesh, x, residual, &qx) || qx < 3 || qx > 5)
+                        continue;
+                    if (qx != 4 && qx == qv)
+                        continue;
+                    for (const int by : { 1, -1 }) {
+                        turnEdge(c, by);
+                        int nv = 0, nx = 0;
+                        const bool okV = FrameField::coneQuarters(mesh, v, residual, &nv);
+                        const bool okX = FrameField::coneQuarters(mesh, x, residual, &nx);
+                        turnEdge(c, -by);
+                        if (okV && okX && nv == 4 && nx == qx + qv - 4) {
+                            best = c;
+                            bestBy = by;
+                            bestDist = dist[x];
+                        }
+                    }
+                }
+                if (best == SurfaceMesh::npos) {
+                    ++*stuck;
+                    break;
+                }
+                turnEdge(best, bestBy);
+                (*rerounded)[best] = (*rerounded)[mesh.oppositeCorner(best)] = 1;
+                ++moves;
+                v = mesh.cornerVertex(mesh.nextCorner(best));
+                int qNew = 4;
+                if (FrameField::coneQuarters(mesh, v, residual, &qNew) && qNew == 4)
+                    break; // cancelled against an opposite cone
+            }
+        }
+        return moves;
+    }
+
+    // EXPERIMENT (border corner ban): after the rotations were edited, turn
+    // each face's field by delta_f so the field agrees with them again:
+    // least squares over interior edges of (residual - delta_f + delta_g),
+    // faces with a boundary edge or a constrained edge held at delta = 0.
+    // Returns the largest |residual| left.
+    double relaxFieldToRotations(const SurfaceMesh& mesh, const std::vector<Vector3>& normals,
+        const std::vector<int>& rotation, const std::vector<signed char>& cornerConstraints,
+        std::vector<Vector3>* field)
+    {
+        const double quarter = .5 * M_PI;
+        const auto edgeAngle = [&](size_t face, const Vector3& edge) {
+            const Vector3 u = (*field)[face], v = Vector3::crossProduct(normals[face], u);
+            return std::atan2(Vector3::dotProduct(edge, v), Vector3::dotProduct(edge, u));
+        };
+        const auto residual = [&](size_t c) {
+            const Vector3 edge = mesh.edgeVector(c);
+            double turn = edgeAngle(mesh.cornerFace(c), edge) - edgeAngle(mesh.cornerFace(mesh.oppositeCorner(c)), edge)
+                + quarter * rotation[c];
+            return std::remainder(turn, 2.0 * M_PI);
+        };
+        const size_t faces = mesh.faceCount();
+        ConstrainedLeastSquares system(faces);
+        std::vector<char> held(faces, 0);
+        for (size_t c = 0; c < mesh.cornerCount(); ++c)
+            if (mesh.oppositeCorner(c) == SurfaceMesh::npos || cornerConstraints[c] != ConstraintNone)
+                held[mesh.cornerFace(c)] = 1;
+        for (size_t f = 0; f < faces; ++f) {
+            if (held[f])
+                system.addConstraint({ { f, 1.0 } }, 0.0);
+            else
+                system.addEnergy({ { f, 1.0 } }, 0.0, 1e-6);
+        }
+        for (size_t c = 0; c < mesh.cornerCount(); ++c) {
+            const size_t oc = mesh.oppositeCorner(c);
+            if (oc == SurfaceMesh::npos || oc < c)
+                continue;
+            system.addEnergy({ { mesh.cornerFace(c), -1.0 }, { mesh.cornerFace(oc), 1.0 } }, -residual(c));
+        }
+        std::vector<double> delta;
+        if (!system.solve(&delta) || delta.size() != faces)
+            return -1.0;
+        for (size_t f = 0; f < faces; ++f) {
+            const Vector3 u = (*field)[f], v = Vector3::crossProduct(normals[f], u);
+            (*field)[f] = unit(u * std::cos(delta[f]) + v * std::sin(delta[f]), u);
+        }
+        double worst = 0.0;
+        for (size_t c = 0; c < mesh.cornerCount(); ++c)
+            if (mesh.oppositeCorner(c) != SurfaceMesh::npos)
+                worst = std::max(worst, std::fabs(residual(c)));
+        return worst;
+    }
+
     std::vector<signed char> computeCornerConstraints(const SurfaceMesh& mesh,
         const std::vector<Vector3>& field, const std::vector<Vector3>& normals, const std::vector<char>& hardCorners)
     {
@@ -1735,6 +2084,20 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     std::vector<char> rerounded;
     const size_t reroundedEdges = raiseSmallConeAngles(mesh, result->field, normals, cornerConstraints,
         &rotation, &rerounded);
+    if (std::getenv("AR_BORDER_BAN")) {
+        size_t unresolved = 0;
+        const size_t banned = banBorderCorners(mesh, result->field, normals, cornerConstraints,
+            &rotation, &rerounded, &unresolved);
+        if (std::getenv("AR_BORDER_DIAG"))
+            std::cerr << "BORDER_BAN moved " << banned << " unresolved " << unresolved << std::endl;
+    }
+    if (const char* reachText = std::getenv("AR_BORDER_PUSH")) {
+        size_t stuck = 0;
+        const size_t moves = pushConesInward(mesh, result->field, normals, cornerConstraints, faceScaling, scale,
+            std::atof(reachText), &rotation, &rerounded, &stuck);
+        if (std::getenv("AR_BORDER_DIAG"))
+            std::cerr << "BORDER_PUSH moves " << moves << " stuck " << stuck << std::endl;
+    }
     const std::vector<char> acute = acuteSectorCorners(mesh, hardCorners, scale);
     result->diagnostics.push_back(creaseConstraintRecord(mesh, hardCorners, cornerConstraints, rerounded, acute));
     // A hard edge's constraint follows the field, which a re-rounded edge
@@ -1743,7 +2106,45 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     for (size_t c = 0; c < corners; ++c)
         if (rerounded[c] || acute[c])
             cornerConstraints[c] = ConstraintNone;
+    if (std::getenv("AR_BORDER_RELAX")) {
+        const double worst = relaxFieldToRotations(mesh, normals, rotation, cornerConstraints, &result->field);
+        if (std::getenv("AR_BORDER_DIAG"))
+            std::cerr << "BORDER_RELAX worst_residual_deg " << worst * 180.0 / M_PI << std::endl;
+    }
+    if (std::getenv("AR_BORDER_FORCE")) {
+        // EXPERIMENT: every boundary edge is an isoline, the field's nearest axis.
+        size_t forced = 0;
+        for (size_t c = 0; c < corners; ++c) {
+            if (mesh.oppositeCorner(c) != SurfaceMesh::npos || cornerConstraints[c] != ConstraintNone)
+                continue;
+            const size_t f = mesh.cornerFace(c);
+            const Vector3 edge = unit(mesh.edgeVector(c), Vector3(1, 0, 0));
+            const Vector3 b = unit(result->field[f], edge);
+            const Vector3 br = unit(Vector3::crossProduct(normals[f], b), Vector3(0, 1, 0));
+            cornerConstraints[c] = std::fabs(Vector3::dotProduct(edge, b)) >= std::fabs(Vector3::dotProduct(edge, br))
+                ? ConstraintV : ConstraintU;
+            ++forced;
+        }
+        if (std::getenv("AR_BORDER_DIAG"))
+            std::cerr << "BORDER_FORCE forced " << forced << std::endl;
+    }
     result->cornerRotations = rotation;
+    if (std::getenv("AR_BORDER_DIAG")) {
+        const std::vector<int> turns = boundaryTurnQuarters(mesh, result->field, normals, rotation);
+        size_t hist[6] = { 0, 0, 0, 0, 0, 0 }, unconstrained = 0, boundaryEdges = 0;
+        for (const int t : turns)
+            if (t >= 0)
+                ++hist[std::min(t, 5)];
+        for (size_t c = 0; c < corners; ++c)
+            if (mesh.oppositeCorner(c) == SurfaceMesh::npos) {
+                ++boundaryEdges;
+                if (cornerConstraints[c] == ConstraintNone)
+                    ++unconstrained;
+            }
+        std::cerr << "BORDER_DIAG edges " << boundaryEdges << " unconstrained " << unconstrained
+                  << " turns k0 " << hist[0] << " k1 " << hist[1] << " k2 " << hist[2] << " k3 " << hist[3]
+                  << " k4 " << hist[4] << " k5+ " << hist[5] << std::endl;
+    }
     if (trackDirectionalScale)
         applyDirectionalSwaps(mesh, fieldBeforeBrush, result->field, normals,
             &activeScalingU, &activeScalingV);
