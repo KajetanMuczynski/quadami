@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <iostream>
 #include <limits>
 #include <unordered_map>
 
@@ -468,6 +470,13 @@ GuideRingStats padGuideRings(std::vector<Vector3>* positions, std::vector<std::v
             if (current != start || cycle.size() != ringEdges.size())
                 gaps = 1;
         }
+        if (gaps > 0 && nullptr != std::getenv("AUTOREMESHER_GUIDE_RINGS_DEBUG"))
+            for (const auto& item : ringEdges)
+                if (2 != item.second.size()) {
+                    const Vector3& q = (*positions)[item.first];
+                    std::cerr << "guide ring: loop " << l << " vertex " << item.first << " at " << q.x() << " " << q.y() << " " << q.z()
+                              << " has " << item.second.size() << " ring edges" << std::endl;
+                }
         if (gaps > 0) {
             ++stats.brokenLoops;
             stats.gaps += gaps;

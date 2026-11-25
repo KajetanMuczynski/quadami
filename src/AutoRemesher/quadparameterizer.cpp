@@ -317,6 +317,120 @@ namespace {
         return count;
     }
 
+    // Makes the matchings follow the guides (TODO 5.7, research): at a
+    // vertex on two guide edges the grid line that comes in along one must
+    // leave along the other, on both sides, or the vertex is a cone on the
+    // guide or the guide turns a corner of the grid there, and the edge
+    // loop on it ends. Rounding each edge's field turn on its own does not
+    // see that: where a guide turns by more than about 45 degrees within one
+    // edge of T (the ends of a mouth, a ring of a few edges), the turns of
+    // the fan's edges round to a quarter turn too few or too many.
+    //
+    // Per side of such a vertex: the faces from the one at the first guide
+    // edge to the one at the second are joined by the fan's inner edges,
+    // whose rotations must sum to the quarter turns between the guide's
+    // direction in the two faces' frames. Where they do not, one inner edge
+    // is re-rounded by the difference, which moves the cone from the guide
+    // vertex to that edge's other end, a vertex off the guides: the edge
+    // whose field turn is closest to rounding that way. A side of one face
+    // (an ear, two guide edges on one triangle) has no inner edge and is
+    // counted in `stuck`, like one whose inner edges all end on guides.
+    // Marks the re-rounded corners in `rerounded` (sized by the caller).
+    // Returns the number of re-rounded edges.
+    size_t followGuides(const SurfaceMesh& mesh, const std::vector<Vector3>& field,
+        const std::vector<Vector3>& normals, const std::vector<char>& guide,
+        std::vector<int>* rotation, std::vector<char>* rerounded, size_t* guideVertices, size_t* stuck)
+    {
+        const double quarter = .5 * M_PI;
+        const size_t none = SurfaceMesh::npos;
+        const auto edgeAngle = [&](size_t face, const Vector3& edge) {
+            const Vector3 u = field[face], v = Vector3::crossProduct(normals[face], u);
+            return std::atan2(Vector3::dotProduct(edge, v), Vector3::dotProduct(edge, u));
+        };
+        const auto residual = [&](size_t c) {
+            const Vector3 edge = mesh.edgeVector(c);
+            const double turn = edgeAngle(mesh.cornerFace(c), edge) - edgeAngle(mesh.cornerFace(mesh.oppositeCorner(c)), edge)
+                + quarter * (*rotation)[c];
+            return std::remainder(turn, 2.0 * M_PI);
+        };
+        // The frame axis of `face` nearest to `direction`: 0 u, 1 v, 2 -u, 3 -v.
+        const auto axis = [&](size_t face, const Vector3& direction) {
+            return (int)(std::lround(edgeAngle(face, direction) / quarter) % 4 + 4) % 4;
+        };
+        std::vector<unsigned char> guideDegree(mesh.vertexCount(), 0);
+        for (size_t c = 0; c < mesh.cornerCount(); ++c)
+            if (guide[c] && guideDegree[mesh.cornerVertex(c)] < 255)
+                ++guideDegree[mesh.cornerVertex(c)];
+        *guideVertices = 0;
+        *stuck = 0;
+        size_t count = 0;
+        for (size_t vertex = 0; vertex < mesh.vertexCount(); ++vertex) {
+            if (2 != guideDegree[vertex])
+                continue;
+            const auto& fan = mesh.cornersAroundVertex(vertex);
+            size_t ends[2] = { none, none };
+            bool boundary = false;
+            for (const size_t c : fan) {
+                boundary = boundary || none == mesh.oppositeCorner(c);
+                if (guide[c])
+                    ends[none == ends[0] ? 0 : 1] = c;
+            }
+            if (boundary || none == ends[1])
+                continue;
+            ++*guideVertices;
+            for (size_t side = 0; side < 2; ++side) {
+                const size_t first = ends[side], last = ends[1 - side];
+                // The corners of this side's faces, from the face across
+                // the first guide edge to the face at the second.
+                std::vector<size_t> corners;
+                size_t c = mesh.nextCorner(mesh.oppositeCorner(first));
+                for (size_t step = 0; step <= fan.size(); ++step) {
+                    corners.push_back(c);
+                    if (c == last)
+                        break;
+                    c = mesh.nextCorner(mesh.oppositeCorner(c));
+                }
+                if (corners.back() != last)
+                    continue;
+                // The guide's direction through the vertex, in the frames of
+                // the side's first and last face.
+                const int in = axis(mesh.cornerFace(corners.front()), -mesh.edgeVector(first));
+                const int out = axis(mesh.cornerFace(last), mesh.edgeVector(last));
+                int sum = 0;
+                for (size_t i = 0; i + 1 < corners.size(); ++i)
+                    sum += (*rotation)[corners[i]];
+                // A chart direction of axis k in a face is axis k - r in the
+                // face before it (quarterTurn[r] turns by -r quarter turns).
+                const int difference = ((out - in - sum) % 4 + 4) % 4;
+                if (0 == difference)
+                    continue;
+                const int change = 3 == difference ? -1 : difference;
+                size_t best = none;
+                double bestCost = 0.0;
+                for (size_t i = 0; i + 1 < corners.size(); ++i) {
+                    const size_t inner = corners[i];
+                    if ((*rerounded)[inner] || 0 != guideDegree[mesh.cornerVertex(mesh.nextCorner(inner))])
+                        continue;
+                    const double cost = std::fabs(residual(inner) + quarter * change);
+                    if (none == best || cost < bestCost) {
+                        best = inner;
+                        bestCost = cost;
+                    }
+                }
+                if (none == best) {
+                    ++*stuck;
+                    continue;
+                }
+                const size_t opposite = mesh.oppositeCorner(best);
+                (*rotation)[best] = (((*rotation)[best] + change) % 4 + 4) % 4;
+                (*rotation)[opposite] = (4 - (*rotation)[best]) % 4;
+                (*rerounded)[best] = (*rerounded)[opposite] = 1;
+                ++count;
+            }
+        }
+        return count;
+    }
+
     std::vector<signed char> computeCornerConstraints(const SurfaceMesh& mesh,
         const std::vector<Vector3>& field, const std::vector<Vector3>& normals, const std::vector<char>& hardCorners)
     {
@@ -1418,6 +1532,15 @@ namespace {
                 belowHalf += value < 0.5;
                 belowOne += value < 0.99;
             }
+            if (nullptr != std::getenv("AUTOREMESHER_GUIDE_SEPARATION_DEBUG"))
+                for (const GuideSeparation& separation : separations) {
+                    const Vector3& p = mesh.position(separation.cone);
+                    int sum = 0;
+                    for (size_t c : mesh.cornersAroundVertex(separation.cone))
+                        sum = (sum + rotation[c]) % 4;
+                    std::cerr << prefix << " separation: cone " << separation.cone << " index " << sum << " at " << p.x() << " " << p.y() << " " << p.z()
+                              << " faces " << separation.faces << " rows " << separationValue(separation) << std::endl;
+                }
             result->set(prefix + "_guide_separation_min", smallest);
             result->set(prefix + "_guide_separation_below_half", (double)belowHalf);
             result->set(prefix + "_guide_separation_below_one", (double)belowOne);
@@ -1825,9 +1948,27 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     std::vector<int> rotation = computeCornerRotations(mesh, result->field, normals);
     std::vector<signed char> cornerConstraints = computeCornerConstraints(mesh, result->field,
         normals, hardCorners);
+    const std::vector<char> guideCorners = featureCornerFlags(mesh, hardEdges, FeatureEdgeSet::Hard);
+    const bool hasGuides = std::find(guideCorners.begin(), guideCorners.end(), 1) != guideCorners.end();
+    std::vector<char> followed(corners, 0);
+    if (hasGuides) {
+        const char* follow = std::getenv("AUTOREMESHER_GUIDE_FOLLOW");
+        if (nullptr != follow && std::string("1") == follow) {
+            size_t guideVertices = 0, stuck = 0;
+            const size_t turned = followGuides(mesh, result->field, normals, guideCorners, &rotation, &followed,
+                &guideVertices, &stuck);
+            DiagnosticRecord record("guide_follow");
+            record.set("guide_vertices", (double)guideVertices);
+            record.set("rerounded_edges", (double)turned);
+            record.set("stuck_sides", (double)stuck);
+            result->diagnostics.push_back(std::move(record));
+        }
+    }
     std::vector<char> rerounded;
     const size_t reroundedEdges = raiseSmallConeAngles(mesh, result->field, normals, cornerConstraints,
         &rotation, &rerounded);
+    for (size_t c = 0; c < corners; ++c)
+        rerounded[c] = rerounded[c] || followed[c];
     const std::vector<char> acute = acuteSectorCorners(mesh, hardCorners, scale);
     result->diagnostics.push_back(creaseConstraintRecord(mesh, hardCorners, cornerConstraints, rerounded, acute));
     // A hard edge's constraint follows the field, which a re-rounded edge
@@ -1849,8 +1990,6 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     result->diagnostics.push_back(std::move(curlDiagnostics));
     const std::vector<char> seam = computeSeam(mesh, rotation);
 
-    const std::vector<char> guideCorners = featureCornerFlags(mesh, hardEdges, FeatureEdgeSet::Hard);
-    const bool hasGuides = std::find(guideCorners.begin(), guideCorners.end(), 1) != guideCorners.end();
     const CoverContext ctx { mesh, result->field, normals, rotation, seam, cornerConstraints,
         activeScalingU, activeScalingV, faceScaling, scale, planFaceEdges, hasGuides ? &guideCorners : nullptr };
 

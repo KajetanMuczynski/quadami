@@ -2979,6 +2979,13 @@ bool AutoRemesher::remeshIslands()
                     const size_t markedBad = badFaces(islandRuns[i], &markedFaithful, islandContexes[i], &markedFlags);
                     if (markedFaithful && 0 == markedBad)
                         continue;
+                    // Research: AUTOREMESHER_MARKED_FALLBACK=off keeps the
+                    // marked run whatever its bad faces.
+                    {
+                        const char* fallback = std::getenv("AUTOREMESHER_MARKED_FALLBACK");
+                        if (nullptr != fallback && std::string("off") == fallback)
+                            continue;
+                    }
                     IslandContext ctx;
                     buildIslandContext(i, ctx);
                     ctx.voxelSize = islandContexes[i].voxelSize;
