@@ -219,7 +219,7 @@ original is still in the file either way.
 
 ## 4. The settings
 
-The panel shows three settings and **Follow Marks**, then a folded **Advanced** section (click it to open). Start with the
+The panel shows three settings, **Symmetry** ([below](#symmetry-remesh-one-side-and-mirror-it)) and **Follow Marks**, then a folded **Advanced** section (click it to open). Start with the
 defaults and change one thing at a time.
 
 | Setting | Default | What it does | When to change it |
@@ -236,6 +236,38 @@ defaults and change one thing at a time.
 
 Settings other than these defaults work, but the project's quality targets are checked at the defaults,
 so expect a bit more variation.
+
+### Symmetry: remesh one side and mirror it
+
+Under the main settings, **Symmetry X / Y / Z** makes the result exactly symmetric across that plane of the
+object: the add-on cuts the model at the plane, remeshes the kept side at half the Target Quads (a quarter for
+two planes) and mirrors it back. The two halves are welded: the result has no seam hole, and its edge loops
+cross the plane without a kink.
+
+1. Select the model and click **X** (or Y, Z) under **Symmetry**. The planes go through the object's origin, in
+   the object's own axes (as Blender's Mirror modifier does).
+2. **Keep** picks the side that is remeshed and copied: **+** keeps the +X side, **-** the -X side.
+3. Click **Remesh**. Target Quads still counts the whole result.
+
+What to know:
+
+- **The result copies the kept side.** Where the two sides of your model differ (an asymmetric sculpt, a
+  pose, a scar on one cheek), the other side's shape is lost. **Check Symmetry** measures how far the sides
+  differ and says so in the panel; Remesh checks it too and warns above about 3 % of the model's size. The
+  add-on never averages the sides.
+- **Keep matters.** Folds and lost thin parts are copied with the side. On a test head at 10,000 quads,
+  keeping -X gave about 4 folded quads and keeping +X about 19 (without Symmetry: 9); at 3,000 it was the
+  other way round. If the result has folds, try the other side.
+- **Origin.** If the model is symmetric but its origin is not in the middle, the check says where the middle
+  is: turn on **Fit Plane** to cut there, or move the origin (Object > Set Origin).
+- **Mirror modifier.** If the object has a Mirror modifier, or Symmetry X/Y/Z turned on in Sculpt or Edit Mode,
+  the panel offers **Use Object's Symmetry** to turn on the same axes. The modifier itself is still applied
+  before remeshing (the remesher always reads the model as you see it), so without Symmetry the result is only
+  roughly symmetric.
+- It is usually faster than a normal Remesh (about half the time at 8,000-10,000 quads), since only one side is
+  solved.
+- At low Target Quads, a sharp tip that crosses the plane (a nose, a chin) can come out a little blunter
+  than without Symmetry.
 
 ### Guides: edge loops where you want them
 

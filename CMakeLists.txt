@@ -83,6 +83,7 @@ add_library(autoremesher_core STATIC
     src/AutoRemesher/singularitysimplifier.cpp
     src/AutoRemesher/surfacemesh.cpp
     src/AutoRemesher/surfaceprojector.cpp
+    src/AutoRemesher/symmetry.cpp
     src/AutoRemesher/thinparts.cpp
     src/AutoRemesher/inputsanitizer.cpp
     src/AutoRemesher/untangler.cpp

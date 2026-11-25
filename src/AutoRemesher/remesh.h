@@ -19,6 +19,7 @@
 #ifndef AUTO_REMESHER_REMESH_H
 #define AUTO_REMESHER_REMESH_H
 #include <AutoRemesher/Diagnostics>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -36,7 +37,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 16;
+const int InterfaceVersionMinor = 17;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -109,6 +110,14 @@ struct RemeshParameters {
     // the parts an earlier run at this target lost came back.  Changes no
     // output geometry.
     uint32_t lostPartsReferenceTarget = 0;
+    // Since 1.17.  Mirror symmetry (symmetry.h): bit 0 X, bit 1 Y, bit 2 Z.
+    // Each plane axis = symmetryCenter[axis] cuts the input; the positive
+    // side is remeshed (the negative where symmetryKeepNegative has the bit)
+    // at targetQuadCount / 2 per plane, and the result is that part with its
+    // mirror images, welded along the planes.  0: no symmetry.
+    uint32_t symmetryAxes = 0;
+    uint32_t symmetryKeepNegative = 0;
+    std::array<double, 3> symmetryCenter { { 0.0, 0.0, 0.0 } };
 };
 
 struct RemeshRequest {
@@ -309,6 +318,27 @@ struct QualityReport {
     size_t collapsedIslandCount = 0;
     size_t smallestCollapsedIslandFaces = 0;
     size_t smallestCollapsedIslandTargetQuads = 0;
+    // Since 1.17.  With RemeshParameters::symmetryAxes (0 without): the
+    // planes, the input triangles lying in a plane (dropped), the marked
+    // edges on the dropped sides, the seam vertices, the border arcs pulled
+    // onto a plane (notches: the remeshed part's border cut a corner of the
+    // cross-section) and the deepest in mean edge lengths, inner vertices
+    // that had crossed a plane, faces dropped because they lay in it, seam
+    // vertices moved to straighten the edge paths across, and border edges
+    // left on a plane (holes: the halves did not join there).  The other
+    // counts are of the whole result, except the island, handle and
+    // lost-part counts, which are of the remeshed part.
+    uint32_t symmetryAxes = 0;
+    size_t symmetryInPlaneTriangleCount = 0;
+    size_t symmetryDroppedFeatureEdgeCount = 0;
+    size_t symmetrySeamVertexCount = 0;
+    size_t symmetryNotchCount = 0;
+    double symmetryNotchDepthMax = 0.0;
+    size_t symmetryCrossedVertexCount = 0;
+    size_t symmetryFlatFaceCount = 0;
+    size_t symmetryPinnedCornerCount = 0;
+    size_t symmetryStraightenedVertexCount = 0;
+    size_t symmetryOpenSeamEdgeCount = 0;
     // Wall time of the whole call.
     double seconds = 0.0;
     // Per-step times summed over the islands, in pipeline order.

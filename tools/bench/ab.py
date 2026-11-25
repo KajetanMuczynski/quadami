@@ -219,6 +219,17 @@ def prepare_input(src, work, timeout=None):
         pass
 
 
+def sym_plane(mesh, src):
+    """The mesh's mirror plane from corpus.json ("sym": [axis, centre]) as (axis, float centre); a centre
+    "auto" is the bounding-box centre on that axis, as run_corpus.py does."""
+    axis, center = mesh["sym"]
+    if center == "auto":
+        col = "xyz".index(axis) + 1
+        xs = [float(line.split()[col]) for line in open(src) if line.startswith("v ")]
+        center = (min(xs) + max(xs)) / 2
+    return axis, float(center)
+
+
 def cli_value(args, flag):
     """Value of a CLI flag given as `flag value` or `flag=value` (the CLI accepts both), else None."""
     value = None
@@ -244,12 +255,8 @@ def measure(rec, d, mesh, target, src, work, timeout=None):
     cmd = [sys.executable, METRICS, "--input", src, "--output", os.path.join(d, "out.obj"),
            "--target-quads", str(target), "--samples", "100000", "--json", mj, "--input-cache", metrics_cache(work)]
     if mesh.get("sym"):
-        axis, center = mesh["sym"]
-        if center == "auto":  # bounding-box centre on that axis, as run_corpus.py does
-            col = "xyz".index(axis) + 1
-            xs = [float(line.split()[col]) for line in open(src) if line.startswith("v ")]
-            center = (min(xs) + max(xs)) / 2
-        cmd += ["--sym-axis", axis, "--sym-center", repr(float(center))]
+        axis, center = sym_plane(mesh, src)
+        cmd += ["--sym-axis", axis, "--sym-center", repr(center)]
     sharp = cli_value(rec.get("cli_args") or [], "--sharp-edge")
     if sharp is not None:  # A1theta and bent quads at the run's own sharp-edge angle
         cmd += ["--sharp-degrees", sharp]
@@ -376,6 +383,13 @@ def run_one(cli, mesh, setname, target, res, k, out, cli_args, work, metrics, jo
     if any("{input_cache}" in arg for arg in cli_args):
         os.makedirs(os.path.dirname(cache), exist_ok=True)
     cli_args = [arg.replace("{input_cache}", cache) for arg in cli_args]
+    # {sym_axis} and {sym_center}: the mesh's mirror plane from corpus.json, for a symmetry option or
+    # tools/symmetry/sym_remesh.py run with --app. A mesh without "sym" cannot take them.
+    if any("{sym_" in arg for arg in cli_args):
+        if not mesh.get("sym"):
+            sys.exit(f"{mesh['id']} has no \"sym\" plane in the corpus, but a CLI argument asks for it")
+        axis, center = sym_plane(mesh, src)
+        cli_args = [arg.replace("{sym_axis}", axis).replace("{sym_center}", repr(center)) for arg in cli_args]
     env = None
     if app:  # the Qt app's headless mode; it has no --resolution
         cmd = [cli, "-i", inp, "-o", os.path.join(d, "out.obj"), "--report", os.path.join(d, "report.txt"),
