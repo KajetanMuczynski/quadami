@@ -36,6 +36,25 @@ public:
     explicit MixedIntegerLeastSquares(size_t variableCount);
     ~MixedIntegerLeastSquares();
     void setVariablePeriod(size_t variable, int period);
+    // A lower bound on an integer variable (one with a period): rounding
+    // fixes it at the nearest lattice value that is not below the bound,
+    // and fixes it first when the relaxed value would round below it. This
+    // is how an inequality enters a solver that only has equalities: the
+    // variable is a difference of others (one constraint row), and the
+    // bound picks the value it is made equal to. The elimination keeps a
+    // bounded variable as a kernel variable where it can; boundedKernel-
+    // VariableCount() says how many it kept. Call before finalizeConstraints().
+    void setVariableLowerBound(size_t variable, double bound);
+    size_t boundedKernelVariableCount() const
+    {
+        return m_boundedKernelVariables;
+    }
+    // Bounded variables rounding fixed at their bound because the relaxed
+    // value would have rounded below it.
+    size_t raisedToBoundCount() const
+    {
+        return m_raisedToBound;
+    }
     void addConstraint(const std::vector<std::pair<size_t, double>>& coefficients);
     void addConstraint(size_t firstVariable, double firstCoefficient);
     void addConstraint(size_t firstVariable, double firstCoefficient,
@@ -186,6 +205,14 @@ private:
     SparseMatrix m_m2, m_m2t;
     std::vector<int> m_period;
     std::vector<int> m_initialPeriod;
+    // Lower bounds as set, per original variable (NaN: none); per variable
+    // of the pass-2 elimination whether it is bounded (kept as a pivot's
+    // survivor); per kernel variable its bound (-infinity: none).
+    std::vector<double> m_initialLower;
+    std::vector<char> m_keep;
+    std::vector<double> m_lower;
+    size_t m_boundedKernelVariables = 0;
+    size_t m_raisedToBound = 0;
     std::vector<Coeff> m_pendingConstraint;
     // The constraints as added, kept for constraintResidual(): constraint i
     // is m_constraintData[m_constraintStart[i], m_constraintStart[i + 1]).

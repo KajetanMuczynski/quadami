@@ -66,6 +66,7 @@ add_library(autoremesher_core STATIC
     src/AutoRemesher/envelope.cpp
     src/AutoRemesher/featureedges.cpp
     src/AutoRemesher/foldrepair.cpp
+    src/AutoRemesher/guiderings.cpp
     src/AutoRemesher/inputcache.cpp
     src/AutoRemesher/framefield.cpp
     src/AutoRemesher/isotropicremesher.cpp

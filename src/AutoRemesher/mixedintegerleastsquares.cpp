@@ -153,6 +153,15 @@ void MixedIntegerLeastSquares::setVariablePeriod(size_t variable, int period)
     }
 }
 
+void MixedIntegerLeastSquares::setVariableLowerBound(size_t variable, double bound)
+{
+    if (variable >= m_size)
+        return;
+    if (m_initialLower.empty())
+        m_initialLower.assign(m_size, std::numeric_limits<double>::quiet_NaN());
+    m_initialLower[variable] = bound;
+}
+
 void MixedIntegerLeastSquares::recordConstraint()
 {
     normalize(&m_constraintScratch);
@@ -243,6 +252,19 @@ void MixedIntegerLeastSquares::finalizeConstraints()
     m_constraintStart.shrink_to_fit();
 
     buildKernel();
+
+    // A bounded variable the elimination left as a kernel variable of its
+    // own carries its bound there.
+    m_lower.assign(m_kernelSize, -std::numeric_limits<double>::infinity());
+    for (size_t i = 0; i < m_initialLower.size(); ++i) {
+        if (std::isnan(m_initialLower[i]))
+            continue;
+        const std::vector<Coeff>& terms = kernelLine(i);
+        if (1 == terms.size() && std::fabs(terms[0].a - 1.0) < 1e-9 && m_period[terms[0].index] > 0) {
+            m_lower[terms[0].index] = std::max(m_lower[terms[0].index], m_initialLower[i]);
+            ++m_boundedKernelVariables;
+        }
+    }
 
     m_reducedEnergy.clear();
     m_reducedEnergy.reserve(m_energy.size());
@@ -343,6 +365,10 @@ void MixedIntegerLeastSquares::finalizeM1()
         m_m1[i].index = g;
     }
     m_period.swap(period);
+    m_keep.assign(n, 0);
+    for (size_t i = 0; i < m_initialLower.size(); ++i)
+        if (!std::isnan(m_initialLower[i]) && m_m0[i] != noIndex)
+            m_keep[m_m1[m_m0[i]].index] = 1;
     m_m2.rows.resize(n);
     m_m2t.rows.resize(n);
     for (size_t i = 0; i < n; ++i) {
@@ -416,9 +442,16 @@ bool MixedIntegerLeastSquares::processConstraint(const std::vector<Coeff>& row)
     if (r2.empty())
         return true;
     if (m_pass == 2) {
+        // A bounded variable is removed only when the row has no other:
+        // rounding can hold a bound on a kernel variable only.
+        const auto before = [this, &r2](size_t i, size_t j) {
+            if (m_keep[r2[i].index] != m_keep[r2[j].index])
+                return !m_keep[r2[i].index];
+            return double(m_period[r2[i].index]) * std::fabs(r2[i].a) < double(m_period[r2[j].index]) * std::fabs(r2[j].a);
+        };
         size_t remove = 0;
         for (size_t i = 1; i < r2.size(); ++i)
-            if (double(m_period[r2[i].index]) * std::fabs(r2[i].a) < double(m_period[r2[remove].index]) * std::fabs(r2[remove].a))
+            if (before(i, remove))
                 remove = i;
         applyRemoveColumn(r2, remove);
         return true;
@@ -493,6 +526,30 @@ void MixedIntegerLeastSquares::fixNextBatch(IterationStats* stats)
     // them on the plane at 2000 quads, which then took 6 passes, not 10).
     // Ties are broken by index, so the result does not depend on anything
     // but the input.
+    // The lattice value a variable is fixed at: the nearest one that is not
+    // below its bound.
+    const auto target = [this](size_t i) {
+        const double period = double(m_period[i]);
+        const double nearest = period * std::round(m_values[i] / period);
+        if (nearest >= m_lower[i])
+            return nearest;
+        return period * std::ceil(m_lower[i] / period - 1e-9);
+    };
+    // A bounded variable whose relaxed value would round below its bound is
+    // fixed at the bound at once, whatever the batch: the bound is active
+    // (the relaxed optimum lies outside it), and everything else should
+    // adapt to it before it is rounded in turn.
+    for (size_t i = 0; i < m_kernelSize; ++i) {
+        if (m_period[i] <= 0 || m_fixed[i] || std::isinf(m_lower[i]))
+            continue;
+        const double value = target(i);
+        if (value == double(m_period[i]) * std::round(m_values[i] / double(m_period[i])))
+            continue;
+        m_fixed[i] = true;
+        m_fixedValue[i] = value;
+        ++m_raisedToBound;
+        ++stats->newlyFixed;
+    }
     std::vector<std::pair<double, size_t>> candidates;
     for (size_t i = 0; i < m_kernelSize; ++i) {
         if (m_period[i] <= 0 || m_fixed[i])
@@ -500,8 +557,11 @@ void MixedIntegerLeastSquares::fixNextBatch(IterationStats* stats)
         const double x = m_values[i] / m_period[i];
         candidates.push_back({ std::fabs(x - std::round(x)), i });
     }
-    if (candidates.empty())
+    if (candidates.empty()) {
+        if (stats->newlyFixed > 0)
+            stats->meanRoundingShift /= (double)stats->newlyFixed;
         return;
+    }
     std::sort(candidates.begin(), candidates.end());
     size_t nearly = 0;
     while (nearly < candidates.size() && candidates[nearly].first <= nearlyIntegral)
@@ -514,7 +574,7 @@ void MixedIntegerLeastSquares::fixNextBatch(IterationStats* stats)
             break;
         const size_t i = candidates[k].second;
         m_fixed[i] = true;
-        m_fixedValue[i] = double(m_period[i]) * std::round(m_values[i] / double(m_period[i]));
+        m_fixedValue[i] = target(i);
         const double shift = candidates[k].first * m_period[i];
         ++stats->newlyFixed;
         stats->maximumRoundingShift = std::max(stats->maximumRoundingShift, shift);

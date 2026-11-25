@@ -36,6 +36,7 @@
 #include <limits>
 #include <memory>
 #include <queue>
+#include <string>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 
@@ -114,6 +115,8 @@ namespace {
         // Set in a plan: the first (continuous) solve's quad edge per face,
         // then the solve stops.
         std::vector<double>* planFaceEdges;
+        // Per corner: on a user-marked hard edge (a guide), or null.
+        const std::vector<char>* guideCorners;
     };
 
     void initializeFieldAndNormals(const SurfaceMesh& mesh, const std::vector<Vector3>* guidance,
@@ -952,6 +955,9 @@ namespace {
     // times the final flips but did not lower folded quads and SJ <= 0; with
     // alignment 10, 2 rings gave flips x0.29, non-quads x0.64, folded quads
     // x0.80 and SJ <= 0 x0.79 (geometric means) for about 4 % of the run.
+    // How far from a guide, in faces of T, a cone gets a separation.
+    const size_t guideSeparationReach = 8;
+
     const size_t untangleRings = 2;
     const double untangleAlignment = 10.0;
 
@@ -1227,6 +1233,140 @@ namespace {
         result->set("untangle_factorizations", (double)factorizations);
     }
 
+    // How many rows of quads lie between a guide and a cone next to it
+    // (TODO 5.7, research). A guide edge with an isoline constraint lies on
+    // an integer grid line, and so does every cone, so in the chart of the
+    // face at the guide the cone's coordinate across the guide differs
+    // from the guide's by an integer d: the rows between them. d = 0 puts
+    // the cone on the guide's grid line although it is not on the guide,
+    // which collapses the triangles between them, and the extracted edge
+    // loop on the guide then runs into a pole; d < 0 folds them. A valid
+    // map has d >= 1 on the side the face is on.
+    //
+    // d is linear in the unknowns: the cone's uv at one of its corners,
+    // carried into the guide face's chart by the transitions of the faces
+    // between (quarter turns and translations), minus the guide's
+    // coordinate. `row` is that expression, sign included.
+    struct GuideSeparation {
+        size_t cone = 0;
+        size_t guideCorner = 0;
+        size_t faces = 0;
+        std::vector<std::pair<size_t, double>> row;
+    };
+
+    // The separations of the cones within `reach` faces of a constrained
+    // guide edge, each from the nearest guide face (breadth first over the
+    // faces, never across a constrained edge, so always on one side).
+    // `conesOnGuides` counts the cones that are guide vertices: they have
+    // no separation, the guide turns there.
+    std::vector<GuideSeparation> guideSeparations(const CoverContext& ctx, const std::vector<FaceFrame>& frames,
+        size_t uvVariables, size_t reach, size_t* conesOnGuides)
+    {
+        std::vector<GuideSeparation> separations;
+        *conesOnGuides = 0;
+        if (nullptr == ctx.guideCorners)
+            return separations;
+        const SurfaceMesh& mesh = ctx.mesh;
+        const std::vector<char>& guide = *ctx.guideCorners;
+        const size_t none = SurfaceMesh::npos;
+        struct Chart {
+            size_t source = SurfaceMesh::npos;
+            size_t depth = 0;
+            // The coordinate across the guide, in the source face's chart,
+            // of a point with uv (u, v) in this face's chart:
+            // weight[0] u + weight[1] v + terms.
+            double weight[2] = { 0.0, 0.0 };
+            std::vector<std::pair<size_t, double>> terms;
+        };
+        std::vector<Chart> charts(mesh.faceCount());
+        std::vector<char> onGuide(mesh.vertexCount(), 0);
+        std::queue<size_t> queue;
+        for (size_t c = 0; c < mesh.cornerCount(); ++c) {
+            if (!guide[c] || none == mesh.oppositeCorner(c))
+                continue;
+            onGuide[mesh.cornerVertex(c)] = onGuide[mesh.cornerVertex(mesh.nextCorner(c))] = 1;
+            const size_t f = mesh.cornerFace(c);
+            if (ConstraintNone == ctx.cornerConstraints[c] || none != charts[f].source)
+                continue;
+            charts[f].source = c;
+            charts[f].weight[ConstraintV == ctx.cornerConstraints[c] ? 1 : 0] = 1.0;
+            queue.push(f);
+        }
+        while (!queue.empty()) {
+            const size_t f = queue.front();
+            queue.pop();
+            if (charts[f].depth >= reach)
+                continue;
+            for (size_t l = 0; l < 3; ++l) {
+                const size_t c = 3 * f + l, oc = mesh.oppositeCorner(c);
+                if (none == oc || guide[c] || ConstraintNone != ctx.cornerConstraints[c]
+                    || ConstraintNone != ctx.cornerConstraints[oc])
+                    continue;
+                const size_t g = mesh.cornerFace(oc);
+                if (none != charts[g].source)
+                    continue;
+                // uv in f = quarterTurn[r] (uv in g) + t(c), as the cover's
+                // transition constraints have it.
+                const int r = (ctx.rotation[c] % 4 + 4) % 4;
+                Chart& next = charts[g];
+                const Chart& here = charts[f];
+                next.source = here.source;
+                next.depth = here.depth + 1;
+                for (size_t j = 0; j < 2; ++j)
+                    next.weight[j] = here.weight[0] * quarterTurn[r][0][j] + here.weight[1] * quarterTurn[r][1][j];
+                next.terms = here.terms;
+                for (size_t i = 0; i < 2; ++i)
+                    if (0.0 != here.weight[i])
+                        next.terms.push_back({ uvVariables + 2 * c + i, here.weight[i] });
+                queue.push(g);
+            }
+        }
+        for (size_t vertex = 0; vertex < mesh.vertexCount(); ++vertex) {
+            const auto& fan = mesh.cornersAroundVertex(vertex);
+            int sum = 0;
+            bool boundary = false;
+            for (size_t c : fan) {
+                sum = (sum + ctx.rotation[c]) % 4;
+                boundary = boundary || none == mesh.oppositeCorner(c);
+            }
+            if (boundary || 0 == sum)
+                continue;
+            if (onGuide[vertex]) {
+                ++*conesOnGuides;
+                continue;
+            }
+            size_t best = none;
+            for (size_t c : fan) {
+                const Chart& chart = charts[mesh.cornerFace(c)];
+                if (none == chart.source)
+                    continue;
+                if (none == best || chart.depth < charts[mesh.cornerFace(best)].depth)
+                    best = c;
+            }
+            if (none == best)
+                continue;
+            const Chart& chart = charts[mesh.cornerFace(best)];
+            const size_t source = chart.source, f0 = mesh.cornerFace(source);
+            const size_t across = ConstraintV == ctx.cornerConstraints[source] ? 1 : 0;
+            // The side the guide's face is on: its third vertex has a larger
+            // or smaller coordinate across the guide than the guide.
+            const Vector2 inward = frames[f0].map(-mesh.edgeVector(mesh.previousCorner(source)));
+            const double sign = (0 == across ? inward.x() : inward.y()) < 0.0 ? -1.0 : 1.0;
+            GuideSeparation separation;
+            separation.cone = vertex;
+            separation.guideCorner = source;
+            separation.faces = chart.depth;
+            for (size_t j = 0; j < 2; ++j)
+                if (0.0 != chart.weight[j])
+                    separation.row.push_back({ 2 * best + j, sign * chart.weight[j] });
+            for (const auto& term : chart.terms)
+                separation.row.push_back({ term.first, sign * term.second });
+            separation.row.push_back({ 2 * source + across, -sign });
+            separations.push_back(std::move(separation));
+        }
+        return separations;
+    }
+
     // Appends "cover_system" and one "rounding_iteration" per pass to
     // `diagnostics`, and fills `result` with the residuals and map validity.
     bool solveQuadCover(const CoverContext& ctx, std::vector<double>* values,
@@ -1247,10 +1387,41 @@ namespace {
                 (*progressHandler)(fraction, name);
         };
         report(0.0f, "Building cover system");
-        MixedIntegerLeastSquares s(variables);
+        const std::vector<FaceFrame> frames = computeFaceFrames(ctx);
+        // Rows of quads between guides and the cones next to them:
+        // measured always; with AUTOREMESHER_GUIDE_SEPARATION=1 each is an
+        // integer variable of its own with the lower bound 1 (research).
+        size_t conesOnGuides = 0;
+        const std::vector<GuideSeparation> separations = guideSeparations(ctx, frames, uvVariables,
+            guideSeparationReach, &conesOnGuides);
+        const char* separationMode = std::getenv("AUTOREMESHER_GUIDE_SEPARATION");
+        const bool separate = nullptr != separationMode && std::string("1") == separationMode && !separations.empty();
+        MixedIntegerLeastSquares s(variables + (separate ? separations.size() : 0));
         for (size_t t = 0; t < 2 * corners; ++t)
             s.setVariablePeriod(uvVariables + t, 2);
-        const std::vector<FaceFrame> frames = computeFaceFrames(ctx);
+        const auto separationValue = [&](const GuideSeparation& separation) {
+            double value = 0.0;
+            for (const auto& term : separation.row)
+                value += term.second * s.value(term.first);
+            return value;
+        };
+        // Count, smallest value, and how many are below half a row (they
+        // round to no row at all) or below 0.99.
+        const auto appendSeparations = [&](const std::string& prefix) {
+            if (separations.empty())
+                return;
+            double smallest = std::numeric_limits<double>::max();
+            size_t belowHalf = 0, belowOne = 0;
+            for (const GuideSeparation& separation : separations) {
+                const double value = separationValue(separation);
+                smallest = std::min(smallest, value);
+                belowHalf += value < 0.5;
+                belowOne += value < 0.99;
+            }
+            result->set(prefix + "_guide_separation_min", smallest);
+            result->set(prefix + "_guide_separation_below_half", (double)belowHalf);
+            result->set(prefix + "_guide_separation_below_one", (double)belowOne);
+        };
         double expectedCells = 0.0;
         for (size_t f = 0; f < mesh.faceCount(); ++f) {
             const FaceFrame& frame = frames[f];
@@ -1364,8 +1535,23 @@ namespace {
                 s.addConstraint(2 * c, 1, 2 * n, -1);
             }
         }
+        if (separate)
+            for (size_t i = 0; i < separations.size(); ++i) {
+                const size_t variable = variables + i;
+                std::vector<std::pair<size_t, double>> row = { { variable, 1.0 } };
+                for (const auto& term : separations[i].row)
+                    row.push_back({ term.first, -term.second });
+                s.setVariablePeriod(variable, 1);
+                s.setVariableLowerBound(variable, 1.0);
+                s.addConstraint(row);
+            }
         report(0.2f, "Eliminating cover constraints");
         s.finalizeConstraints();
+        if (nullptr != ctx.guideCorners) {
+            result->set("guide_separations", (double)separations.size());
+            result->set("guide_separations_bounded", (double)s.boundedKernelVariableCount());
+            result->set("cones_on_guides", (double)conesOnGuides);
+        }
         {
             DiagnosticRecord record("cover_system");
             record.set("faces", (double)mesh.faceCount());
@@ -1415,6 +1601,7 @@ namespace {
                 const std::vector<double> uvs = cornerUvs(s, uvVariables);
                 appendUvOrientation(result, "continuous", measureUvOrientation(uvs));
                 appendWinding(result, "continuous", measureWinding(mesh, rotation, frames, uvs));
+                appendSeparations("continuous");
                 if (nullptr != ctx.planFaceEdges) {
                     // sqrt(3D area / uv area): the edge of a unit cell on the face.
                     ctx.planFaceEdges->assign(mesh.faceCount(), 0.0);
@@ -1448,6 +1635,9 @@ namespace {
             appendSizeFidelity(result, "rounded", mesh, s, faceScaling, scale);
             result->set("rounded_cells", coverCellArea(mesh, s));
             appendWinding(result, "rounded", measureWinding(mesh, rotation, frames, uvs));
+            appendSeparations("rounded");
+            if (separate)
+                result->set("guide_separations_raised", (double)s.raisedToBoundCount());
         }
         report(0.97f, "Untangling cover");
         {
@@ -1659,8 +1849,10 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     result->diagnostics.push_back(std::move(curlDiagnostics));
     const std::vector<char> seam = computeSeam(mesh, rotation);
 
+    const std::vector<char> guideCorners = featureCornerFlags(mesh, hardEdges, FeatureEdgeSet::Hard);
+    const bool hasGuides = std::find(guideCorners.begin(), guideCorners.end(), 1) != guideCorners.end();
     const CoverContext ctx { mesh, result->field, normals, rotation, seam, cornerConstraints,
-        activeScalingU, activeScalingV, faceScaling, scale, planFaceEdges };
+        activeScalingU, activeScalingV, faceScaling, scale, planFaceEdges, hasGuides ? &guideCorners : nullptr };
 
     // The cover solve reports on its own 0..1, so remap it into the tail of this
     // function's range and keep the fractions monotonic end to end.

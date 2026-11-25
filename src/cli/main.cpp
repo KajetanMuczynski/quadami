@@ -22,6 +22,7 @@
 #include "objfile.h"
 #include "stdincontrol.h"
 #include <AutoRemesher/Remesh>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -206,6 +207,22 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
                 std::fprintf(stderr, "Error: --extractor must be qex or trace, not %s\n", value.c_str());
                 return 1;
             }
+        } else if ("--experiment" == name) {
+            // Research switches, NAME=VALUE, read by the core through the
+            // environment (AUTOREMESHER_<NAME>). Not part of the interface.
+            const size_t split = value.find('=');
+            if (std::string::npos == split || 0 == split) {
+                std::fprintf(stderr, "Error: --experiment needs NAME=VALUE, not %s\n", value.c_str());
+                return 1;
+            }
+            std::string variable = "AUTOREMESHER_" + value.substr(0, split);
+            for (char& c : variable)
+                c = '-' == c ? '_' : (char)std::toupper((unsigned char)c);
+#ifdef _WIN32
+            _putenv_s(variable.c_str(), value.substr(split + 1).c_str());
+#else
+            setenv(variable.c_str(), value.substr(split + 1).c_str(), 1);
+#endif
         } else if ("--quad-smoothing" == name) {
             if (!parseQuadSmoothing(value, &parameters.quadSmoothing)) {
                 std::fprintf(stderr, "Error: --quad-smoothing must be laplacian or tangential, not %s\n", value.c_str());

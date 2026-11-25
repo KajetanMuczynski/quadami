@@ -27,6 +27,7 @@
 #include <AutoRemesher/AutoRemesher>
 #include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/FoldRepair>
+#include <AutoRemesher/GuideRings>
 #include <AutoRemesher/InputCache>
 #include <AutoRemesher/IsotropicRemesher>
 #include <AutoRemesher/MeshSeparator>
@@ -2543,6 +2544,39 @@ bool AutoRemesher::remeshIslands()
                     }
                 };
                 std::vector<DiagnosticRecord> finishRecords;
+                // Closed guide loops (TODO 5.7, research): classifies the
+                // output's edge cycle on each guide ring; with
+                // AUTOREMESHER_GUIDE_RINGS=pad also pads the rings that carry
+                // a pole with a row of quads (guiderings.h), =off skips both.
+                const auto padRings = [&](std::vector<Vector3>* positions, std::vector<std::vector<size_t>>* quads,
+                                          std::vector<DiagnosticRecord>* records) {
+                    const char* mode = std::getenv("AUTOREMESHER_GUIDE_RINGS");
+                    if (nullptr != mode && std::string("off") == mode)
+                        return;
+                    const bool pad = nullptr != mode && std::string("pad") == mode;
+                    const GuideRingStats rings = padGuideRings(positions, quads, run.isotropicFeatureEdges,
+                        vertices, triangles, pad);
+                    if (0 == rings.loops)
+                        return;
+                    DiagnosticRecord record("guide_rings");
+                    record.set("loops", (double)rings.loops);
+                    record.set("cycles", (double)rings.cycles);
+                    record.set("broken_loops", (double)rings.brokenLoops);
+                    record.set("gaps", (double)rings.gaps);
+                    record.set("empty_loops", (double)rings.emptyLoops);
+                    record.set("bridged", (double)rings.bridged);
+                    record.set("bridge_distance", rings.bridgeDistance);
+                    record.set("ring_vertices", (double)rings.ringVertices);
+                    record.set("poles", (double)rings.poles);
+                    record.set("bends", (double)rings.bends);
+                    record.set("open_fans", (double)rings.openFans);
+                    record.set("straight_before", (double)rings.straightBefore);
+                    record.set("padded_sides", (double)rings.paddedSides);
+                    record.set("added_faces", (double)rings.addedFaces);
+                    record.set("straight_after", (double)rings.straightAfter);
+                    records->push_back(std::move(record));
+                };
+                padRings(&run.remeshedVertices, &run.remeshedQuads, &finishRecords);
                 finishOnInput(&run.remeshedVertices, run.remeshedQuads, &finishRecords);
                 if (extractor.hasCreaseSlideAlternative()) {
                     // The extractor kept the finish with or without crease
@@ -2557,8 +2591,9 @@ bool AutoRemesher::remeshIslands()
                     // the corset's slides on a whole island). Ties keep the
                     // most slides.
                     std::vector<Vector3> otherVertices = extractor.alternativeVertices();
-                    const auto& otherQuads = extractor.alternativeQuads();
+                    std::vector<std::vector<size_t>> otherQuads = extractor.alternativeQuads();
                     std::vector<DiagnosticRecord> otherRecords;
+                    padRings(&otherVertices, &otherQuads, &otherRecords);
                     finishOnInput(&otherVertices, otherQuads, &otherRecords);
                     const bool slid = 1 == extractor.creaseSlides();
                     const auto badFaces = [](const std::vector<Vector3>& positions,
