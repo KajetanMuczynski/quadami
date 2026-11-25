@@ -557,7 +557,7 @@ namespace {
         size_t moves = 0;
         *stuck = 0;
         for (size_t start = 0; start < n; ++start) {
-            if (!(dist[start] > 0.0) || !(dist[start] < reach))
+            if (!(dist[start] > 0.0 || (std::getenv("AR_PUSH_CHAIN") && dist[start] == 0.0)) || !(dist[start] < reach))
                 continue;
             int q0 = 4;
             if (!FrameField::coneQuarters(mesh, start, residual, &q0) || q0 == 4)
@@ -2090,6 +2090,70 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
             &rotation, &rerounded, &unresolved);
         if (std::getenv("AR_BORDER_DIAG"))
             std::cerr << "BORDER_BAN moved " << banned << " unresolved " << unresolved << std::endl;
+    }
+    // exp/loop-c3 avenue 1: AR_FIX_SWITCH="v u w sign;..." re-rounds one non-hard fan edge of chain vertex v on
+    // the side from edge v->w round to v->u (the side whose map angle is one quarter short), by sign quarters.
+    // The edge with the largest field residual is picked; the cone this puts on v is then pushed off the chain.
+    if (const char* fixText = std::getenv("AR_FIX_SWITCH")) {
+        const double quarter = .5 * M_PI;
+        const auto edgeAngle = [&](size_t face, const Vector3& edge) {
+            const Vector3 u = result->field[face], v = Vector3::crossProduct(normals[face], u);
+            return std::atan2(Vector3::dotProduct(edge, v), Vector3::dotProduct(edge, u));
+        };
+        const auto residual = [&](size_t c) {
+            const Vector3 edge = mesh.edgeVector(c);
+            double turn = edgeAngle(mesh.cornerFace(c), edge) - edgeAngle(mesh.cornerFace(mesh.oppositeCorner(c)), edge)
+                + quarter * rotation[c];
+            return std::remainder(turn, 2.0 * M_PI);
+        };
+        std::string text(fixText);
+        size_t pos = 0;
+        while (pos < text.size()) {
+            size_t end = text.find(';', pos);
+            if (end == std::string::npos)
+                end = text.size();
+            unsigned long v = 0, u = 0, w = 0;
+            int sign = 0;
+            if (4 == std::sscanf(text.substr(pos, end - pos).c_str(), "%lu %lu %lu %d", &v, &u, &w, &sign)) {
+                // walk ccw around v from the corner whose edge is v->w until the edge v->u
+                size_t start = SurfaceMesh::npos;
+                for (const size_t c : mesh.cornersAroundVertex(v))
+                    if (mesh.cornerVertex(mesh.nextCorner(c)) == w)
+                        start = c;
+                size_t best = SurfaceMesh::npos;
+                double bestAbs = -1.0;
+                size_t c = start;
+                for (size_t step = 0; c != SurfaceMesh::npos && step < 64; ++step) {
+                    const size_t prevCorner = mesh.previousCorner(c); // edge from prev vertex to v
+                    if (mesh.cornerVertex(prevCorner) == u)
+                        break;
+                    // edge v -> cornerVertex(prevCorner) is shared with the next face around v
+                    const size_t edgeCorner = prevCorner; // corner of edge prev->v in this face
+                    const size_t oc = mesh.oppositeCorner(edgeCorner);
+                    if (oc != SurfaceMesh::npos && ConstraintNone == cornerConstraints[edgeCorner] && ConstraintNone == cornerConstraints[oc]) {
+                        const double r = std::fabs(residual(edgeCorner));
+                        if (r > bestAbs) {
+                            bestAbs = r;
+                            best = edgeCorner;
+                        }
+                    }
+                    if (oc == SurfaceMesh::npos)
+                        break;
+                    c = oc;
+                    if (mesh.cornerVertex(c) != v)
+                        break;
+                }
+                if (best != SurfaceMesh::npos) {
+                    const size_t oc = mesh.oppositeCorner(best);
+                    rotation[best] = ((rotation[best] + sign) % 4 + 4) % 4;
+                    rotation[oc] = (4 - rotation[best]) % 4;
+                    rerounded[best] = rerounded[oc] = 1;
+                }
+                std::cerr << "FIX_SWITCH v " << v << " edge " << (best == SurfaceMesh::npos ? -1L : (long)best)
+                          << " residual_deg " << bestAbs * 180.0 / M_PI << std::endl;
+            }
+            pos = end + 1;
+        }
     }
     if (const char* reachText = std::getenv("AR_BORDER_PUSH")) {
         size_t stuck = 0;
