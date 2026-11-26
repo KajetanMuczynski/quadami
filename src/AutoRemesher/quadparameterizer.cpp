@@ -519,7 +519,7 @@ namespace {
     // research/crease-preservation-2026-10-26.md).
     DiagnosticRecord creaseConstraintRecord(const SurfaceMesh& mesh, const std::vector<char>& hardCorners,
         const std::vector<signed char>& cornerConstraints, const std::vector<char>& rerounded,
-        const std::vector<char>& acute)
+        const std::vector<char>& acute, const char* stage = "crease_constraints")
     {
         double hard = 0.0, constrained = 0.0, misaligned = 0.0, droppedRerounded = 0.0, droppedAcute = 0.0;
         size_t hardEdges = 0;
@@ -540,7 +540,7 @@ namespace {
                 constrained += length;
         }
         const double edge = mesh.averageEdgeLength() > 0.0 ? mesh.averageEdgeLength() : 1.0;
-        DiagnosticRecord record("crease_constraints");
+        DiagnosticRecord record(stage);
         record.set("hard_edges", (double)hardEdges);
         record.set("hard_rel_edge", hard / edge);
         record.set("constrained_rel_edge", constrained / edge);
@@ -1969,7 +1969,19 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
         &rotation, &rerounded);
     for (size_t c = 0; c < corners; ++c)
         rerounded[c] = rerounded[c] || followed[c];
-    const std::vector<char> acute = acuteSectorCorners(mesh, hardCorners, scale);
+    std::vector<char> acute = acuteSectorCorners(mesh, hardCorners, scale);
+    if (hasGuides) {
+        // What became of the guides' edges alone (research, TODO 5.7), as
+        // the rule stands; then, with AUTOREMESHER_GUIDE_ACUTE=keep, a guide
+        // edge keeps its isoline next to an acute corner of other edges.
+        result->diagnostics.push_back(creaseConstraintRecord(mesh, guideCorners, cornerConstraints, rerounded, acute,
+            "guide_constraints"));
+        const char* keep = std::getenv("AUTOREMESHER_GUIDE_ACUTE");
+        if (nullptr != keep && std::string("keep") == keep)
+            for (size_t c = 0; c < corners; ++c)
+                if (guideCorners[c])
+                    acute[c] = 0;
+    }
     result->diagnostics.push_back(creaseConstraintRecord(mesh, hardCorners, cornerConstraints, rerounded, acute));
     // A hard edge's constraint follows the field, which a re-rounded edge
     // no longer does: on that edge the two faces could ask for different
