@@ -317,6 +317,13 @@ GuideRingStats padGuideRings(std::vector<Vector3>* positions, std::vector<std::v
     stats.loops = loops.size();
     if (loops.empty())
         return stats;
+    if (nullptr != std::getenv("AUTOREMESHER_GUIDE_RINGS_DEBUG"))
+        for (size_t l = 0; l < loops.size(); ++l) {
+            std::cerr << "guide chain: loop " << l;
+            for (const size_t v : loops[l].vertices)
+                std::cerr << " " << triangleVertices[v].x() << "," << triangleVertices[v].y() << "," << triangleVertices[v].z();
+            std::cerr << std::endl;
+        }
 
     // The output vertices on each loop, by arc length along it.
     const double meanLength = featureEdgeLength(featureEdges, triangleVertices) / featureEdges.size();
