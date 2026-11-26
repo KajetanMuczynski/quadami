@@ -1377,6 +1377,11 @@ bool AutoRemesher::decimateIfTooDense(std::vector<Vector3>& vertices,
 
     if ((double)triangles.size() < islandTargetTriangleCount * decimateTriggerRatio)
         return false;
+    // Research (TODO 5.7, --experiment decimate=off): the remesh takes the
+    // dense input as it is.
+    if (const char* decimate = std::getenv("AUTOREMESHER_DECIMATE"))
+        if (std::string("off") == decimate)
+            return false;
 
     const size_t decimateTriangleCount = (size_t)(islandTargetTriangleCount * decimateTargetRatio);
 
