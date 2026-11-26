@@ -123,6 +123,19 @@ constexpr double kFoldNormalAngleDegrees = 170.0;
 // one; a fold kept through the remesh folds the map.  Before 2.5 the
 // remesher's flips and relaxation erased them.  `dropped` counts the
 // dropped edges.
+// `set` without the detected (not hard) edges that run along a guide: an
+// edge with an end within `reach` of a vertex on a hard edge, and within
+// `maxDegrees` of the hard line's direction there (TODO 5.7, research). A
+// crease that meets or shadows a guide at a narrow angle makes an acute
+// sector with it; the sector rule then takes the isoline off every hard
+// edge near its tip, the guide's included, and the guide's ring is no
+// longer a grid line all the way round. Here the guide wins: the crease
+// gives up its field lock and its isoline next to the guide. A crease that
+// crosses a guide at more than `maxDegrees` stays: two grid lines can cross.
+// `yielded` counts the removed edges.
+FeatureEdgeSet yieldCreasesToGuides(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices,
+    double reach, double maxDegrees, size_t* yielded = nullptr);
+
 FeatureEdgeSet filterDetectedChains(const FeatureEdgeSet& set,
     const std::vector<Vector3>& vertices,
     const std::vector<std::vector<size_t>>& triangles,

@@ -2360,6 +2360,18 @@ bool AutoRemesher::remeshIslands()
         run.features.set("set_t_carried", (double)sharpEdgeStats.carried);
         run.features.set("set_t_classified", (double)sharpEdgeStats.classified);
         run.features.set("set_t_short", (double)sharpEdgeStats.tShort);
+        {
+            // Research (TODO 5.7): AUTOREMESHER_GUIDE_YIELD=<degrees> takes
+            // the detected creases that run along a guide, within that
+            // angle and two quad edges of it, out of T's set.
+            const char* yield = std::getenv("AUTOREMESHER_GUIDE_YIELD");
+            if (nullptr != yield && std::atof(yield) > 0.0) {
+                size_t yielded = 0;
+                run.isotropicFeatureEdges = yieldCreasesToGuides(run.isotropicFeatureEdges, ctx.vertices, 2.0 * h,
+                    std::atof(yield), &yielded);
+                run.features.set("guide_yielded_edges", (double)yielded);
+            }
+        }
         run.features.set("set_t_edges", (double)run.isotropicFeatureEdges.size());
         run.features.set("set_t_length_rel_h", featureEdgeLength(run.isotropicFeatureEdges, ctx.vertices) / h);
         ctx.isotropicMarkedEdgeCount = (size_t)std::count_if(run.isotropicFeatureEdges.flags.begin(),

@@ -193,6 +193,61 @@ FeatureEdgeSet remapFeatureEdges(const FeatureEdgeSet& set,
     return result;
 }
 
+FeatureEdgeSet yieldCreasesToGuides(const FeatureEdgeSet& set, const std::vector<Vector3>& vertices,
+    double reach, double maxDegrees, size_t* yielded)
+{
+    if (nullptr != yielded)
+        *yielded = 0;
+    // The guides' vertices and the line's direction at each.
+    std::unordered_map<size_t, Vector3> direction;
+    bool detected = false;
+    for (size_t e = 0; e < set.size(); ++e) {
+        if (0 == (set.flags[e] & FeatureEdgeSet::Hard)) {
+            detected = true;
+            continue;
+        }
+        const Vector3 along = (vertices[set.edges[e].second] - vertices[set.edges[e].first]).normalized();
+        for (const size_t v : { set.edges[e].first, set.edges[e].second }) {
+            Vector3& sum = direction[v];
+            // The same way round as what is there, so two edges of a line add up.
+            sum += Vector3::dotProduct(sum, along) < 0.0 ? -along : along;
+        }
+    }
+    if (direction.empty() || !detected)
+        return set;
+    std::vector<std::pair<Vector3, Vector3>> guides;
+    guides.reserve(direction.size());
+    for (const auto& item : direction)
+        guides.push_back({ vertices[item.first], item.second.normalized() });
+    const double minimumDot = std::cos(maxDegrees * M_PI / 180.0);
+    FeatureEdgeSet kept;
+    for (size_t e = 0; e < set.size(); ++e) {
+        bool yields = false;
+        if (0 == (set.flags[e] & FeatureEdgeSet::Hard)) {
+            const Vector3& a = vertices[set.edges[e].first];
+            const Vector3& b = vertices[set.edges[e].second];
+            const Vector3 along = (b - a).normalized();
+            for (const auto& guide : guides) {
+                if ((a - guide.first).length() > reach && (b - guide.first).length() > reach)
+                    continue;
+                if (std::fabs(Vector3::dotProduct(along, guide.second)) >= minimumDot) {
+                    yields = true;
+                    break;
+                }
+            }
+        }
+        if (yields) {
+            if (nullptr != yielded)
+                ++*yielded;
+            continue;
+        }
+        kept.edges.push_back(set.edges[e]);
+        kept.flags.push_back(set.flags[e]);
+    }
+    kept.normalize();
+    return kept;
+}
+
 FeatureEdgeSet filterDetectedChains(const FeatureEdgeSet& set,
     const std::vector<Vector3>& vertices,
     const std::vector<std::vector<size_t>>& triangles,
