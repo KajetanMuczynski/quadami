@@ -427,6 +427,10 @@ namespace {
                 (*rotation)[opposite] = (4 - (*rotation)[best]) % 4;
                 (*rerounded)[best] = (*rerounded)[opposite] = 1;
                 ++count;
+                if (nullptr != std::getenv("AUTOREMESHER_GUIDE_SEPARATION_DEBUG")) {
+                    const Vector3& p = mesh.position(vertex);
+                    std::cerr << "guide follow: turned " << change << " cost " << bestCost << " at " << p.x() << " " << p.y() << " " << p.z() << std::endl;
+                }
             }
         }
         return count;
@@ -1470,6 +1474,10 @@ namespace {
                 continue;
             if (onGuide[vertex]) {
                 ++*conesOnGuides;
+                if (nullptr != std::getenv("AUTOREMESHER_GUIDE_SEPARATION_DEBUG")) {
+                    const Vector3& p = mesh.position(vertex);
+                    std::cerr << "guide cone: index " << sum << " on the guide at " << p.x() << " " << p.y() << " " << p.z() << std::endl;
+                }
                 continue;
             }
             size_t best = none;
