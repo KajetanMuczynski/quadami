@@ -22,6 +22,9 @@
 #include <unordered_map>
 #include <algorithm>
 #include <cmath>
+#include <string>
+#include <iostream>
+#include <cstdlib>
 #include "isotropichalfedgemesh.h"
 
 namespace {
@@ -1017,6 +1020,15 @@ bool IsotropicHalfedgeMesh::collapseEdgeTo(Halfedge *halfedge, const Vector3 &co
     return true;
 }
 
+static bool guideCornersSmooth()
+{
+    static const bool smooth = [] {
+        const char *text = std::getenv("AUTOREMESHER_GUIDE_CORNERS");
+        return nullptr != text && std::string("smooth") == text;
+    }();
+    return smooth;
+}
+
 bool IsotropicHalfedgeMesh::isSmoothHardChainVertex(Vertex *vertex, Vertex **first, Vertex **second)
 {
     if (vertex->featured || vertex->featureCorner || vertex->pinned)
@@ -1035,7 +1047,10 @@ bool IsotropicHalfedgeMesh::isSmoothHardChainVertex(Vertex *vertex, Vertex **fir
         const Halfedge *opposite = halfedge->oppositeHalfedge;
         const Vector3 oppositeNormal = Vector3::normal(opposite->previousHalfedge->startVertex->position,
             opposite->startVertex->position, opposite->nextHalfedge->startVertex->position);
-        if (Vector3::dotProduct(normal, oppositeNormal) < kMinSmoothChainNormalDot) {
+        // Research (Quadami, TODO 5.7): AUTOREMESHER_GUIDE_CORNERS=smooth
+        // skips this test, so a hard line stays a smooth chain where the
+        // faces beside it are folded (slivers left by the decimation).
+        if (!guideCornersSmooth() && Vector3::dotProduct(normal, oppositeNormal) < kMinSmoothChainNormalDot) {
             smooth = false;
             return false;
         }
@@ -1208,6 +1223,8 @@ void IsotropicHalfedgeMesh::featureCorners()
     // degrees (research/crease-preservation-2026-10-26.md, 5.1): sliding
     // past it would cut the corner off.
     const double maxChainTurnCosine = std::cos(45.0 * M_PI / 180.0);
+    // Research (Quadami, TODO 5.7): what becomes of the hard lines' vertices.
+    size_t hardVertices = 0, hardCrossings = 0, hardKinks = 0, hardKinkCorners = 0;
     for (Vertex *vertex = m_firstVertex; nullptr != vertex; vertex = vertex->nextVertex) {
         if (vertex->removed)
             continue;
@@ -1216,8 +1233,15 @@ void IsotropicHalfedgeMesh::featureCorners()
         const size_t degree = featureDegree(vertex, &first, &second);
         if (0 == degree)
             continue;
+        bool hard = false;
+        iterateVertexHalfedges(vertex, [&](Halfedge *halfedge) {
+            hard = hard || (halfedge->feature && halfedge->hard());
+            return true;
+        });
+        hardVertices += hard;
         if (2 != degree) {
             vertex->featureCorner = true;
+            hardCrossings += hard;
             continue;
         }
         Vector3 in = vertex->position - first->position;
@@ -1228,10 +1252,17 @@ void IsotropicHalfedgeMesh::featureCorners()
         }
         // A hard line on a smooth surface (a guide) is a zigzag of input
         // edges that the remesh straightens, so its kinks are no corners.
-        if (Vector3::dotProduct(in.normalized(), out.normalized()) < maxChainTurnCosine &&
-                !isSmoothHardChainVertex(vertex))
-            vertex->featureCorner = true;
+        if (Vector3::dotProduct(in.normalized(), out.normalized()) < maxChainTurnCosine) {
+            hardKinks += hard;
+            if (!isSmoothHardChainVertex(vertex)) {
+                vertex->featureCorner = true;
+                hardKinkCorners += hard;
+            }
+        }
     }
+    if (hardVertices > 0 && nullptr != std::getenv("AUTOREMESHER_GUIDE_RINGS_DEBUG"))
+        std::cerr << "guide corners: " << hardVertices << " hard vertices, " << hardCrossings << " at a crossing or end, "
+                  << hardKinks << " kinks over 45 degrees, " << hardKinkCorners << " of them kept as corners" << std::endl;
 
     // Number the chains: walk from each unnumbered feature halfedge through
     // chain vertices in both directions.
