@@ -45,6 +45,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <random>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -2978,6 +2979,25 @@ bool AutoRemesher::remeshIslands()
     std::vector<char> markedEdgesDropped(islandContexes.size(), 0);
     std::vector<size_t> markedChainCounts(islandContexes.size(), 0);
     std::vector<size_t> markedChainsDropped(islandContexes.size(), 0);
+    // Research: why the fallback decided as it did (-1: not reached).
+    std::vector<std::array<double, 6>> markedFallbackWhy(islandContexes.size(), {{-1, -1, -1, -1, -1, -1}});
+    // Research (--experiment guide_keep=1): before the marks are dropped,
+    // (1) an unfaithful marked run is run again without T's sharp edges,
+    // the remedy the sharp-edge pass below would apply to it while keeping
+    // the marks (a guide is the user's, a sharp edge only classified); (2) a
+    // marked run whose chains pass but whose bad faces elsewhere exceed the
+    // budget, or that stays unfaithful, is run once more on its input moved
+    // by one float32 ulp (another draw of the same map: 1-ulp replicates of
+    // the head's ring20 have 3-22 bad faces), and kept if that run passes
+    // every test the marked run failed.  guide_keep per island: 0 not
+    // tried, 1 kept without sharp edges, 2 kept by the second draw, 3 tried,
+    // marks dropped.
+    std::vector<char> guideKeep(islandContexes.size(), 0);
+    std::vector<char> sharpEdgesDroppedForMarks(islandContexes.size(), 0);
+    const bool guideKeepEnabled = [] {
+        const char* value = std::getenv("AUTOREMESHER_GUIDE_KEEP");
+        return nullptr != value && std::string("1") == value;
+    }();
     if (!m_markedEdges.empty()) {
         tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
             [&](const tbb::blocked_range<size_t>& range) {
@@ -2988,7 +3008,60 @@ bool AutoRemesher::remeshIslands()
                     markedChainCounts[i] = chains.size();
                     bool markedFaithful = false;
                     std::vector<char> markedFlags;
-                    const size_t markedBad = badFaces(islandRuns[i], &markedFaithful, islandContexes[i], &markedFlags);
+                    size_t markedBad = badFaces(islandRuns[i], &markedFaithful, islandContexes[i], &markedFlags);
+                    // Marked run again from the input (guide_keep).
+                    const auto rerunMarked = [&](bool withoutSharpEdges, bool perturb, IslandContext& mctx, IslandRun& mrun) {
+                        buildIslandContext(i, mctx);
+                        mctx.voxelSize = islandContexes[i].voxelSize;
+                        mctx.targetQuadCount = islandContexes[i].targetQuadCount;
+                        mctx.markedEdges = islandContexes[i].markedEdges;
+                        mctx.followMarks = true;
+                        mctx.markedEdgeDensity = islandContexes[i].markedEdgeDensity;
+                        mctx.markedEdgesTooDense = islandContexes[i].markedEdgesTooDense;
+                        mctx.inputMarkedEdgeCount = islandContexes[i].inputMarkedEdgeCount;
+                        if (withoutSharpEdges || sharpEdgesDroppedForMarks[i]) {
+                            mctx.sharpEdgeDegrees = 180.0;
+                            mctx.featureEdges = FeatureEdgeSet();
+                        }
+                        if (perturb) {
+                            // Raw mt19937 bits: the same draw on every platform.
+                            std::mt19937 bits(0x9e3779b9u + (uint32_t)i);
+                            for (auto& v : mctx.vertices) {
+                                for (size_t k = 0; k < 3; ++k) {
+                                    const float f = (float)v[k];
+                                    const float towards = (bits() & 1u) ? std::numeric_limits<float>::infinity()
+                                                                        : -std::numeric_limits<float>::infinity();
+                                    v[k] = (double)std::nextafter(f, towards);
+                                }
+                            }
+                        }
+                        resampleIsland(i, mctx, mrun, &retryDecimationStats);
+                        parameterizeIsland(i, mctx, mrun);
+                    };
+                    if (guideKeepEnabled && !markedFaithful && !islandContexes[i].leftOut && !islandContexes[i].enveloped
+                        && sharpEdgesEnabled(islandContexes[i].sharpEdgeDegrees)
+                        && 0 == islandContexes[i].inputTopology.nonManifoldEdges) {
+                        const auto& flags = islandRuns[i].isotropicFeatureEdges.flags;
+                        if (std::any_of(flags.begin(), flags.end(),
+                                [](unsigned char f) { return 0 == (f & FeatureEdgeSet::Hard); })) {
+                            IslandContext mctx;
+                            IslandRun mrun;
+                            rerunMarked(true, false, mctx, mrun);
+                            bool faithful = false;
+                            std::vector<char> flagsOut;
+                            const size_t bad = badFaces(mrun, &faithful, mctx, &flagsOut);
+                            if (faithful) {
+                                keepSupersededRecords(islandRuns[i], mrun);
+                                islandContexes[i] = std::move(mctx);
+                                islandRuns[i] = std::move(mrun);
+                                markedFaithful = true;
+                                markedBad = bad;
+                                markedFlags = std::move(flagsOut);
+                                sharpEdgesDroppedForMarks[i] = 1;
+                                guideKeep[i] = 1;
+                            }
+                        }
+                    }
                     if (markedFaithful && 0 == markedBad)
                         continue;
                     // Research: AUTOREMESHER_MARKED_FALLBACK=off keeps the
@@ -3011,8 +3084,14 @@ bool AutoRemesher::remeshIslands()
                         }
                     }
                     IslandContext markedSubsetCtx;
-                    if (chains.size() > 1)
+                    if (chains.size() > 1) {
                         markedSubsetCtx = ctx;
+                        if (sharpEdgesDroppedForMarks[i]) {
+                            markedSubsetCtx.sharpEdgeDegrees = 180.0;
+                            markedSubsetCtx.featureEdges = FeatureEdgeSet();
+                        }
+                    }
+                    bool subsetTried = false;
                     ctx.markedEdges.clear();
                     ctx.followMarks = false;
                     IslandRun run;
@@ -3021,6 +3100,8 @@ bool AutoRemesher::remeshIslands()
                     bool plainFaithful = false;
                     std::vector<char> plainFlags;
                     const size_t plainBad = badFaces(run, &plainFaithful, ctx, &plainFlags);
+                    markedFallbackWhy[i] = {{(double)markedBad, (double)plainBad, markedFaithful ? 1.0 : 0.0,
+                        plainFaithful ? 1.0 : 0.0, -1, -1}};
                     bool drop = (plainFaithful && !markedFaithful) || (plainFaithful == markedFaithful && markedBad > plainBad + 2);
                     if (drop && markedFaithful) {
                         const double quadWidth = islandContexes[i].targetQuadCount > 0.0
@@ -3031,6 +3112,8 @@ bool AutoRemesher::remeshIslands()
                             islandRuns[i].remeshedQuads, markedFlags, chainSegments, radius);
                         const std::vector<size_t> plainNear = badFacesNearChains(run.remeshedVertices,
                             run.remeshedQuads, plainFlags, chainSegments, radius);
+                        markedFallbackWhy[i][4] = (double)std::accumulate(markedNear.begin(), markedNear.end(), (size_t)0);
+                        markedFallbackWhy[i][5] = (double)std::accumulate(plainNear.begin(), plainNear.end(), (size_t)0);
                         std::vector<size_t> keptChains;
                         for (size_t c = 0; c < chains.size(); ++c) {
                             if (markedNear[c] <= plainNear[c] + 2)
@@ -3042,6 +3125,7 @@ bool AutoRemesher::remeshIslands()
                         if (keptChains.size() == chains.size()) {
                             drop = (double)markedBad > (double)plainBad + budget;
                         } else if (!keptChains.empty()) {
+                            subsetTried = true;
                             IslandContext& subsetCtx = markedSubsetCtx;
                             std::vector<std::pair<size_t, size_t>> keptEdges;
                             std::vector<std::vector<std::pair<Vector3, Vector3>>> keptSegments;
@@ -3077,6 +3161,41 @@ bool AutoRemesher::remeshIslands()
                             keepSupersededRecords(subsetRun, run);
                         }
                     }
+                    // guide_keep (2): one more draw of the marked run, kept if
+                    // it passes every test against the plain run.  Not for an
+                    // island whose chains were already split (subset run above).
+                    if (drop && guideKeepEnabled && plainFaithful && !subsetTried) {
+                        const double quadWidth = islandContexes[i].targetQuadCount > 0.0
+                            ? std::sqrt(islandContexes[i].area / islandContexes[i].targetQuadCount)
+                            : 0.0;
+                        const double radius = markedChainFoldRadius * quadWidth;
+                        const double budget = std::max(2.0, markedFoldBudgetPerQuad * islandContexes[i].targetQuadCount);
+                        IslandContext mctx;
+                        IslandRun mrun;
+                        rerunMarked(false, true, mctx, mrun);
+                        bool faithful = false;
+                        std::vector<char> flagsOut;
+                        const size_t bad = badFaces(mrun, &faithful, mctx, &flagsOut);
+                        bool passes = faithful && (double)bad <= (double)plainBad + budget;
+                        if (passes) {
+                            const std::vector<size_t> againNear = badFacesNearChains(mrun.remeshedVertices,
+                                mrun.remeshedQuads, flagsOut, chainSegments, radius);
+                            const std::vector<size_t> plainNear = badFacesNearChains(run.remeshedVertices,
+                                run.remeshedQuads, plainFlags, chainSegments, radius);
+                            for (size_t c = 0; c < chains.size() && passes; ++c)
+                                passes = againNear[c] <= plainNear[c] + 2;
+                        }
+                        if (passes) {
+                            keepSupersededRecords(islandRuns[i], mrun);
+                            keepSupersededRecords(run, mrun);
+                            islandContexes[i] = std::move(mctx);
+                            islandRuns[i] = std::move(mrun);
+                            guideKeep[i] = 2;
+                            continue;
+                        }
+                        keepSupersededRecords(mrun, run);
+                        guideKeep[i] = 3;
+                    }
                     keepSupersededRecords(drop ? islandRuns[i] : run, drop ? run : islandRuns[i]);
                     if (drop) {
                         ctx.inputMarkedEdgeCount = islandContexes[i].inputMarkedEdgeCount;
@@ -3084,6 +3203,7 @@ bool AutoRemesher::remeshIslands()
                         islandRuns[i] = std::move(run);
                         markedEdgesDropped[i] = 1;
                         markedChainsDropped[i] = chains.size();
+                        sharpEdgesDroppedForMarks[i] = 0;
                     }
                 }
             });
@@ -3103,7 +3223,7 @@ bool AutoRemesher::remeshIslands()
     // does not help changes nothing.  Islands without sharp edges on T, or
     // with a faithful run, pay nothing; nor do islands with a non-manifold
     // input (below).
-    std::vector<char> sharpEdgesDropped(islandContexes.size(), 0);
+    std::vector<char> sharpEdgesDropped(sharpEdgesDroppedForMarks);
     tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
         [&](const tbb::blocked_range<size_t>& range) {
             for (size_t i = range.begin(); i != range.end(); ++i) {
@@ -3768,6 +3888,13 @@ bool AutoRemesher::remeshIslands()
                 record.set("marked_edges_dropped", (double)markedEdgesDropped[i]);
                 record.set("marked_chains", (double)markedChainCounts[i]);
                 record.set("marked_chains_dropped", (double)markedChainsDropped[i]);
+                {
+                    static const char* names[6] = { "fb_marked_bad", "fb_plain_bad", "fb_marked_faithful",
+                        "fb_plain_faithful", "fb_marked_near", "fb_plain_near" };
+                    for (int k = 0; k < 6; ++k)
+                        record.set(names[k], markedFallbackWhy[i][k]);
+                }
+                record.set("guide_keep", (double)guideKeep[i]);
                 record.set("marked_edge_density", islandContexes[i].markedEdgeDensity);
                 record.set("marked_edges_too_dense", islandContexes[i].markedEdgesTooDense ? 1.0 : 0.0);
             }
