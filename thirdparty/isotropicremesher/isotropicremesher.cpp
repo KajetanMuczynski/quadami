@@ -20,6 +20,9 @@
  *  SOFTWARE.
  */
 #include <algorithm>
+#include <cstdlib>
+#include <string>
+#include <algorithm>
 #include <string>
 #include <iostream>
 #include <cmath>
@@ -611,8 +614,17 @@ void IsotropicRemesher::relaxSmoothHardChains()
     if (chain.empty())
         return;
     std::vector<Vector3> targets(chain.size());
-    for (size_t round = 0; round < 2 * kHardChainSmoothingRounds; ++round) {
-        const double factor = 0 == round % 2 ? 0.5 : -0.53;
+    // Research (Quadami, TODO 5.7): AUTOREMESHER_GUIDE_SMOOTH_ROUNDS sets the
+    // rounds, AUTOREMESHER_GUIDE_SMOOTH=laplace drops the inflate step. A
+    // guide drawn on an input coarser than T zigzags over several of T's
+    // edges, and four Taubin rounds leave waves that long as they are.
+    size_t rounds = kHardChainSmoothingRounds;
+    if (const char *text = std::getenv("AUTOREMESHER_GUIDE_SMOOTH_ROUNDS"))
+        rounds = (size_t)std::max(0, std::atoi(text));
+    const char *kind = std::getenv("AUTOREMESHER_GUIDE_SMOOTH");
+    const bool laplace = nullptr != kind && std::string("laplace") == kind;
+    for (size_t round = 0; round < 2 * rounds; ++round) {
+        const double factor = 0 == round % 2 || laplace ? 0.5 : -0.53;
         for (size_t i = 0; i < chain.size(); ++i) {
             const ChainVertex &item = chain[i];
             Vector3 move = (item.first->position + item.second->position) * 0.5 - item.vertex->position;
