@@ -32,7 +32,7 @@
     rounds do not remove them (head 32 against 30 of 54, kinks per run unchanged 9.0 / 3.3 / 1.0).
   - Decimation (only at 3k on this input, 139k triangles): off, the cut rings go 12 -> 29 of 48 and the
     re-embedded head 1 -> 15 of 18; the staircase rings 19 -> 16 of 48 and the drawn head 5 -> 6 of 18. With it,
-    T has no closed smooth guide chain in 28 single-ring runs at 3k, 2 of which close.
+    T has no closed smooth guide chain in 30 single-ring runs at 3k, 2 of which close.
   - Clean rings are not better in total: cut 78, staircase twins 86 of 144 (10k 36 / 34, 6k 30 / 33, 3k 12 / 19).
     Master on the cut rings at 10k: 10 of 48. Crease detection off on the cut rings at 10k: 30 of 48 (36 with).
   - `clean_guides.py` on the head: 16 of 54 against 30 drawn (6k 6 / 10, 10k 9 / 15); it leaves jogs of
