@@ -9,7 +9,8 @@ A drawn guide is a path of input edges: a staircase. This replaces every closed 
 lines whose vertices all have two marked edges) by the curve it stands for: the loop is averaged over
 an arc length W (default: 4 median guide edges), and the mesh is cut along the zero set of the signed
 side distance to that smooth curve, measured in the surface (offset from the nearest curve point along
-vertex normal x curve tangent), inside a band of B around it (default: 8 median guide edges). Every
+vertex normal x curve tangent), inside a band of B around it (default: 8 median guide edges). The cut
+runs through a vertex that is within 5 % of a median mesh edge of it, so it leaves no degenerate triangle. Every
 crossed triangle is split in three; the cut edges become the new `l` lines. Open guides are dropped
 with a warning. Prints one line per loop.
 """
@@ -34,19 +35,45 @@ def vertex_normals(points, triangles):
     return normals / np.maximum(np.linalg.norm(normals, axis=1), 1e-30)[:, None]
 
 
-def cut_along(points, triangles, curve, band):
+def cut_along(points, triangles, curve, band, snap):
     """(points, triangles, cut edges) with the closed curve cut in, or None when the cut does not close."""
+    # The signed side distance to the curve: from the closest point of the polyline (exact, on the
+    # two segments at the nearest sample, so the level is continuous along the curve), measured
+    # across it in the surface. A vertex closer to the curve than `snap` is taken to lie on it: the
+    # cut then runs through that vertex and leaves no degenerate triangle beside it.
     samples = gr.sample(curve, 0.05 * band, True)[:-1]
-    tangent = np.roll(samples, -1, axis=0) - np.roll(samples, 1, axis=0)
-    tangent /= np.maximum(np.linalg.norm(tangent, axis=1), 1e-30)[:, None]
+    count = len(samples)
     distance, nearest = cKDTree(samples).query(points)
     inside = distance < band
-    side = np.cross(vertex_normals(points, triangles), tangent[nearest])
+    closest = samples[nearest].copy()
+    along = np.roll(samples, -1, axis=0)[nearest] - np.roll(samples, 1, axis=0)[nearest]
+    best = np.full(len(points), np.inf)
+    for shift in (-1, 0):
+        a = samples[(nearest + shift) % count]
+        b = samples[(nearest + shift + 1) % count]
+        ab = b - a
+        t = np.clip(((points - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-30), 0.0, 1.0)
+        foot = a + t[:, None] * ab
+        d = np.linalg.norm(points - foot, axis=1)
+        closer = d < best
+        best[closer] = d[closer]
+        closest[closer] = foot[closer]
+    along /= np.maximum(np.linalg.norm(along, axis=1), 1e-30)[:, None]
+    # The surface normal at each curve sample: the vertex normals within the band's fifth of it,
+    # averaged, so the side direction does not follow the relief vertex by vertex.
+    normals = vertex_normals(points, triangles)
+    tree = cKDTree(points)
+    curve_normal = np.array([normals[near].sum(axis=0) if near else np.zeros(3)
+                             for near in tree.query_ball_point(samples, 0.2 * band)])
+    for _ in range(4):
+        curve_normal = curve_normal + np.roll(curve_normal, 1, axis=0) + np.roll(curve_normal, -1, axis=0)
+    curve_normal /= np.maximum(np.linalg.norm(curve_normal, axis=1), 1e-30)[:, None]
+    side = np.cross(curve_normal[nearest], along)
     side /= np.maximum(np.linalg.norm(side, axis=1), 1e-30)[:, None]
-    level = ((points - samples[nearest]) * side).sum(1)
-    level[np.abs(level) < 1e-7] = 1e-7
+    level = ((points - closest) * side).sum(1)
+    level[np.abs(level) < snap] = 0.0
     out = [tuple(p) for p in points]
-    on_edge, faces, segments = {}, [], []
+    on_edge, faces, segments = {}, [], set()
 
     def crossing(a, b):
         key = (min(a, b), max(a, b))
@@ -56,16 +83,36 @@ def cut_along(points, triangles, curve, band):
             out.append(tuple(points[a] + t * (points[b] - points[a])))
         return on_edge[key]
 
+    def segment(a, b):
+        segments.add((min(a, b), max(a, b)))
+
     for tri in triangles:
-        above = [level[v] > 0 for v in tri]
-        if all(above) or not any(above) or not all(inside[v] for v in tri):
+        sign = [int(np.sign(level[v])) for v in tri]
+        zeros = sign.count(0)
+        if not all(inside[v] for v in tri) or (0 == zeros and abs(sum(sign)) == 3):
             faces.append(tuple(tri))
             continue
-        lone = [k for k in range(3) if above[k] != above[(k + 1) % 3] and above[k] != above[(k + 2) % 3]][0]
-        p, q, r = tri[lone], tri[(lone + 1) % 3], tri[(lone + 2) % 3]
-        m1, m2 = crossing(p, q), crossing(p, r)
-        faces += [(p, m1, m2), (m1, q, r), (m1, r, m2)]
-        segments.append((m1, m2))
+        if 0 == zeros:
+            lone = [k for k in range(3) if sign[k] != sign[(k + 1) % 3] and sign[k] != sign[(k + 2) % 3]][0]
+            p, q, r = tri[lone], tri[(lone + 1) % 3], tri[(lone + 2) % 3]
+            m1, m2 = crossing(p, q), crossing(p, r)
+            faces += [(p, m1, m2), (m1, q, r), (m1, r, m2)]
+            segment(m1, m2)
+        elif 1 == zeros:
+            k = sign.index(0)
+            p, q, r = tri[k], tri[(k + 1) % 3], tri[(k + 2) % 3]
+            if sign[(k + 1) % 3] == sign[(k + 2) % 3]:
+                faces.append(tuple(tri))
+                continue
+            m = crossing(q, r)
+            faces += [(p, q, m), (p, m, r)]
+            segment(p, m)
+        else:
+            faces.append(tuple(tri))
+            if 2 == zeros:
+                k = [i for i in range(3) if 0 != sign[i]][0]
+                segment(tri[(k + 1) % 3], tri[(k + 2) % 3])
+    segments = sorted(segments)
     around = collections.defaultdict(list)
     for a, b in segments:
         around[a].append(b)
@@ -107,9 +154,11 @@ def main():
         drawn = points[cycle]
         edge = float(np.median(np.linalg.norm(np.roll(drawn, -1, axis=0) - drawn, axis=1)))
         curves.append((gr.smoothed(drawn, a.width or 4.0 * edge), a.band or 8.0 * edge, len(cycle)))
+    tri = np.asarray(triangles)
+    snap = 0.05 * float(np.median(np.linalg.norm(points[tri[:, 0]] - points[tri[:, 1]], axis=1)))
     guide, failed = [], 0
     for index, (curve, band, drawn_edges) in enumerate(curves):
-        result = cut_along(points, triangles, curve, band)
+        result = cut_along(points, triangles, curve, band, snap)
         if result is None:
             print("loop %d: the cut does not close" % index, file=sys.stderr)
             failed += 1

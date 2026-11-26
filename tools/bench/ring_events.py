@@ -44,14 +44,17 @@ KINK = 45.0       # degrees
 
 
 def parse(run_dir):
-    """(chains, kept solve, dropped, corner counts) of a run."""
+    """(the kept solve's chains, kept solve, dropped, corner counts) of a run."""
     solves, current, chains, corners = [], collections.defaultdict(list), {}, None
     with open(os.path.join(run_dir, "log.txt"), errors="replace") as f:
         for line in f:
             if line.startswith("guide chain: loop "):
+                # Printed after the extraction of the solve just dumped (twice: the crease-slide
+                # alternative), so the chain belongs to the last complete solve.
                 t = line.split()
-                if int(t[3]) not in chains:
-                    chains[int(t[3])] = np.array([[float(x) for x in p.split(",")] for p in t[4:]])
+                owner = solves[-1].setdefault("chains", {}) if solves else chains
+                if int(t[3]) not in owner:
+                    owner[int(t[3])] = np.array([[float(x) for x in p.split(",")] for p in t[4:]])
             elif line.startswith("guide follow: turned"):
                 t = line.split()
                 current["follow"].append(tuple(float(x) for x in t[7:10]))
@@ -81,7 +84,7 @@ def parse(run_dir):
         for solve in solves:
             if all(len(solve.get("flips_" + s, ())) == int(record.get(s + "_flipped", -1)) for s in STAGES):
                 kept = solve
-    return chains, kept, dropped, corners
+    return (kept.get("chains", {}) if kept is not None else chains), kept, dropped, corners
 
 
 def turns(chain):
@@ -143,7 +146,7 @@ def events(solve):
     return collections.OrderedDict([
         ("continuous flip", solve["flips_continuous"]),
         ("untangled flip", solve["flips_untangled"]),
-        ("follow re-round", pts(solve["follow"])),
+        ("follow re-round", pts(sorted(set(solve["follow"])))),
         ("cone on the guide", pts(solve["on_guide"])),
         ("cone under 0.5 row (continuous)", pts(p for p, rows in continuous.values() if rows < 0.5)),
         ("cone under 1 row (continuous)", pts(p for p, rows in continuous.values() if rows < 0.99)),
