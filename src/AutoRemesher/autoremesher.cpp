@@ -2966,6 +2966,8 @@ bool AutoRemesher::remeshIslands()
     std::vector<char> markedEdgesDropped(islandContexes.size(), 0);
     std::vector<size_t> markedChainCounts(islandContexes.size(), 0);
     std::vector<size_t> markedChainsDropped(islandContexes.size(), 0);
+    // Research: why the fallback decided as it did (-1: not reached).
+    std::vector<std::array<double, 6>> markedFallbackWhy(islandContexes.size(), {{-1, -1, -1, -1, -1, -1}});
     if (!m_markedEdges.empty()) {
         tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
             [&](const tbb::blocked_range<size_t>& range) {
@@ -3009,6 +3011,8 @@ bool AutoRemesher::remeshIslands()
                     bool plainFaithful = false;
                     std::vector<char> plainFlags;
                     const size_t plainBad = badFaces(run, &plainFaithful, ctx, &plainFlags);
+                    markedFallbackWhy[i] = {{(double)markedBad, (double)plainBad, markedFaithful ? 1.0 : 0.0,
+                        plainFaithful ? 1.0 : 0.0, -1, -1}};
                     bool drop = (plainFaithful && !markedFaithful) || (plainFaithful == markedFaithful && markedBad > plainBad + 2);
                     if (drop && markedFaithful) {
                         const double quadWidth = islandContexes[i].targetQuadCount > 0.0
@@ -3019,6 +3023,8 @@ bool AutoRemesher::remeshIslands()
                             islandRuns[i].remeshedQuads, markedFlags, chainSegments, radius);
                         const std::vector<size_t> plainNear = badFacesNearChains(run.remeshedVertices,
                             run.remeshedQuads, plainFlags, chainSegments, radius);
+                        markedFallbackWhy[i][4] = (double)std::accumulate(markedNear.begin(), markedNear.end(), (size_t)0);
+                        markedFallbackWhy[i][5] = (double)std::accumulate(plainNear.begin(), plainNear.end(), (size_t)0);
                         std::vector<size_t> keptChains;
                         for (size_t c = 0; c < chains.size(); ++c) {
                             if (markedNear[c] <= plainNear[c] + 2)
@@ -3756,6 +3762,12 @@ bool AutoRemesher::remeshIslands()
                 record.set("marked_edges_dropped", (double)markedEdgesDropped[i]);
                 record.set("marked_chains", (double)markedChainCounts[i]);
                 record.set("marked_chains_dropped", (double)markedChainsDropped[i]);
+                {
+                    static const char* names[6] = { "fb_marked_bad", "fb_plain_bad", "fb_marked_faithful",
+                        "fb_plain_faithful", "fb_marked_near", "fb_plain_near" };
+                    for (int k = 0; k < 6; ++k)
+                        record.set(names[k], markedFallbackWhy[i][k]);
+                }
                 record.set("marked_edge_density", islandContexes[i].markedEdgeDensity);
                 record.set("marked_edges_too_dense", islandContexes[i].markedEdgesTooDense ? 1.0 : 0.0);
             }
