@@ -36,6 +36,7 @@
 #include <limits>
 #include <memory>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
@@ -932,6 +933,28 @@ namespace {
         return winding;
     }
 
+    // Research (TODO 5.7, --experiment flip_dump=1): where the map's flipped
+    // triangles lie on the surface, one line per measured stage on stderr,
+    // headed by the count the stage record gives so the two can be matched.
+    void dumpFlips(const SurfaceMesh& mesh, const std::vector<double>& uvs, const char* stage)
+    {
+        if (nullptr == std::getenv("AUTOREMESHER_FLIP_DUMP"))
+            return;
+        std::ostringstream line;
+        size_t count = 0;
+        for (size_t f = 0; f < mesh.faceCount(); ++f) {
+            const auto uvOf = [&](size_t c) { return Vector2(uvs[2 * c], uvs[2 * c + 1]); };
+            if (Predicates::orient2d(uvOf(3 * f), uvOf(3 * f + 1), uvOf(3 * f + 2)) >= 0)
+                continue;
+            const Vector3 centre = (mesh.position(mesh.cornerVertex(3 * f)) + mesh.position(mesh.cornerVertex(3 * f + 1))
+                                       + mesh.position(mesh.cornerVertex(3 * f + 2)))
+                / 3.0;
+            line << " " << centre.x() << "," << centre.y() << "," << centre.z();
+            ++count;
+        }
+        std::cerr << "cover flips: " << stage << " " << count << line.str() << std::endl;
+    }
+
     void appendWinding(DiagnosticRecord* record, const std::string& prefix, const Winding& winding)
     {
         record->set(prefix + "_interior_vertices", (double)winding.interiorVertices);
@@ -1724,6 +1747,7 @@ namespace {
                 const std::vector<double> uvs = cornerUvs(s, uvVariables);
                 appendUvOrientation(result, "continuous", measureUvOrientation(uvs));
                 appendWinding(result, "continuous", measureWinding(mesh, rotation, frames, uvs));
+                dumpFlips(mesh, uvs, "continuous");
                 appendSeparations("continuous");
                 if (nullptr != ctx.planFaceEdges) {
                     // sqrt(3D area / uv area): the edge of a unit cell on the face.
@@ -1758,6 +1782,7 @@ namespace {
             appendSizeFidelity(result, "rounded", mesh, s, faceScaling, scale);
             result->set("rounded_cells", coverCellArea(mesh, s));
             appendWinding(result, "rounded", measureWinding(mesh, rotation, frames, uvs));
+            dumpFlips(mesh, uvs, "rounded");
             appendSeparations("rounded");
             if (separate)
                 result->set("guide_separations_raised", (double)s.raisedToBoundCount());
@@ -1772,6 +1797,7 @@ namespace {
             appendSizeFidelity(result, "untangled", mesh, s, faceScaling, scale);
             result->set("untangled_cells", coverCellArea(mesh, s));
             appendWinding(result, "untangled", measureWinding(mesh, rotation, frames, uvs));
+            dumpFlips(mesh, uvs, "untangled");
             result->set("untangled_energy", s.energy());
         }
         values->resize(variables);
