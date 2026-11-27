@@ -38,18 +38,27 @@ KEEP_BYTES = 1536 * 1024 * 1024
 SUFFIX = ".qic"
 
 
-def path_for(directory, positions, triangles, marked, worker_key):
-    """The file for this mesh and worker. `worker_key` names the worker
-    exactly (its build id, path, size and time), so a rebuilt worker never
-    gets a file another one wrote, even a development build whose id did not
-    change."""
+def mesh_digest(positions, triangles, marked):
+    """A key (hex) for what the worker is sent of a mesh: positions,
+    triangles and marked edges (guides included)."""
     digest = hashlib.blake2b(digest_size=16)
-    digest.update(("quadami input cache 1;%s;" % worker_key).encode("utf-8", "replace"))
     for array in (positions, triangles, marked if marked is not None else np.zeros((0, 2), np.int32)):
         array = np.ascontiguousarray(array)
         digest.update(("%s %s;" % (array.dtype.str, array.shape)).encode())
         digest.update(array.tobytes())
-    return os.path.join(directory, digest.hexdigest() + SUFFIX)
+    return digest.hexdigest()
+
+
+def path_for(directory, positions, triangles, marked, worker_key, digest=None):
+    """The file for this mesh and worker. `worker_key` names the worker
+    exactly (its build id, path, size and time), so a rebuilt worker never
+    gets a file another one wrote, even a development build whose id did not
+    change.  `digest`: mesh_digest() of the mesh, if already known."""
+    if digest is None:
+        digest = mesh_digest(positions, triangles, marked)
+    name = hashlib.blake2b(("quadami input cache 2;%s;%s" % (worker_key, digest)).encode("utf-8", "replace"),
+                           digest_size=16)
+    return os.path.join(directory, name.hexdigest() + SUFFIX)
 
 
 def worker_key(executable, build_id):

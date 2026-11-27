@@ -25,6 +25,7 @@
 #include <AutoRemesher/Diagnostics>
 #include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/Progress>
+#include <AutoRemesher/Vector2>
 #include <AutoRemesher/Vector3>
 #include <atomic>
 #include <chrono>
@@ -284,6 +285,26 @@ public:
         m_planOnly = planOnly;
     }
 
+    // Plan the run as setPlanOnly() does, call `handler` on the calling
+    // thread once the plan is made (before any island is parameterized),
+    // and go on with the run if it returns true; false stops the run as a
+    // cancellation.  The run's quads are the same with or without it.  The
+    // progress of the run then reaches planReadyProgress() with the plan.
+    void setPlanReadyHandler(std::function<bool()> handler)
+    {
+        m_planReadyHandler = std::move(handler);
+    }
+
+    // With a plan-ready handler, how far the run's progress is when it is
+    // called; 0 without one.
+    float planReadyProgress() const;
+
+    // How long the last remesh() waited in its plan-ready handler.
+    double planWaitSeconds() const
+    {
+        return 1e-6 * (double)m_planWaitUs;
+    }
+
     // One island of the plan.  Its quads at another target N (same other
     // settings) are about max(N * areaShare, floorQuads), and its edge
     // lengths go with the inverse square root of that count.
@@ -311,6 +332,20 @@ public:
     const std::vector<PlanIsland>& planIslands() const
     {
         return m_planIslands;
+    }
+
+    // Per island of the plan: the mesh it was planned on (its isotropic
+    // remesh) and the continuous cover's map of each corner (corner c of
+    // face f is 3f + c, one uv unit is one quad of the planned count).
+    // Empty for a left-out island and one whose cover solve failed.
+    struct PlanCover {
+        std::vector<Vector3> vertices;
+        std::vector<std::vector<size_t>> triangles;
+        std::vector<Vector2> cornerUvs;
+    };
+    const std::vector<PlanCover>& planCovers() const
+    {
+        return m_planCovers;
     }
 
     // Input vertices of the sliver islands remeshIslands() left out, so the
@@ -587,12 +622,15 @@ private:
     bool m_flattenSpikes = false;
     bool m_tangentialQuadSmoothing = false;
     bool m_planOnly = false;
+    std::function<bool()> m_planReadyHandler;
+    long long m_planWaitUs = 0;
     std::shared_ptr<PreparedInput> m_preparedInput;
     std::function<void(const PreparedInput&)> m_preparedInputSink;
     bool m_usedPreparedInput = false;
     std::vector<float> m_planVertexEdgeLengths;
     std::vector<uint32_t> m_planVertexIslands;
     std::vector<PlanIsland> m_planIslands;
+    std::vector<PlanCover> m_planCovers;
     ModelType m_modelType = ModelType::Organic;
     AutoRemesherProgressHandler m_progressHandler = nullptr;
     void* m_tag = nullptr;

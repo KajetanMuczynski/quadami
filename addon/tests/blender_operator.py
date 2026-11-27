@@ -25,10 +25,11 @@ shows the result, the clipboard), so it needs a window; on Linux CI, Xvfb:
     blender --command extension install-file -r user_default -e build/addon/quadami-...zip
     xvfb-run -a blender --factory-startup --python addon/tests/blender_operator.py
 
-Three runs: a UV sphere at 2,000 quads; a thin torus (tube 1/20 of its
+Runs: a UV sphere at 2,000 quads; a thin torus (tube 1/20 of its
 radius) at 300 quads, where quads are wider than the tube and folded or
 twisted quads may come out; Remesh again on that result, which remeshes its
-source; and one run cancelled from the panel's Cancel button. Each finished
+source; one run cancelled from the panel's Cancel button; and Preview Density
+then Remesh at the planned count, which goes on with the preview's run. Each finished
 run is checked for: status Done, quads within 0.6-1.5x of Target Quads, the
 result in Blender matching the report, and the Copy Report text (Result,
 settings, Blender version, build line naming the commit CI built, the Folded
@@ -108,13 +109,16 @@ def wait(addon):
     print("blender_operator: finished in %.1f s, status %s" % (time.monotonic() - start, addon._last_status))
 
 
-def remesh(addon, obj, source, target):
-    """Press Remesh with `obj` active, wait, check the result of `source`."""
+def remesh(addon, obj, source, target, continues=None):
+    """Press Remesh with `obj` active, wait, check the result of `source`.
+    `continues`: the preview's waiting run Remesh must go on with."""
     settings = getattr(bpy.context.scene, ID)
     settings.target_quads = target
     make_active(obj)
     before = set(bpy.data.objects)
     press_remesh(addon)
+    if continues is not None:
+        assert addon._job is continues and continues.resumed, "Remesh did not go on from the preview"
     yield from wait(addon)
     assert addon._last_status == "ok", (addon._last_status, addon._last_message)
     new = set(bpy.data.objects) - before
@@ -180,6 +184,37 @@ def script():
     assert set(bpy.data.objects) == before
     assert job._process is None or job._process.poll() is not None, "the remesher still runs after Cancel"
     assert job._workdir is None or not os.path.exists(job._workdir), job._workdir
+
+    # Preview Density on the sphere's result plans its source; hiding and
+    # showing it again needs no new plan; Remesh at the planned count goes on
+    # with the preview's run, and hides the preview.
+    density = importlib.import_module(MODULE + ".density")
+    getattr(bpy.context.scene, ID).target_quads = 1500
+    make_active(sphere_result)
+    preview_operator = getattr(bpy.ops.object, ID + "_density_preview")
+    with window_override():
+        assert preview_operator("INVOKE_DEFAULT") == {"RUNNING_MODAL"}
+    start = time.monotonic()
+    while addon._plan_job is not None:
+        if time.monotonic() - start > TIMEOUT:
+            raise RuntimeError("the preview did not finish in %d s" % TIMEOUT)
+        yield 0.25
+    preview = density.current()
+    assert preview is not None and preview.object_name == sphere.name, preview
+    assert addon._plans.waiting_key() is not None, "the preview's run does not wait"
+    waiting = addon._plans._waiting[1]
+    line = addon._remesh_line(bpy.context, preview, 1500, preview.plan.quads)
+    assert "goes on from the preview" in line, line
+    with window_override():
+        assert preview_operator("INVOKE_DEFAULT") == {"FINISHED"}
+    assert density.current() is None
+    with window_override():
+        assert preview_operator("INVOKE_DEFAULT") == {"FINISHED"}
+    assert density.current() is preview and addon._plan_job is None, "showing it again planned again"
+    print("blender_operator: preview planned in %.1f s" % (time.monotonic() - start))
+    yield from remesh(addon, sphere_result, sphere, 1500, continues=waiting)
+    assert density.current() is None, "the preview still covers the result"
+    assert addon._plans.waiting_key() is None
     print("blender_operator: OK, Blender %s" % bpy.app.version_string)
 
 

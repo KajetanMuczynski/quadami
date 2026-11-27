@@ -393,14 +393,14 @@ bool Parameterizer::parameterize()
         &field, m_scaling * baseEdgeLength, *featureEdges, &cover,
         &faceScalingField, &faceScalingU, &faceScalingV,
         coverProgress ? &coverProgress : nullptr, &topology,
-        m_planFaceEdges);
+        m_plan);
     for (auto& record : cover.diagnostics)
         m_diagnostics.push_back(std::move(record));
     if (!coverSolved) {
         std::cerr << "Quad cover solve failed" << std::endl;
         return false;
     }
-    if (nullptr != m_planFaceEdges)
+    if (nullptr != m_plan)
         return true;
     {
         // The map extraction gets, checked against the validity conditions of

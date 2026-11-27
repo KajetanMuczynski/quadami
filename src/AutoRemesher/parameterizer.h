@@ -23,6 +23,7 @@
 #include <AutoRemesher/Diagnostics>
 #include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/Progress>
+#include <AutoRemesher/QuadParameterizer>
 #include <AutoRemesher/Vector2>
 #include <AutoRemesher/Vector3>
 #include <map>
@@ -127,11 +128,11 @@ public:
     bool parameterize();
 
     // Makes parameterize() a plan: it stops after the continuous cover solve,
-    // before the rounding, and fills faceEdges with the quad edge the cover
-    // gives each triangle (QuadParameterizer::parameterize).
-    void setPlanFaceEdges(std::vector<double>* faceEdges)
+    // before the rounding, and fills `plan` with the quad edge and the map
+    // the cover gives each triangle (QuadParameterizer::Plan).
+    void setPlan(QuadParameterizer::Plan* plan)
     {
-        m_planFaceEdges = faceEdges;
+        m_plan = plan;
     }
 
     // The quad edge length the cover asks of each triangle, in input units:
@@ -163,7 +164,7 @@ private:
     const std::vector<Vector3>* m_conicalTips = nullptr;
     const FeatureEdgeSet* m_featureEdges = nullptr;
     double m_anisotropy = 1.0;
-    std::vector<double>* m_planFaceEdges = nullptr;
+    QuadParameterizer::Plan* m_plan = nullptr;
     double m_maxAspectRatio = 2.3;
     bool m_singularitySimplification = true;
     size_t m_maximumSingularityPairDistance = 6;

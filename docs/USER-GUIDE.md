@@ -273,24 +273,35 @@ Known limits (0.3 preview):
 
 ### Density Preview: pick Target Quads before you remesh
 
-**Preview Density** (in a box under the main settings) shows how big the quads will be, painted on your
+**Preview Density** (in a box under the main settings) shows how big the quads will be, drawn over your
 model, without remeshing. It plans the run once (a progress bar; Esc cancels), which takes about half as
 long as a Remesh at the same Target Quads. Then:
 
-- Orange parts get smaller quads, blue parts larger ones; the panel says about how many quads are planned
-  and the quad edge length in scene units. **Checker** draws squares about one quad across, so you can see
-  whether a detail (an ear, a finger, a ridge) gets one quad or several.
+- **Grid** draws the lines the quads' edges are planned along, about one quad apart, over the model's own
+  shading, so you can see whether a detail (an ear, a finger, a ridge) gets one quad or several and which
+  way the quads run. Where the lines jump or meet in threes and fives, the run still settles the exact
+  loops and poles. The panel says about how many quads are planned
+  and the quad edge length in scene units. **Tint** (off at first) adds a faint orange where the quads
+  come out smaller than the median and blue where larger.
 - Type or drag a new **Target Quads** within ±20 % of the planned count (the panel names the range): the
-  colours and squares follow at once, nothing is recomputed. The preview never changes Target Quads
-  itself, so Remesh uses exactly the count the panel shows.
+  grid follows at once, nothing is recomputed. The preview never changes Target Quads itself, so Remesh
+  uses exactly the count the panel shows.
+- **Remesh goes on from the preview.** The preview is the first half of a real Remesh, which waits. Remesh
+  at the planned Target Quads, with the same settings and mesh, continues it instead of starting over (on
+  a 140k-triangle head at 10,000 quads: the remesher's part takes about 5.6 s instead of 9 s). At another count it starts over;
+  the panel says which will happen. The waiting run is stopped after 15 minutes, when you preview again or
+  load a file.
+- With guides drawn (Draw Guide), the panel says about how many quads go around each guide loop, which
+  decides whether a ring can close.
 - It is a plan, not the result, but a close one: a region's quads usually come out within about 5 % of
   the shown size, about as close as two Remesh runs of the same model are to each other. Small flat parts
   (leaves, flower cards) and flat CAD faces can be 10-30 % off, and at low Target Quads two runs of a
   sculpt can differ by about 10 % anyway. On a low-poly model (a box, a cylinder, a cone) each big face shows
   about its average size: the result's quads still get smaller toward its corners and rims, by up to about
   1.4×. It shows size only, never edge loops or poles.
-- Editing the mesh removes the preview. Changing another setting, or Target Quads more than 20 % away from
-  the planned count, asks you to preview again. Click the button again to hide it.
+- Editing the mesh hides the preview (undo brings it back at once); so does a Remesh. Changing another
+  setting, or Target Quads more than 20 % away from the planned count, asks you to preview again. Click
+  the button again to hide it; showing it again for the same mesh and settings needs no new plan.
 
 **Re-runs of the same mesh are faster.** The first Remesh or Preview of a mesh keeps its cleaned-up copy
 (welded seams, fold check, parts) in a cache file, so the next Remesh or Preview of the same mesh skips

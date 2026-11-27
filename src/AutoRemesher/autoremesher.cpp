@@ -105,6 +105,24 @@ namespace {
     const float islandParameterizeEnd = 0.50f;
     // Quad extraction runs from islandParameterizeEnd to 1.0.
 
+    // Where an island's stages end on its 0..1 bar.  A plan made inside a
+    // run (setPlanReadyHandler) solves each island once more up to its
+    // continuous cover, which costs about what the parameterize stage does,
+    // so it gets that much of the bar between decimation and parameterize.
+    struct IslandStages {
+        float resampleEnd;
+        float planEnd;
+        float parameterizeEnd;
+    };
+
+    IslandStages islandStages(bool planInRun)
+    {
+        const float planShare = planInRun ? islandParameterizeEnd - islandResampleEnd : 0.0f;
+        const float scale = 1.0f / (1.0f + planShare);
+        return { islandResampleEnd * scale, (islandResampleEnd + planShare) * scale,
+            (islandParameterizeEnd + planShare) * scale };
+    }
+
     const double decimateTriggerRatio = 8.0;
     const double decimateTargetRatio = 4.0;
 
@@ -1739,6 +1757,13 @@ void AutoRemesher::updateProgress(size_t threadIndex, float progress, const char
     m_progressHandler(m_tag, (float)overall, nullptr != name ? name : "");
 }
 
+float AutoRemesher::planReadyProgress() const
+{
+    if (!m_planReadyHandler || m_planOnly)
+        return 0.0f;
+    return parallelPhaseBegin + (parallelPhaseEnd - parallelPhaseBegin) * islandStages(true).planEnd;
+}
+
 void AutoRemesher::throwIfCancelled() const
 {
     if (m_cancelCheck && m_cancelCheck())
@@ -1784,6 +1809,7 @@ void AutoRemesher::accumulateStageTime(const char* name, float order, long long 
 bool AutoRemesher::remesh()
 {
     m_cancelled = false;
+    m_planWaitUs = 0;
     m_diagnostics.clear();
     try {
         return remeshIslands();
@@ -2306,13 +2332,17 @@ bool AutoRemesher::remeshIslands()
     };
     std::vector<IslandRun> islandRuns(islandContexes.size());
 
+    // A plan-only run plans from the end of decimation to the end of the bar.
+    const bool planInRun = m_planReadyHandler && !m_planOnly;
+    const IslandStages stages = islandStages(planInRun);
+
     // Decimates and isotropically remeshes the island in place.
     const auto resampleIsland = [&](size_t islandIndex, IslandContext& ctx, IslandRun& run,
                                     DecimationStats* stats) {
         throwIfCancelled();
         updateProgress(islandIndex, 0.0f, "Remeshing uniformly");
         const ProgressHandler isotropicProgress = makeStageProgress(islandIndex,
-            0.0f, islandResampleEnd, -1.0f);
+            0.0f, stages.resampleEnd, -1.0f);
 
         const CreaseLengths inputCreases = creaseLengths(ctx.vertices, ctx.triangles, ctx.sharpEdgeDegrees);
         auto t0 = std::chrono::high_resolution_clock::now();
@@ -2364,7 +2394,7 @@ bool AutoRemesher::remeshIslands()
         ctx.isotropicMarkedEdgeCount = (size_t)std::count_if(run.isotropicFeatureEdges.flags.begin(),
             run.isotropicFeatureEdges.flags.end(), [](unsigned char flags) { return 0 != (flags & FeatureEdgeSet::Hard); });
 
-        updateProgress(islandIndex, islandResampleEnd);
+        updateProgress(islandIndex, stages.resampleEnd);
     };
 
     // Parameterizes the remeshed island and extracts its quads.
@@ -2382,10 +2412,10 @@ bool AutoRemesher::remeshIslands()
             return;
         }
 
-        updateProgress(islandIndex, islandResampleEnd);
+        updateProgress(islandIndex, stages.planEnd);
         Parameterizer parameterizer(&vertices, &triangles, nullptr);
         parameterizer.setProgressHandler(
-            makeStageProgress(islandIndex, islandResampleEnd, islandParameterizeEnd, 0.0f));
+            makeStageProgress(islandIndex, stages.planEnd, stages.parameterizeEnd, 0.0f));
         if (ctx.scaling > 0.0)
             parameterizer.setScaling(ctx.scaling);
         parameterizer.setTargetQuadCount(ctx.targetQuadCount);
@@ -2420,7 +2450,7 @@ bool AutoRemesher::remeshIslands()
 
         if (parameterizeSucceeded) {
             throwIfCancelled();
-            updateProgress(islandIndex, islandParameterizeEnd);
+            updateProgress(islandIndex, stages.parameterizeEnd);
             std::unique_ptr<std::vector<std::vector<Vector2>>> uvs = parameterizer.takeTriangleUvs();
             if (uvs) {
                 // Save a copy of UVs for the [param] preview overlay
@@ -2442,7 +2472,7 @@ bool AutoRemesher::remeshIslands()
             extractor.setTangentialSmoothing(m_tangentialQuadSmoothing);
             extractor.setTargetQuadCount((size_t)std::max(0.0, ctx.targetQuadCount));
             extractor.setProgressHandler(
-                makeStageProgress(islandIndex, islandParameterizeEnd, 1.0f, 1.0f));
+                makeStageProgress(islandIndex, stages.parameterizeEnd, 1.0f, 1.0f));
             const bool extracted = extractor.extract();
             if (!m_keepPreviewData) {
                 // Only the extraction read them.
@@ -2617,7 +2647,9 @@ bool AutoRemesher::remeshIslands()
                     resampleIsland(i, islandContexes[i], islandRuns[i], &decimationStats);
             }
         });
-    auto t_isotropicEnd = std::chrono::high_resolution_clock::now();
+    const auto t_isotropicEnd = std::chrono::high_resolution_clock::now();
+    // After a plan made in the run, where the run's own parameterize starts.
+    auto t_parameterizeStart = t_isotropicEnd;
     throwIfCancelled();
 
     // The plan: each island is parameterized as in a run up to the
@@ -2627,8 +2659,9 @@ bool AutoRemesher::remeshIslands()
     // carried to the input vertices by the nearest vertex of T (which lies on
     // the input within its own edge length), or fitted where the input is
     // coarser than T (transferPlannedEdges()).
-    if (m_planOnly) {
+    if (m_planOnly || m_planReadyHandler) {
         m_planIslands.assign(islandContexes.size(), PlanIsland());
+        m_planCovers.assign(islandContexes.size(), PlanCover());
         m_planVertexEdgeLengths.assign(givenVertexCount, 0.0f);
         m_planVertexIslands.assign(givenVertexCount, NoPlanIsland);
         for (size_t i = 0; i < islandContexes.size(); ++i) {
@@ -2662,9 +2695,9 @@ bool AutoRemesher::remeshIslands()
                     parameterizer.setSharpEdgeDegrees(ctx.sharpEdgeDegrees);
                     parameterizer.setFeatureEdges(&islandRuns[i].isotropicFeatureEdges);
                     // A plan has no extraction: the solve fills the rest of the bar.
-                    parameterizer.setProgressHandler(makeStageProgress(i, islandResampleEnd, 1.0f, 0.0f));
-                    std::vector<double> faceEdges;
-                    parameterizer.setPlanFaceEdges(&faceEdges);
+                    parameterizer.setProgressHandler(makeStageProgress(i, stages.resampleEnd, planInRun ? stages.planEnd : 1.0f, 0.0f));
+                    QuadParameterizer::Plan cover;
+                    parameterizer.setPlan(&cover);
                     bool solved = false;
                     try {
                         solved = parameterizer.parameterize();
@@ -2673,9 +2706,16 @@ bool AutoRemesher::remeshIslands()
                     } catch (const std::exception&) {
                         // As in a run: the island falls back, the plan goes on.
                     }
-                    // Without a cover, what the cover is asked for.
-                    if (!solved || faceEdges.size() != ctx.triangles.size())
+                    std::vector<double> faceEdges = std::move(cover.faceEdges);
+                    if (solved && faceEdges.size() == ctx.triangles.size() && cover.cornerUvs.size() == 3 * ctx.triangles.size()) {
+                        auto& planCover = m_planCovers[i];
+                        planCover.vertices = ctx.vertices;
+                        planCover.triangles = ctx.triangles;
+                        planCover.cornerUvs = std::move(cover.cornerUvs);
+                    } else {
+                        // Without a cover, what the cover is asked for.
                         faceEdges = parameterizer.plannedFaceEdgeLengths();
+                    }
                     for (auto& edge : faceEdges) {
                         // Faces the map degenerates on take their neighbours' value.
                         if (!(edge > 0.0) || !std::isfinite(edge))
@@ -2753,7 +2793,6 @@ bool AutoRemesher::remeshIslands()
                 m_planVertexIslands[queryIndices[k]] = m_planVertexIslands[siteIndices[nearest[k]]];
             }
         }
-        m_islandCount = islandContexes.size();
         DiagnosticRecord record("plan");
         double plannedQuads = 0.0;
         for (const auto& island : m_planIslands)
@@ -2769,9 +2808,22 @@ bool AutoRemesher::remeshIslands()
         record.set("resample_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(t_isotropicEnd - t_buildEnd).count());
         record.set("total_ms", 1e-3 * (double)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - t_start).count());
         m_diagnostics.push_back(std::move(record));
-        if (nullptr != m_progressHandler)
-            m_progressHandler(m_tag, 1.0f, "");
-        return true;
+        if (m_planOnly) {
+            m_islandCount = islandContexes.size();
+            if (nullptr != m_progressHandler)
+                m_progressHandler(m_tag, 1.0f, "");
+            return true;
+        }
+        // The plan only read the islands, so the run goes on from the same
+        // state.  The host's wait counts in no time of the run; the plan's
+        // own time is in its record, not in the parameterize phase.
+        const auto t_waitStart = std::chrono::high_resolution_clock::now();
+        if (!m_planReadyHandler())
+            throw RemeshCancelled();
+        const auto t_waitEnd = std::chrono::high_resolution_clock::now();
+        m_planWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(t_waitEnd - t_waitStart).count();
+        t_parameterizeStart = t_waitEnd;
+        throwIfCancelled();
     }
     const size_t isotropicPeakRss = peakResidentSetBytes();
 
@@ -3434,11 +3486,11 @@ bool AutoRemesher::remeshIslands()
     const long long t_splitUs = elapsedUs(t_splitStart, t_afterSplit);
     const long long t_buildUs = elapsedUs(t_afterSplit, t_buildEnd);
     const long long t_isotropicWallUs = elapsedUs(t_buildEnd, t_isotropicEnd);
-    const long long t_parameterizeWallUs = elapsedUs(t_isotropicEnd, t_retryStart);
+    const long long t_parameterizeWallUs = elapsedUs(t_parameterizeStart, t_retryStart);
     const long long t_retryWallUs = elapsedUs(t_retryStart, t_parallelEnd);
-    const long long t_parallelWallUs = elapsedUs(t_buildEnd, t_parallelEnd);
+    const long long t_parallelWallUs = elapsedUs(t_buildEnd, t_parallelEnd) - m_planWaitUs;
     const long long t_mergeUs = elapsedUs(t_parallelEnd, t_mergeEnd);
-    const long long t_totalUs = elapsedUs(t_start, t_mergeEnd);
+    const long long t_totalUs = elapsedUs(t_start, t_mergeEnd) - m_planWaitUs;
 
     // Includes the retried islands, so the isotropic remesh time below is net
     // of all decimation.
@@ -3569,6 +3621,8 @@ bool AutoRemesher::remeshIslands()
         run.set("retry_wall_ms", milliseconds(t_retryWallUs));
         run.set("merge_ms", milliseconds(t_mergeUs));
         run.set("total_ms", milliseconds(t_totalUs));
+        if (m_planReadyHandler)
+            run.set("plan_wait_ms", 1e-3 * (double)m_planWaitUs);
         run.set("cpu_seconds", processCpuSeconds() - cpuStart);
         run.set("isotropic_peak_rss_bytes", (double)isotropicPeakRss);
         run.set("peak_rss_bytes", (double)peakResidentSetBytes());
@@ -3640,7 +3694,7 @@ bool AutoRemesher::remeshIslands()
             run.set("thin_area_share", area > 0.0 ? thinArea / area : 0.0);
             run.set("thin_spots", (double)spots);
             run.set("thin_growth_p50", medianThinGrowth(std::move(growth)));
-            run.set("thin_parts_ms", milliseconds(std::chrono::duration_cast<std::chrono::microseconds>(t_thinPartsEnd - t_isotropicEnd).count()));
+            run.set("thin_parts_ms", milliseconds(std::chrono::duration_cast<std::chrono::microseconds>(t_thinPartsEnd - t_parameterizeStart).count()));
         }
         run.set("retried_islands", (double)islandsToRetry.size());
         run.set("floor_raised_islands", (double)m_floorRaisedIslandCount);

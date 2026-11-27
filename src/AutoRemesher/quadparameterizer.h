@@ -37,6 +37,15 @@ class SurfaceMesh;
 
 class QuadParameterizer {
 public:
+    // A plan (--plan-only): what the continuous cover gives, before the
+    // rounding.  Corner c of face f is 3f + c, one uv unit is one quad.
+    struct Plan {
+        // sqrt(3D area / uv area): the quad edge of each face.
+        std::vector<double> faceEdges;
+        // The continuous map of each corner, in its face's chart (charts of
+        // neighbouring faces differ by a quarter turn and a translation).
+        std::vector<Vector2> cornerUvs;
+    };
     struct Result {
         std::vector<std::vector<Vector2>> triangleUvs;
         std::vector<Vector3> field;
@@ -62,10 +71,9 @@ public:
         // The caller's SurfaceMesh of these vertices and triangles, if it has
         // one, instead of a second copy built here.
         const SurfaceMesh* surfaceMesh = nullptr,
-        // A plan (--plan-only): the quad edge each triangle gets from the
-        // continuous cover, sqrt(3D area / uv area); the solve stops there,
+        // A plan: filled from the continuous cover; the solve stops there,
         // before the rounding, and leaves the rest of the result empty.
-        std::vector<double>* planFaceEdges = nullptr);
+        Plan* plan = nullptr);
 };
 
 }

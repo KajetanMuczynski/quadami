@@ -86,6 +86,14 @@ LOST_PARTS_REFERENCE_INTERFACE = (1, 12)
 INPUT_CACHE_INTERFACE = (1, 16)
 INPUT_CACHE_UNUSABLE = "input cache unusable"
 
+# The interface version that brought --plan-output, --plan-cover-output and
+# --wait-after-plan: a run that plans itself, waits, and goes on when told
+# (RemeshJob.resume()), and the fraction of its progress at which the plan is
+# ready (the core's PlanReadyProgress).
+PLAN_WAIT_INTERFACE = (1, 17)
+PLAN_READY_FRACTION = 0.5
+_WAITING_LINE = 'Waiting for "continue"'
+
 _PROGRESS_LINE = re.compile(r"^(\d+)% done\.(?: (.*))?$")
 
 
@@ -121,8 +129,10 @@ class Plan:
     arrays share, floor and left_out; quads: the target it was planned at.
     """
 
-    def __init__(self, edge, island, islands, quads, edge_scaling=1.0):
+    def __init__(self, edge, island, islands, quads, edge_scaling=1.0, cover=None):
         self.edge = edge
+        # PlanCover, or None (a worker from before it, or no island solved).
+        self.cover = cover
         self.island = island
         self.share = np.array([i["area_share"] for i in islands], dtype=np.float64)
         self.floor = np.array([i["floor_quads"] for i in islands], dtype=np.float64)
@@ -156,9 +166,44 @@ class Plan:
         return self.edge * factor[self.island].astype(np.float32)
 
 
-def read_plan(path, report):
+class PlanCover:
+    """The mesh the plan was made on and the continuous cover's map on it
+    (--plan-cover-output, PlanCover in remesh.h).
+
+    positions: float32 (V, 3); triangles: int32 (F, 3); uvs: float32 (F, 3, 2),
+    each corner in its triangle's chart, one unit one quad of its island's
+    planned count; island: int64 (F,) into the Plan's island arrays.
+    """
+
+    def __init__(self, positions, triangles, uvs, island):
+        self.positions = positions
+        self.triangles = triangles
+        self.uvs = uvs
+        self.island = island
+
+
+def read_plan_cover(path, plan_block, islands):
+    """The PlanCover in path, with the counts of the report's plan block."""
+    n, f = int(plan_block["cover_vertices"]), int(plan_block["cover_triangles"])
+    raw = np.fromfile(path, dtype="<u4")
+    if raw.size != 3 * n + 3 * f + 6 * f + f:
+        raise ValueError("the plan cover has %d values, the report says %d vertices and %d triangles"
+                         % (raw.size, n, f))
+    positions = raw[:3 * n].view("<f4").reshape(n, 3).copy()
+    at = 3 * n
+    triangles = raw[at:at + 3 * f].astype(np.int32).reshape(f, 3)
+    at += 3 * f
+    uvs = raw[at:at + 6 * f].view("<f4").reshape(f, 3, 2).copy()
+    island = raw[at + 6 * f:].astype(np.int64)
+    if f and (triangles.max() >= n or island.max() >= islands):
+        raise ValueError("the plan cover names a vertex or an island it does not have")
+    return PlanCover(positions, triangles, uvs, island)
+
+
+def read_plan(path, report, cover_path=None):
     """The Plan in path (float32 edges, then uint32 islands, little-endian)
-    with the islands of report["plan"]."""
+    with the islands of report["plan"], and the PlanCover in cover_path if
+    given and the report has one."""
     plan = report["plan"]
     n = int(plan["vertices"])
     raw = np.fromfile(path, dtype="<u4")
@@ -169,8 +214,11 @@ def read_plan(path, report):
     if n and (island.max() >= len(islands)):
         raise ValueError("the plan names an island the report does not have")
     parameters = report.get("parameters", {})
+    cover = None
+    if cover_path is not None and "cover_triangles" in plan:
+        cover = read_plan_cover(cover_path, plan, len(islands))
     return Plan(raw[:n].view("<f4").copy(), island, islands, parameters.get("target_quads", 0),
-                parameters.get("edge_scaling", 1.0))
+                parameters.get("edge_scaling", 1.0), cover)
 
 
 def write_obj(path, positions, triangles, marked_edges=None):
@@ -320,7 +368,7 @@ class RemeshJob:
     """
 
     def __init__(self, executable, positions, triangles, parameters, marked_edges=None, plan=False,
-                 input_cache=None):
+                 input_cache=None, wait_after_plan=False):
         self.executable = executable
         # A file the worker keeps the prepared input in (--input-cache,
         # input_cache.py). When it exists the mesh is not written out; if the
@@ -332,6 +380,13 @@ class RemeshJob:
         self._cache_checked = False
         # Only plan the run (--plan-only): the outcome carries a Plan, no mesh.
         self.plan = plan
+        # A run that plans itself and then waits (--wait-after-plan): once
+        # `waiting`, plan_outcome() has the plan and resume() lets the run go
+        # on to its mesh, which outcome() then has as for any run.
+        self.wait_after_plan = wait_after_plan and not plan
+        self.waiting = False
+        self.resumed = False
+        self._plan_outcome = None
         self.positions = positions
         self.triangles = triangles
         self.marked_edges = marked_edges
@@ -372,6 +427,9 @@ class RemeshJob:
         args += ["-o", self._path("plan.bin" if self.plan else "output.obj"),
                  "--report-json", self._path("report.json"),
                  "--stdin-control"] + (["--plan-only"] if self.plan else [])
+        if self.wait_after_plan:
+            args += ["--plan-output", self._path("plan.bin"), "--plan-report-json", self._path("plan.json"),
+                     "--plan-cover-output", self._path("plan-cover.bin"), "--wait-after-plan"]
         for name, value in self.parameters.items():
             if name == "target_quads":
                 value = int(value)
@@ -439,6 +497,9 @@ class RemeshJob:
                 break
             if line is None:
                 continue
+            if line == _WAITING_LINE and self.wait_after_plan and not self.resumed:
+                self.waiting = True
+                continue
             match = _PROGRESS_LINE.match(line)
             if match:
                 self._progress_time = time.monotonic()
@@ -451,6 +512,34 @@ class RemeshJob:
                 and time.monotonic() - self._cancel_time > CANCEL_GRACE_SECONDS):
             self._process.kill()
             self.killed = True
+
+    def plan_outcome(self):
+        """Once `waiting`: an Outcome with the plan (status "ok"), or why
+        there is none."""
+        if self._plan_outcome is None:
+            try:
+                with open(self._path("plan.json"), "r", encoding="utf-8") as f:
+                    report = json.load(f)
+                self._plan_outcome = Outcome("ok", report.get("message", ""), report,
+                                             plan=read_plan(self._path("plan.bin"), report,
+                                                            self._path("plan-cover.bin")))
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                self._plan_outcome = Outcome("failed", "no plan: %s" % error, log="\n".join(self._log))
+        return self._plan_outcome
+
+    def resume(self):
+        """Lets a waiting run go on to its mesh. False if it could not be
+        told (it has ended); then outcome() says why."""
+        if not self.waiting or self.resumed:
+            return False
+        self.resumed = True
+        self.waiting = False
+        try:
+            self._process.stdin.write("continue\n")
+            self._process.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            return False
+        return True
 
     def cancel(self):
         if self.cancel_requested or self._process is None:

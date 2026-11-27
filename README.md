@@ -33,10 +33,11 @@ More before/after examples, with their numbers and limits: [docs/gallery](docs/g
   blames a sculpt brush); if the result looks fine, ignore it.
 - **Builds quads with libQEx**, a robust quad extractor from RWTH Aachen, with our own extractor as
   a per-piece fallback.
-- **Shows the quad size before you remesh.** **Preview Density** paints the planned quad size on your
-  model; change Target Quads to see what more or fewer quads would give, at once, then remesh at the
-  count that keeps your details. It is a plan (on average 10-15 % off the result, less reliable on
-  hard-surface parts), and it shows size only, not edge loops.
+- **Shows the quad size before you remesh.** **Preview Density** draws the planned quad lines, about one
+  quad apart, over your model; change Target Quads to see what more or fewer quads would give, at once, then
+  remesh at the count that keeps your details, and Remesh goes on from the preview instead of starting
+  over. It is a plan (on average 10-15 % off the result, less reliable on hard-surface parts), and it
+  shows size and direction, not the exact edge loops.
 - **Asks before a huge job.** Above 200,000 quads it shows the memory it needs (about 2 GB per
   100,000 quads) and waits for you to confirm.
 

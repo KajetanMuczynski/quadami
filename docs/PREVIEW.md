@@ -509,6 +509,64 @@ Not changed here (0.4 candidates): within ±20 % the overlay barely moves (+13 %
 edge, about 4 % of the colour ramp, and the checker steps by 19 % in edge), and it replaces the
 model's own shading.
 
+### 4.8 Remesh goes on from the preview; the plan's quad lines over the shading (2026-11-27)
+
+Kajetan's 0.4 asks (plan-0.4 §5): a preview that shows a change of Target Quads, keeps the model
+readable, is not planned again on every press, and that Remesh reuses.
+
+**Plan reuse, chosen design.** The preview is now a real run that plans itself once every island is
+decimated (`RemeshCallbacks::planReady`, interface 1.17; CLI `--plan-output`, `--plan-report-json`,
+`--wait-after-plan`) and then waits. Remesh with the same object, mesh content (positions, triangles,
+marks and guides), worker and every run parameter tells it to go on (`continue` on stdin); anything else
+stops it. The plan is the one `planRemesh()` makes (same code, called between the decimation loop and
+the parameterize loop on the calling thread, so no TBB task blocks), and the run continues from the
+state it would have had anyway, so its mesh is the plain run's to the bit by construction (checked: head
+10k, 5 runs; `tests/plan_ready_test.cpp`; the add-on's `CliTest.test_wait_after_plan`). The run's
+progress is mapped so the plan lands at 50 %; the wait counts in no time of the report.
+Rejected: a disk cache of the solver state after the continuous cover (a second file format inside the
+solver to keep in step with it; the rounding builds and factors its system again anyway); a worker
+process kept alive between separate runs (same state, but a new protocol and lifetime for every stage).
+Not done: reusing the plan's own cover solve in the run (the plan solves each island once more, about
+the parameterize stage's cost). It needs the parameterizer split into a continuous and an integer phase
+held across all islands; that is the remaining ~40 % of a Remesh after a preview.
+
+Measured [M, CLI on master + this branch, cloud, 4 cores, one job at a time, median of 5 runs; every
+continued run's OBJ identical to the plain run's]:
+
+| Mesh | Triangles | Target | Plain Remesh | Preview (to the wait) | Remesh after preview |
+|---|---|---|---|---|---|
+| Head (private) | 138,876 | 10k | 8.97 s | 6.39 s | 5.64 s (−37 %) |
+| Lion statue (public) | 63,338 | 5k | 3.07 s | 2.05 s | 2.00 s (−35 %) |
+| Happy Buddha (test-only) | 1,087,716 | 10k | 42.2 s | 15.1 s | 28.4 s (−33 %), one run, *unconfirmed* |
+
+The preview (to the wait) costs about what `--plan-only` did (it adds the report's fold survey).
+
+**Plans kept.** Hide only stops drawing; the last four plans stay in memory, keyed on object, mesh
+content, plan settings and worker, so showing one again, or an undo after an edit, needs no plan. A mesh
+edit hides the preview; a Remesh hides it too (the result is what to look at). Only one run ever waits;
+it is stopped by another preview, a file load, a Remesh of anything else, or 15 minutes unused.
+
+**Overlay.** Drawn over Blender's shading (alpha blend, no depth write). Grid: the integer lines of u
+and v of the plan's continuous cover (the map the run rounds into its quads, before the rounding), drawn
+on the isotropic mesh T it was solved on, which the worker hands over with the plan
+(`--plan-cover-output`: T's positions and triangles, a uv per corner, the island per triangle). One uv
+unit is one quad at the planned count, so at Target Quads N each island's map is scaled by
+sqrt(max(N share, floor) / q0) in the vertex shader: the lines run along the quads' directions, one
+planned quad apart, and follow the count smoothly. Lines closer than about 3 px fade out. Tint (off by
+default) is the old orange/blue on the input mesh, faint; left-out parts are grey. The panel adds what
+Remesh will do ("goes on from the preview" or "runs from the start", and why), that exact loops and poles
+appear after Remesh, and, with guides, about how many quads go around each guide loop (length over the
+planned edge along it).
+
+Round 1 drew an object-space cubic lattice instead (step = planned edge rounded to quarter octaves). It
+was rejected in review (2026-11-27, "the lines don't align, it looks bugged"): the lattice ignores the
+quads' directions, so its lines cut across the surface at arbitrary angles, break where the step changes
+and turn into contours on curved sides.
+
+Limit of the cover grid: the charts of neighbouring triangles differ by a quarter turn and a translation
+that the continuous solve has not yet made an integer (the rounding does that), so lines jump along the
+cover's seams, and cones show as points where 3 or 5 lines meet but can still move in the rounding.
+
 ## 5. Design critique (what may have been missed)
 
 - **The Decimate analogy breaks at the loops.** Decimate's preview *is* its result. Ours can only

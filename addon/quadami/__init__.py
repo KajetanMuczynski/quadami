@@ -36,6 +36,7 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, Po
 from . import density
 from . import guide_tool
 from . import input_cache
+from . import plan_store
 from . import transfer
 from . import worker
 from . import raise_hint
@@ -61,12 +62,18 @@ _last_report = None
 # The running density plan (Preview Density), and whether the panel's Cancel asked to stop it.
 _plan_job = None
 _cancel_plan_from_panel = False
+# The plans of this session and the preview's run waiting for Remesh (plan_store.py).
+_plans = plan_store.Store()
 # The last run of this session, for Copy Report: the panel's settings, the
 # input's triangle count, the worker's last lines and the result's name.
 _last_run = None
 
 
-def _input_cache_path(executable, positions, triangles, marked):
+def _worker_key(executable):
+    return input_cache.worker_key(executable, worker.worker_build_id(executable) or "")
+
+
+def _input_cache_path(executable, positions, triangles, marked, digest=None):
     """The worker's prepared-input file for this mesh (input_cache.py), or
     None when the worker cannot keep one. Prunes the folder."""
     if (worker.worker_interface(executable) or (0, 0)) < worker.INPUT_CACHE_INTERFACE:
@@ -80,8 +87,7 @@ def _input_cache_path(executable, positions, triangles, marked):
             os.makedirs(directory, exist_ok=True)
         except OSError:
             return None
-    key = input_cache.worker_key(executable, worker.worker_build_id(executable) or "")
-    path = input_cache.path_for(directory, positions, triangles, marked, key)
+    path = input_cache.path_for(directory, positions, triangles, marked, _worker_key(executable), digest)
     input_cache.touch(path)
     input_cache.prune(directory, keep=path)
     return path
@@ -97,7 +103,7 @@ def _settings(context):
 
 
 def _preview_state(context):
-    """(preview, why it is not drawn now or None) for the panel and the overlay."""
+    """(preview on show, why it is not drawn now or None) for the panel and the overlay."""
     preview = density.current()
     if preview is None:
         return None, None
@@ -120,7 +126,7 @@ def _overlay_state():
     if preview is None or stale:
         return None
     settings = _settings(context)
-    return settings.target_quads, settings.preview_cells
+    return settings.target_quads, settings.preview_grid, settings.preview_tint
 
 
 def _target_changed(settings, context):
@@ -270,10 +276,13 @@ class RemeshSettings(bpy.types.PropertyGroup):
                     "faces come out distorted). For a fresh map, keep the seams (above) and unwrap "
                     "the result again instead")
 
-    # Not a remesh parameter: the density preview's checker.
-    preview_cells: BoolProperty(
-        name="Checker", default=True, update=lambda self, context: _redraw(context),
-        description="Draw a checker whose squares are about one planned quad across")
+    # Not remesh parameters: how the density preview is drawn.
+    preview_grid: BoolProperty(
+        name="Grid", default=True, update=lambda self, context: _redraw(context),
+        description="Draw lines along the planned quad directions, about one planned quad apart")
+    preview_tint: BoolProperty(
+        name="Tint", default=False, update=lambda self, context: _redraw(context),
+        description="Tint where the plan puts smaller quads than the median orange, larger ones blue")
 
     def parameters(self):
         return {name: getattr(self, name) for name in worker.PARAMETER_FLAGS}
@@ -599,26 +608,28 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         if not self._guide_edges and guide_tool.guide_flags(obj.data) is not None:
             self.report({"WARNING"}, "The guides were not used: a modifier changes the mesh's edges. "
                         "Apply the modifiers, then draw the guides")
-        parameters = settings.parameters()
+        # After a run that lost parts, measure this one against that run's
+        # quad width too, so the panel can say whether those parts came back.
+        parameters, self._history_key = _run_parameters(obj, settings, positions, triangles, marked, executable)
         if self.repair_folds:
             parameters["repair_folds"] = True
             if self.flatten_spikes:
                 parameters["flatten_spikes"] = True
-        # After a run that lost parts, measure this one against that run's
-        # quad width too, so the panel can say whether those parts came back.
-        self._history_key = raise_hint.input_key(positions, triangles, marked, parameters)
-        reference = raise_hint.reference_target(raise_hint.load(obj.get(HISTORY_PROPERTY)), self._history_key,
-                                                parameters["target_quads"])
-        if reference and (worker.worker_interface(executable) or (0, 0)) >= worker.LOST_PARTS_REFERENCE_INTERFACE:
-            parameters["lost_parts_reference"] = reference
-        job = worker.RemeshJob(executable, positions, triangles, parameters, marked,
-                               input_cache=_input_cache_path(executable, positions, triangles, marked))
-        try:
-            job.start()
-        except (OSError, ValueError) as error:
-            job.cleanup()
-            self.report({"ERROR"}, "Could not start the remesher: %s" % error)
-            return {"CANCELLED"}
+        digest = input_cache.mesh_digest(positions, triangles, marked)
+        # The preview's run, if it waits for exactly this one, goes on.
+        job = _plans.take(plan_store.run_key(obj.name, digest, _worker_key(executable), parameters))
+        self._continued = job is not None and job.resume()
+        if not self._continued:
+            if job is not None:
+                job.cleanup()
+            job = worker.RemeshJob(executable, positions, triangles, parameters, marked,
+                                   input_cache=_input_cache_path(executable, positions, triangles, marked, digest))
+            try:
+                job.start()
+            except (OSError, ValueError) as error:
+                job.cleanup()
+                self.report({"ERROR"}, "Could not start the remesher: %s" % error)
+                return {"CANCELLED"}
         _job = job
         _cancel_from_panel = False
         _last_status, _last_message, _last_report = "running", "", None
@@ -677,6 +688,8 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             _last_message = "\"%s\" was deleted during the remesh" % self._source_name
             self.report({"ERROR"}, "%s: %s" % (NAME, _last_message))
             return {"CANCELLED"}
+        # The result is what to look at now; the plan stays kept for later.
+        density.hide()
         new_obj, _last_report = _build_object(context, source, outcome, self._smooth, self._warnings,
                                               self._addon_settings, self._guide_edges)
         _last_run["result"] = new_obj.name
@@ -684,8 +697,9 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
         _track(source, self._history_key, new_obj, _last_report)
         _show_result(context, new_obj, (source, bpy.data.objects.get(self._replaced) if self._replaced else None))
         output = outcome.report.get("output", {})
-        self.report({"INFO"}, "%s: %d quads, %d non-quads" % (
-            NAME, output.get("quads", 0), output.get("non_quads", 0)))
+        self.report({"INFO"}, "%s: %d quads, %d non-quads%s" % (
+            NAME, output.get("quads", 0), output.get("non_quads", 0),
+            " (went on from the density preview)" if self._continued else ""))
         return {"FINISHED"}
 
     def _stop(self, context):
@@ -704,6 +718,20 @@ class OBJECT_OT_remesh_quads(bpy.types.Operator):
             if _last_run is not None:
                 _last_run["log"] = ""
             self._stop(context)
+
+
+def _run_parameters(obj, settings, positions, triangles, marked, executable):
+    """(parameters of a Remesh of obj now, the key of its run history):
+    the panel's settings and, after a run that lost parts, that run's quad
+    width to measure against (raise_hint.py). The same for Preview Density,
+    so the preview's run can be the Remesh's."""
+    parameters = settings.parameters()
+    history_key = raise_hint.input_key(positions, triangles, marked, parameters)
+    reference = raise_hint.reference_target(raise_hint.load(obj.get(HISTORY_PROPERTY)), history_key,
+                                            parameters["target_quads"])
+    if reference and (worker.worker_interface(executable) or (0, 0)) >= worker.LOST_PARTS_REFERENCE_INTERFACE:
+        parameters["lost_parts_reference"] = reference
+    return parameters, history_key
 
 
 def _addon_settings(settings):
@@ -782,11 +810,12 @@ class OBJECT_OT_remesh_quads_cancel(bpy.types.Operator):
 
 
 class OBJECT_OT_density_preview(bpy.types.Operator):
-    """Plan the remesh at Target Quads (about half the time of a Remesh) and draw the planned """ \
-        """quad size over the mesh; drag Change (+-20 %) to try nearby counts without planning """ \
-        """again. A region is usually within about 5 % of the result's size; small flat parts """ \
-        """and CAD parts can be 10-30 % off; a big low-poly face shows its average. Click again """ \
-        """to hide it (Esc cancels)"""
+    """Plan the remesh at Target Quads and draw the planned quad size over the mesh: lines """ \
+        """about one quad apart. Changing Target Quads by up to 20 % redraws it without planning """ \
+        """again, and Remesh at the planned count goes on from the preview instead of starting """ \
+        """over. Shows size only: loops and poles appear after Remesh. A region is usually within """ \
+        """about 5 % of the result's size; small flat parts and CAD parts can be 10-30 % off; a big """ \
+        """low-poly face shows its average. Click again to hide it (Esc cancels)"""
     bl_idname = "object." + ID + "_density_preview"
     bl_label = "Preview Density"
 
@@ -804,7 +833,7 @@ class OBJECT_OT_density_preview(bpy.types.Operator):
         source = _source(obj)
         target = source if source is not None else obj
         if preview is not None and stale is None and preview.object_name == target.name:
-            density.clear()
+            density.hide()
             return {"FINISHED"}
         preferences = _preferences(context)
         executable = worker.find_executable(bpy.path.abspath(preferences.executable) if preferences else "")
@@ -812,24 +841,42 @@ class OBJECT_OT_density_preview(bpy.types.Operator):
             self.report({"ERROR"}, "Remesher executable not found; set it in the %s preferences" % NAME)
             return {"CANCELLED"}
         settings = _settings(context)
-        positions, triangles, _smooth, marked, _flooded, _guide_edges = _mesh_arrays(context, target, settings.follow_marks)
+        positions, triangles, _smooth, marked, _flooded, guide_count = _mesh_arrays(context, target, settings.follow_marks)
         if len(triangles) == 0:
             self.report({"ERROR"}, "The mesh has no faces")
             return {"CANCELLED"}
-        job = worker.RemeshJob(executable, positions, triangles, settings.parameters(), marked, plan=True,
-                               input_cache=_input_cache_path(executable, positions, triangles, marked))
+        digest = input_cache.mesh_digest(positions, triangles, marked)
+        worker_key = _worker_key(executable)
+        self._object_name = target.name
+        self._key = density.settings_key(settings)
+        self._plan_key = plan_store.plan_key(target.name, digest, worker_key, self._key)
+        kept = _plans.plan(self._plan_key)
+        if kept is not None and density.in_band(kept.plan.quads, settings.target_quads):
+            density.show(kept)
+            return {"FINISHED"}
+        parameters, _history = _run_parameters(target, settings, positions, triangles, marked, executable)
+        # A run that waits after its plan, so Remesh can go on with it; a
+        # worker from before that can only plan.
+        wait = (worker.worker_interface(executable) or (0, 0)) >= worker.PLAN_WAIT_INTERFACE
+        if not wait:
+            parameters = settings.parameters()
+        self._run_key = plan_store.run_key(target.name, digest, worker_key, parameters)
+        job = worker.RemeshJob(executable, positions, triangles, parameters, marked, plan=not wait,
+                               wait_after_plan=wait,
+                               input_cache=_input_cache_path(executable, positions, triangles, marked, digest))
+        # One preview worker at a time: the one that waited goes.
+        _plans.stop_waiting()
         try:
             job.start()
         except (OSError, ValueError) as error:
             job.cleanup()
             self.report({"ERROR"}, "Could not start the remesher: %s" % error)
             return {"CANCELLED"}
-        density.clear()
+        density.hide()
         _plan_job = job
         _cancel_plan_from_panel = False
-        self._object_name = target.name
-        self._key = density.settings_key(settings)
         self._positions, self._triangles = positions, triangles
+        self._guides = guide_tool.guide_pairs(target.data) if guide_count else None
         self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
         return {"RUNNING_MODAL"}
@@ -843,19 +890,37 @@ class OBJECT_OT_density_preview(bpy.types.Operator):
         if _cancel_plan_from_panel:
             _plan_job.cancel()
         _plan_job.poll()
+        if _plan_job.waiting and not _plan_job.cancel_requested:
+            job = _plan_job
+            outcome = job.plan_outcome()
+            self._stop(context)
+            if outcome.ok:
+                _plans.park(self._run_key, job)
+                if not bpy.app.timers.is_registered(_expire_waiting):
+                    bpy.app.timers.register(_expire_waiting, first_interval=60.0)
+            else:
+                job.cleanup()
+            return self._show(outcome)
         if not _plan_job.done:
-            context.workspace.status_text_set("%s: planning %d%%   (Esc to cancel)" % (NAME, round(_plan_job.fraction * 100)))
+            context.workspace.status_text_set("%s: planning %d%%   (Esc to cancel)" % (NAME, round(_plan_fraction() * 100)))
             _redraw(context)
             return {"PASS_THROUGH"}
         outcome = _plan_job.outcome()
         self._stop(context)
+        return self._show(outcome)
+
+    def _show(self, outcome):
         if not outcome.ok:
+            if outcome.log:
+                print(NAME + " worker output:\n" + outcome.log)
             level = {"WARNING"} if outcome.status == "cancelled" else {"ERROR"}
             self.report(level, "%s preview %s: %s" % (
                 NAME, report_rows.STATUS_TEXT.get(outcome.status, outcome.status), outcome.message))
             return {"CANCELLED"}
-        density.show(density.Preview(self._object_name, self._key, outcome.plan, self._positions,
-                                     self._triangles, outcome.report))
+        preview = density.Preview(self._object_name, self._key, outcome.plan, self._positions,
+                                  self._triangles, outcome.report, self._guides)
+        _plans.add_plan(self._plan_key, preview)
+        density.show(preview)
         return {"FINISHED"}
 
     def _stop(self, context):
@@ -869,6 +934,20 @@ class OBJECT_OT_density_preview(bpy.types.Operator):
         if _plan_job is not None:
             _plan_job.cleanup()
             self._stop(context)
+
+
+def _plan_fraction():
+    """How far the running preview's plan is, 0..1."""
+    if _plan_job is None:
+        return 0.0
+    if _plan_job.wait_after_plan:
+        return min(1.0, _plan_job.fraction / worker.PLAN_READY_FRACTION)
+    return _plan_job.fraction
+
+
+def _expire_waiting():
+    """bpy.app.timers: stops the preview's waiting run after plan_store.WAIT_SECONDS unused."""
+    return 60.0 if _plans.expire() else None
 
 
 class OBJECT_OT_density_preview_cancel(bpy.types.Operator):
@@ -898,8 +977,9 @@ def _draw_density(layout, context, settings, room):
     box = layout.box()
     preview, stale = _preview_state(context)
     if _plan_job is not None:
-        text = "Cancelling..." if _plan_job.cancel_requested else "Planning %d%%" % round(_plan_job.fraction * 100)
-        box.progress(factor=_plan_job.fraction, type="BAR", text=text)
+        fraction = _plan_fraction()
+        text = "Cancelling..." if _plan_job.cancel_requested else "Planning %d%%" % round(fraction * 100)
+        box.progress(factor=fraction, type="BAR", text=text)
         box.operator(OBJECT_OT_density_preview_cancel.bl_idname, icon="CANCEL")
         return
     shown = preview is not None and stale is None
@@ -909,33 +989,72 @@ def _draw_density(layout, context, settings, room):
     if preview is None:
         return
     column = box.column(align=True)
+    width = room.box - room.pad
+
+    def lines(texts, icon_first=None):
+        for text in texts:
+            for i, part in enumerate(report_rows.wrap(text, width - (room.icon if icon_first else 0), room.measure)):
+                if icon_first:
+                    column.label(text=part, icon=icon_first if i == 0 else "BLANK1")
+                else:
+                    column.label(text=part)
+
     if stale:
-        for i, line in enumerate(report_rows.wrap(stale + ": preview again", room.box - room.icon - room.pad,
-                                                  room.measure)):
-            column.label(text=line, icon="INFO" if i == 0 else "BLANK1")
+        lines([stale + ": preview again"], "INFO")
         return
     quads = settings.target_quads
+    planned = preview.plan.quads
     low, middle, high = preview.edge_range(quads)
-    lines = ["About %s quads planned (%s asked)" % (format(round(preview.plan.planned_quads(quads)), ","),
+    texts = ["About %s quads planned (%s asked)" % (format(round(preview.plan.planned_quads(quads)), ","),
                                                    format(quads, ",")),
-             "Quad edge %s to %s, median %s" % (_length_text(context, preview, low),
-                                                _length_text(context, preview, high),
-                                                _length_text(context, preview, middle)),
-             "Orange: smaller quads, blue: larger; planned, not the result",
-             "Change Target Quads to see %s to %s quads without planning again"
-             % (format(math.ceil(preview.plan.quads * (1.0 - density.BAND / 100.0)), ","),
-                format(math.floor(preview.plan.quads * (1.0 + density.BAND / 100.0)), ","))]
+             "Quad edge about %s, from %s to %s" % (_length_text(context, preview, middle),
+                                                    _length_text(context, preview, low),
+                                                    _length_text(context, preview, high))]
     # The core's small-part floor (TODO G13): many tiny loose parts each get a
     # minimum that Target Quads does not lower; the core warns above the same share.
     parts, extra = preview.plan.floor_parts(quads)
     if quads and extra > report_rows.FLOOR_EXTRA_SHARE * quads:
-        lines.insert(1, "%s small parts get a minimum of quads each, %s of the planned quads; "
-                        "separate them (P > By Loose Parts) to stay near the target"
+        texts.append("%s small parts get a minimum of quads each, %s of the planned quads; "
+                     "separate them (P > By Loose Parts) to stay near the target"
                      % (format(parts, ","), format(round(extra), ",")))
-    for line in lines:
-        for part in report_rows.wrap(line, room.box - room.pad, room.measure):
-            column.label(text=part)
-    box.prop(settings, "preview_cells")
+    loops = preview.guide_loops(quads)
+    if loops:
+        shown_loops = loops[:4]
+        counts = ", ".join(format(round(count), ",") for _closed, count in shown_loops)
+        closed = all(c for c, _count in shown_loops)
+        texts.append("Guides: about %s quads %s%s" % (counts, "around" if closed else "along",
+                                                      " (and %d more)" % (len(loops) - 4) if len(loops) > 4 else ""))
+    lines(texts)
+    lines([_remesh_line(context, preview, quads, planned)], "PLAY")
+    lines(["Lines follow the planned quads; exact loops and poles appear after Remesh",
+           "Target Quads %s to %s redraws without planning again"
+           % (format(math.ceil(planned * (1.0 - density.BAND / 100.0)), ","),
+              format(math.floor(planned * (1.0 + density.BAND / 100.0)), ","))])
+    row = box.row(align=True)
+    grid = row.row(align=True)
+    # A plan from a worker before the cover (it can only plan) has no lines.
+    grid.enabled = preview.plan.cover is not None
+    grid.prop(settings, "preview_grid", toggle=True)
+    row.prop(settings, "preview_tint", toggle=True)
+    if settings.preview_tint:
+        lines(["Orange: smaller quads than the median, blue: larger"])
+
+
+def _remesh_line(context, preview, quads, planned):
+    """What Remesh does now, next to the preview it would go on from."""
+    waiting = _plans.waiting_key()
+    if waiting is None or waiting[0] != preview.object_name:
+        return "Remesh runs from the start (the preview's run has stopped)"
+    # The mesh is the preview's while it is drawn (an edit hides it).
+    sent = dict(waiting[3])
+    changed = [name for name, value in _settings(context).parameters().items()
+               if name != "target_quads" and sent.get(name) != value]
+    if changed:
+        return "Remesh runs from the start (a setting changed since the preview)"
+    if quads != sent.get("target_quads"):
+        return "Remesh at %s goes on from the preview; at %s it runs from the start" % (
+            format(planned, ","), format(quads, ","))
+    return "Remesh goes on from the preview (about half its time is done)"
 
 
 # Room for text in the sidebar, in pixels: `panel` is a row of the panel,
@@ -1185,7 +1304,8 @@ classes = (
 
 @bpy.app.handlers.persistent
 def _file_loaded(_dummy):
-    density.clear()
+    density.hide()
+    _plans.clear()
 
 
 def register():
@@ -1208,7 +1328,10 @@ def unregister():
         _job.cleanup()
     if _plan_job is not None:
         _plan_job.cleanup()
-    density.clear()
+    density.hide()
+    _plans.clear()
+    if bpy.app.timers.is_registered(_expire_waiting):
+        bpy.app.timers.unregister(_expire_waiting)
     density.draw_state = None
     for handlers, function in ((bpy.app.handlers.depsgraph_update_post, density.geometry_changed),
                                (bpy.app.handlers.load_post, _file_loaded)):

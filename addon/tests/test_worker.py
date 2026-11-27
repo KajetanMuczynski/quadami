@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "quadami"))
 import density  # noqa: E402
 import input_cache  # noqa: E402
 import names  # noqa: E402
+import plan_store  # noqa: E402
 import raise_hint  # noqa: E402
 import report  # noqa: E402
 import worker  # noqa: E402
@@ -725,11 +726,111 @@ class PlanTest(unittest.TestCase):
             np.testing.assert_allclose(density.shader_edges(a, share, floor, quads), plan.edge_at(quads),
                                        rtol=1e-5)
 
+    def test_cover_attributes(self):
+        plan = self.plan()
+        # Two triangles on island 0, one on island 1, one on the left-out sliver.
+        positions = np.arange(15, dtype=np.float32).reshape(5, 3)
+        triangles = np.array([[0, 1, 2], [1, 2, 3], [2, 3, 4], [0, 3, 4]], dtype=np.int32)
+        uvs = np.arange(24, dtype=np.float32).reshape(4, 3, 2)
+        plan.cover = worker.PlanCover(positions, triangles, uvs, np.array([0, 0, 1, 2]))
+        attributes = density.cover_attributes(plan)
+        self.assertEqual(attributes["pos"].shape, (9, 3))
+        np.testing.assert_array_equal(attributes["pos"][3:6], positions[[1, 2, 3]])
+        np.testing.assert_array_equal(attributes["uv"], uvs[:3].reshape(-1, 2))
+        # The map's factor follows each island's quads: sqrt(q(N) / q0).
+        for quads in (200, 1000, 1250):
+            q, q0 = plan.island_quads(quads)[:2], plan.island_quads(plan.quads)[:2]
+            np.testing.assert_allclose(
+                density.cover_scale(attributes["share"], attributes["floorq"], attributes["q0"], quads),
+                np.sqrt(q / q0)[[0, 0, 0, 0, 0, 0, 1, 1, 1]], rtol=1e-5)
+        plan.cover = None
+        self.assertIsNone(density.cover_attributes(plan))
+
     def test_band(self):
         self.assertTrue(density.in_band(5000, 4000))
         self.assertTrue(density.in_band(5000, 6000))
         self.assertFalse(density.in_band(5000, 3999))
         self.assertFalse(density.in_band(5000, 6001))
+
+
+class GuideLoopsTest(unittest.TestCase):
+    """density.guide_loops(): quads along each chain of guide edges."""
+
+    def test_loop_and_path(self):
+        # A unit square loop (planned edge 0.5: 8 quads around) and an open
+        # path of two edges of length 2 (planned edge 1: 4 quads along).
+        positions = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+                              [5, 0, 0], [7, 0, 0], [9, 0, 0]], dtype=np.float32)
+        edges = np.array([0.5, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0])
+        pairs = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6)]
+        loops = density.guide_loops(positions, pairs, edges)
+        self.assertEqual(len(loops), 2)
+        self.assertEqual(loops[0][0], True)
+        self.assertAlmostEqual(loops[0][1], 8.0)
+        self.assertEqual(loops[1][0], False)
+        self.assertAlmostEqual(loops[1][1], 4.0)
+        self.assertEqual(density.guide_loops(positions, np.zeros((0, 2), np.int64), edges), [])
+
+
+class PlanStoreTest(unittest.TestCase):
+    """plan_store.Store: kept plans and the one run that waits for Remesh."""
+
+    class Job:
+        def __init__(self):
+            self.waiting, self.done, self.stopped = True, False, False
+
+        def poll(self):
+            pass
+
+        def cancel(self):
+            self.stopped = True
+
+        def cleanup(self):
+            self.done = True
+
+    def test_plans_keep_the_latest(self):
+        store = plan_store.Store()
+        for i in range(plan_store.KEEP_PLANS + 1):
+            store.add_plan(("k", i), i)
+        self.assertIsNone(store.plan(("k", 0)))
+        self.assertEqual(store.plan(("k", 1)), 1)
+        store.add_plan(("k", 99), 99)
+        # 1 was used last, so 2 went.
+        self.assertEqual(store.plan(("k", 1)), 1)
+        self.assertIsNone(store.plan(("k", 2)))
+
+    def test_take_only_the_same_run(self):
+        store = plan_store.Store()
+        job = self.Job()
+        key = plan_store.run_key("Head", "abc", "w", {"target_quads": 10000, "adaptivity": 0.5})
+        store.park(key, job)
+        self.assertEqual(store.waiting_key(), key)
+        self.assertIs(store.take(plan_store.run_key("Head", "abc", "w", {"adaptivity": 0.5, "target_quads": 10000})),
+                      job)
+        self.assertIsNone(store.waiting_key())
+        self.assertFalse(job.stopped)
+        # Another target: no run, and the waiting one is stopped.
+        other = self.Job()
+        store.park(key, other)
+        self.assertIsNone(store.take(plan_store.run_key("Head", "abc", "w", {"target_quads": 11000, "adaptivity": 0.5})))
+        self.assertTrue(other.stopped and other.done)
+
+    def test_one_waits_and_expires(self):
+        now = [0.0]
+        store = plan_store.Store(clock=lambda: now[0])
+        first, second = self.Job(), self.Job()
+        store.park("a", first)
+        store.park("b", second)
+        self.assertTrue(first.stopped)
+        self.assertTrue(store.expire())
+        now[0] = plan_store.WAIT_SECONDS + 1
+        self.assertFalse(store.expire())
+        self.assertTrue(second.stopped)
+        # A run that ended by itself is not kept.
+        third = self.Job()
+        store.park("c", third)
+        third.done = True
+        self.assertIsNone(store.waiting_key())
 
 
 class InputCacheFolderTest(unittest.TestCase):
@@ -882,6 +983,67 @@ class CliTest(unittest.TestCase):
         # Uniform quads: the edge is sqrt(area / quads) on the unit sphere.
         self.assertAlmostEqual(float(np.median(plan.edge)) / math.sqrt(4 * math.pi / 2000), 1.0, delta=0.03)
         np.testing.assert_allclose(plan.edge_at(2500), plan.edge * math.sqrt(2000 / 2500), rtol=1e-6)
+
+    def test_wait_after_plan(self):
+        """A preview's run: plans, waits, and on resume() gives the plain run's mesh."""
+        positions = self.positions.astype(np.float32)
+        parameters = {"target_quads": 1500}
+        plain = worker.remesh(EXECUTABLE, positions, self.triangles, parameters)
+        planned = worker.remesh(EXECUTABLE, positions, self.triangles, parameters, plan=True)
+        job = worker.RemeshJob(EXECUTABLE, positions, self.triangles, parameters, wait_after_plan=True)
+        job.start()
+        try:
+            deadline = time.monotonic() + 120
+            while not job.waiting and not job.done and time.monotonic() < deadline:
+                job.poll()
+                time.sleep(0.02)
+            self.assertTrue(job.waiting, job.outcome().message if job.done else "no plan in time")
+            self.assertAlmostEqual(job.fraction, worker.PLAN_READY_FRACTION, delta=0.15)
+            time.sleep(0.3)
+            job.poll()
+            self.assertFalse(job.done, "the run waits")
+            outcome = job.plan_outcome()
+            self.assertEqual(outcome.status, "ok", outcome.message)
+            np.testing.assert_array_equal(outcome.plan.edge, planned.plan.edge)
+            self.assertEqual(outcome.plan.quads, 1500)
+            # The cover: one uv unit is one quad, so its uv area is about the planned quads.
+            cover = outcome.plan.cover
+            self.assertIsNotNone(cover)
+            self.assertEqual(cover.uvs.shape, (len(cover.triangles), 3, 2))
+            self.assertLess(int(cover.triangles.max()), len(cover.positions))
+            e1, e2 = cover.uvs[:, 1] - cover.uvs[:, 0], cover.uvs[:, 2] - cover.uvs[:, 0]
+            uv_area = 0.5 * np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum()
+            self.assertAlmostEqual(uv_area / outcome.plan.planned_quads(1500), 1.0, delta=0.25)
+            self.assertTrue(job.resume())
+            while not job.done and time.monotonic() < deadline:
+                job.poll()
+                time.sleep(0.02)
+            result = job.outcome()
+        finally:
+            job.cleanup()
+        self.assertEqual(result.status, "ok", result.message + "\n" + result.log)
+        np.testing.assert_array_equal(result.positions, plain.positions)
+        np.testing.assert_array_equal(result.face_indices, plain.face_indices)
+        self.assertGreaterEqual(job.fraction, 0.99)
+
+    def test_wait_after_plan_cancel(self):
+        job = worker.RemeshJob(EXECUTABLE, self.positions.astype(np.float32), self.triangles,
+                               {"target_quads": 1500}, wait_after_plan=True)
+        job.start()
+        try:
+            deadline = time.monotonic() + 120
+            while not job.waiting and not job.done and time.monotonic() < deadline:
+                job.poll()
+                time.sleep(0.02)
+            self.assertTrue(job.waiting)
+            job.cancel()
+            while not job.done and time.monotonic() < deadline:
+                job.poll()
+                time.sleep(0.02)
+            self.assertEqual(job.outcome().status, "cancelled")
+            self.assertFalse(job.killed, "a waiting run stops at once on cancel")
+        finally:
+            job.cleanup()
 
     def test_fold_repair_flag(self):
         outcome = worker.remesh(EXECUTABLE, self.positions.astype(np.float32), self.triangles,

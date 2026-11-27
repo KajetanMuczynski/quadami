@@ -19,6 +19,8 @@
 #ifndef AUTO_REMESHER_CLI_STDINCONTROL_H
 #define AUTO_REMESHER_CLI_STDINCONTROL_H
 #include <AutoRemesher/Remesh>
+#include <condition_variable>
+#include <mutex>
 
 namespace AutoRemesher {
 namespace Cli {
@@ -28,6 +30,26 @@ namespace Cli {
     // "cancel" or is closed, e.g. because the host died.  The token must live
     // until the process exits.
     void startStdinCancelReader(CancelToken* token);
+
+    // Where a run that has made its plan waits for the host
+    // (--wait-after-plan): the line "continue" lets it go on; "cancel" or a
+    // closed stdin stops it.
+    class ContinueGate {
+    public:
+        void release(bool goOn);
+        // Blocks until the host decided; true: continue.
+        bool wait();
+
+    private:
+        std::mutex m_mutex;
+        std::condition_variable m_changed;
+        int m_state = 0; // 0 waiting, 1 continue, 2 stop
+    };
+
+    // As startStdinCancelReader(), and the line "continue" releases `gate`
+    // (a cancel or a closed stdin releases it with false).  Both must live
+    // until the process exits.
+    void startStdinControlReader(CancelToken* token, ContinueGate* gate);
 
 }
 }
