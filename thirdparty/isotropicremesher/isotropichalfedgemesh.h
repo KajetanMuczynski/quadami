@@ -138,7 +138,10 @@ public:
     // their target length that the remesh left, by what stands against
     // collapsing each, on stderr.
     void reportHardStubs(double targetLength, double ratio);
-    // Stubs of hard lines collapsed under AUTOREMESHER_GUIDE_STUBS=collapse.
+    // Research (Quadami, TODO 5.7): collapseEdge also takes the stubs of hard
+    // lines its rules refuse (see there).  Off unless the caller sets it.
+    bool collapseHardStubs = false;
+    // Stubs of hard lines collapsed that way.
     size_t hardStubCollapses = 0;
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);
     // Flips and collapses keep at least this many edges at a pinned vertex

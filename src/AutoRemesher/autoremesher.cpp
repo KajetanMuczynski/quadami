@@ -1560,7 +1560,7 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
     std::vector<Vector3>* conicalTipsOut)
 {
     auto t_decimateStart = std::chrono::high_resolution_clock::now();
-    decimateIfTooDense(vertices, triangles, topology, voxelSize, sharpEdgeDegrees, featureEdges,
+    const bool decimated = decimateIfTooDense(vertices, triangles, topology, voxelSize, sharpEdgeDegrees, featureEdges,
         nullptr != sharpEdgeStats ? &sharpEdgeStats->decimationDropped : nullptr, islandIndex, decimationStats);
     if (nullptr != sharpEdgeStats)
         sharpEdgeStats->decimatedEdges = featureEdges.size();
@@ -1744,6 +1744,13 @@ void AutoRemesher::resample(std::vector<Vector3>& vertices,
         kCrowdRadiusPerLoopLength, nullptr != sharpEdgeStats ? &sharpEdgeStats->smallLoops : nullptr);
     isotropicRemesher.setFeatureEdges(featureEdges);
     isotropicRemesher.setSmoothNormalDegrees(smoothNormalDegrees);
+    // Research (TODO 5.7, --experiment guide_stubs=decimated): the decimation
+    // keeps a guide's edges, so the guide comes out at the input's density
+    // inside a coarser mesh, where the remesh refuses to coarsen it.  On a
+    // decimated island it may collapse those stubs.  `collapse` does so on
+    // every island (the first experiment's arm).
+    if (const char* stubs = std::getenv("AUTOREMESHER_GUIDE_STUBS"))
+        isotropicRemesher.setCollapseHardStubs(std::string("collapse") == stubs || (decimated && std::string("decimated") == stubs));
     isotropicRemesher.remesh();
     vertices = isotropicRemesher.remeshedVertices();
     triangles = isotropicRemesher.remeshedTriangles();

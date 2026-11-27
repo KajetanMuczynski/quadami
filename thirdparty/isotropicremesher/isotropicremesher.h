@@ -49,6 +49,9 @@ public:
     void setPinnedVertices(const std::vector<size_t> *pinnedVertices);
     void setTargetTriangleCount(size_t triangleCount);
     void setSmoothNormalDegrees(double degrees);
+    // Research (Quadami, TODO 5.7): collapse the stubs of hard lines (see
+    // IsotropicHalfedgeMesh::collapseHardStubs).
+    void setCollapseHardStubs(bool collapse) { m_collapseHardStubs = collapse; }
     // Reports 0..1 across remesh(), which is otherwise a long silent stretch of
     // the pipeline. `name` labels the pass that is starting.
     void setProgressHandler(std::function<void(float, const char *)> handler)
@@ -80,6 +83,7 @@ private:
     const std::vector<double> *m_vertexTargetEdgeLengths = nullptr;
     const std::vector<size_t> *m_pinnedVertices = nullptr;
     double m_smoothNormalDegrees = 0.0;
+    bool m_collapseHardStubs = false;
     std::vector<Vector3> m_smoothVertexNormals; // Per-vertex smooth normals (input)
     std::vector<Vector3> m_smoothVertices;      // Subdivided mesh vertices for AABB tree
     std::vector<std::vector<size_t>> m_smoothTriangles; // Subdivided mesh triangles

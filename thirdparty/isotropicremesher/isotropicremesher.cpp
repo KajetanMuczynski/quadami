@@ -360,6 +360,7 @@ void IsotropicRemesher::remesh(size_t iteration)
     bool skipSplitOnce = true;
     // The edges are marked before the first split, so their halves inherit
     // them, and so are the corners, on the input's own chains.
+    m_halfedgeMesh->collapseHardStubs = m_collapseHardStubs;
     m_halfedgeMesh->markFeatureEdges(m_featureEdges, m_featureEdgeFlags);
     m_halfedgeMesh->featureCorners();
     buildFeatureSegmentTree();
@@ -398,13 +399,11 @@ void IsotropicRemesher::remesh(size_t iteration)
 
     }
 
-    // Research (Quadami, TODO 5.7, AUTOREMESHER_GUIDE_STUBS=collapse): the
-    // last shift can leave a stub on a hard line; collapseEdge takes only
-    // those here (it refuses every other hard edge this short pass offers).
-    if (const char *stubs = std::getenv("AUTOREMESHER_GUIDE_STUBS")) {
-        if (std::string("collapse") == stubs)
-            collapseHardStubs(targetLength);
-    }
+    // Research (Quadami, TODO 5.7, setCollapseHardStubs): the last shift can
+    // leave a stub on a hard line; collapseEdge takes only those here (it
+    // refuses every other hard edge this short pass offers).
+    if (m_collapseHardStubs)
+        collapseHardStubs(targetLength);
 
     // A face with two feature edges locks the field to one of them only,
     // and the parameterization folds next to it (TODO 2.5: a prism with

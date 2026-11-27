@@ -815,15 +815,6 @@ void IsotropicHalfedgeMesh::relinkFlippedEdge(Halfedge *halfedge)
     linkFaceHalfedges(newRightHalfedges);
 }
 
-static bool hardStubsCollapse()
-{
-    static const bool collapse = [] {
-        const char *text = std::getenv("AUTOREMESHER_GUIDE_STUBS");
-        return nullptr != text && std::string("collapse") == text;
-    }();
-    return collapse;
-}
-
 bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared)
 {
     // Collapsing a boundary edge would need the face on the other side, which
@@ -863,14 +854,15 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
         // that this edge does not follow.
         if (!halfedge->feature)
             return false;
-        // Research (Quadami, TODO 5.7, AUTOREMESHER_GUIDE_STUBS=collapse): a
+        // Research (Quadami, TODO 5.7, collapseHardStubs, set by the caller): a
         // stub of a hard line, under 0.4 of the target length (the limit
         // given is 4/3 of it), collapses where the rules below refuse: in a
         // face with the line's next edge (an ear at a kink; the ear's third
         // side merges into that edge and the kink is gone), on a plain
         // stretch of one line only, and where a neighbouring edge would grow
-        // past the limit, up to twice it (the next split pass shortens it).
-        const bool stub = hardStubsCollapse() && halfedge->hard() &&
+        // past the limit, up to twice it (a later split pass shortens it,
+        // except after the remesher's last pass).
+        const bool stub = collapseHardStubs && halfedge->hard() &&
             (startVertex->position - endVertex->position).lengthSquared() < 0.09 * maxEdgeLengthSquared;
         double limit = maxEdgeLengthSquared;
         // The collapse would merge a feature edge of a face next to it.

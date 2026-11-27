@@ -44,6 +44,7 @@ bool IsotropicRemesher::remesh()
         remesher.setPinnedVertices(m_pinnedVertices);
     remesher.setFeatureEdges(m_featureEdges.edges, m_featureEdges.flags);
     remesher.setSmoothNormalDegrees(m_smoothNormalDegrees);
+    remesher.setCollapseHardStubs(m_collapseHardStubs);
     if (m_progressHandler)
         remesher.setProgressHandler(m_progressHandler);
     remesher.remesh(m_remeshIterations);

@@ -68,6 +68,13 @@ public:
         m_smoothNormalDegrees = degrees;
     }
 
+    // Research (TODO 5.7): the remesh also collapses the stubs of hard lines
+    // (guides) that its rules refuse, see the vendored remesher.
+    void setCollapseHardStubs(bool collapse)
+    {
+        m_collapseHardStubs = collapse;
+    }
+
     void setProgressHandler(ProgressHandler progressHandler)
     {
         m_progressHandler = std::move(progressHandler);
@@ -102,6 +109,7 @@ private:
     double m_targetEdgeLength = 0;
     FeatureEdgeSet m_featureEdges;
     double m_smoothNormalDegrees = 0.0;
+    bool m_collapseHardStubs = false;
     int m_remeshIterations = 3;
     ProgressHandler m_progressHandler;
     std::vector<Vector3> m_remeshedVertices;
