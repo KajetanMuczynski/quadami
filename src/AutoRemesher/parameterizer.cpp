@@ -20,6 +20,10 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *  SOFTWARE.
  */
+#include <atomic>
+#include <cstdlib>
+#include <fstream>
+#include <string>
 #include <AutoRemesher/FrameField>
 #include <AutoRemesher/MapCheck>
 #include <AutoRemesher/Parameterizer>
@@ -356,6 +360,12 @@ bool Parameterizer::parameterize()
     }
 
     SingularitySimplifier simplifier(topology, &field);
+    // PROBE (not for merge): simplifier off / pair distance, charges dumped.
+    if (const char* probe = std::getenv("AR_PROBE_SIMPLIFY"))
+        m_singularitySimplification = 0 != std::atoi(probe);
+    if (const char* probe = std::getenv("AR_PROBE_PAIRDIST"))
+        m_maximumSingularityPairDistance = (size_t)std::atoi(probe);
+    const std::vector<int> probeChargesBefore = std::getenv("AR_PROBE_DUMP") ? simplifier.vertexCharges() : std::vector<int>();
     if (m_singularitySimplification) {
         report(0.17f, "Simplifying singularities");
         simplifier.setFeatureEdges(featureEdges);
@@ -370,6 +380,14 @@ bool Parameterizer::parameterize()
         }
     }
 
+    if (const char* dumpPrefix = std::getenv("AR_PROBE_DUMP")) {
+        static std::atomic<int> dumpCounter(0);
+        std::ofstream dump(std::string(dumpPrefix) + "-charges-" + std::to_string(dumpCounter++) + ".txt");
+        const std::vector<int> after = simplifier.vertexCharges();
+        for (size_t v = 0; v < after.size(); ++v)
+            if (0 != after[v] || (v < probeChargesBefore.size() && 0 != probeChargesBefore[v]))
+                dump << v << " " << (v < probeChargesBefore.size() ? probeChargesBefore[v] : 0) << " " << after[v] << "\n";
+    }
     std::vector<double> faceScalingU(m_triangles->size(), 1.0);
     std::vector<double> faceScalingV(m_triangles->size(), 1.0);
     if (m_anisotropy > 0.0) {

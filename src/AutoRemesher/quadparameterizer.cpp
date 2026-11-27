@@ -20,6 +20,10 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *  SOFTWARE.
  */
+#include <atomic>
+#include <cstdlib>
+#include <fstream>
+#include <string>
 #include <AutoRemesher/ConstrainedLeastSquares>
 #include <AutoRemesher/FrameField>
 #include <AutoRemesher/MixedIntegerLeastSquares>
@@ -1415,6 +1419,14 @@ namespace {
                 const std::vector<double> uvs = cornerUvs(s, uvVariables);
                 appendUvOrientation(result, "continuous", measureUvOrientation(uvs));
                 appendWinding(result, "continuous", measureWinding(mesh, rotation, frames, uvs));
+                // PROBE (not for merge): the continuous map, one corner per line.
+                if (const char* dumpPrefix = std::getenv("AR_PROBE_DUMP")) {
+                    static std::atomic<int> dumpCounter(0);
+                    std::ofstream dump(std::string(dumpPrefix) + "-cont-" + std::to_string(dumpCounter++) + ".txt");
+                    dump.precision(10);
+                    for (size_t c = 0; c < corners; ++c)
+                        dump << uvs[2 * c] << " " << uvs[2 * c + 1] << "\n";
+                }
                 if (nullptr != ctx.planFaceEdges) {
                     // sqrt(3D area / uv area): the edge of a unit cell on the face.
                     ctx.planFaceEdges->assign(mesh.faceCount(), 0.0);

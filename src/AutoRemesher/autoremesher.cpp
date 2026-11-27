@@ -42,6 +42,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -2427,6 +2428,22 @@ bool AutoRemesher::remeshIslands()
                 if (m_keepPreviewData)
                     run.capturedUvs = *uvs;
                 run.capturedOriginalUvs = parameterizer.originalTriangleUvs();
+                // PROBE (not for merge): T with its rounded map as an OBJ.
+                if (const char* dumpPrefix = std::getenv("AR_PROBE_DUMP")) {
+                    static std::atomic<int> dumpCounter(0);
+                    std::ostringstream name;
+                    name << dumpPrefix << "-i" << islandIndex << "-" << dumpCounter++ << ".obj";
+                    std::ofstream dump(name.str());
+                    dump.precision(10);
+                    for (const auto& v : vertices)
+                        dump << "v " << v.x() << " " << v.y() << " " << v.z() << "\n";
+                    for (const auto& faceUvs : *uvs)
+                        for (const auto& uv : faceUvs)
+                            dump << "vt " << uv.x() << " " << uv.y() << "\n";
+                    for (size_t f = 0; f < triangles.size(); ++f)
+                        dump << "f " << triangles[f][0] + 1 << "/" << 3 * f + 1 << " " << triangles[f][1] + 1 << "/" << 3 * f + 2
+                             << " " << triangles[f][2] + 1 << "/" << 3 * f + 3 << "\n";
+                }
             }
             // Capture singular vertex positions for the [param] preview
             if (m_keepPreviewData)

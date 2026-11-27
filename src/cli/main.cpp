@@ -201,6 +201,14 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
             valid = parseDouble(value, &parameters.smoothNormalDegrees);
         else if ("--lost-parts-reference" == name)
             valid = parseCount(value, &parameters.lostPartsReferenceTarget);
+        else if ("--probe" == name) {
+            // PROBE (not for merge): --probe=NAME:VALUE sets a probe's
+            // environment variable, so ab.py files the run by its arguments.
+            const size_t colon = value.find(':');
+            valid = std::string::npos != colon;
+            if (valid)
+                setenv(value.substr(0, colon).c_str(), value.substr(colon + 1).c_str(), 1);
+        }
         else if ("--extractor" == name) {
             if (!parseExtractor(value, &parameters.extractor)) {
                 std::fprintf(stderr, "Error: --extractor must be qex or trace, not %s\n", value.c_str());
