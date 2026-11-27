@@ -86,6 +86,14 @@ LOST_PARTS_REFERENCE_INTERFACE = (1, 12)
 INPUT_CACHE_INTERFACE = (1, 16)
 INPUT_CACHE_UNUSABLE = "input cache unusable"
 
+# The interface version that brought --plan-output and --wait-after-plan: a
+# run that plans itself, waits, and goes on when told (RemeshJob.resume()),
+# and the fraction of its progress at which the plan is ready (the core's
+# PlanReadyProgress).
+PLAN_WAIT_INTERFACE = (1, 17)
+PLAN_READY_FRACTION = 0.5
+_WAITING_LINE = 'Waiting for "continue"'
+
 _PROGRESS_LINE = re.compile(r"^(\d+)% done\.(?: (.*))?$")
 
 
@@ -320,7 +328,7 @@ class RemeshJob:
     """
 
     def __init__(self, executable, positions, triangles, parameters, marked_edges=None, plan=False,
-                 input_cache=None):
+                 input_cache=None, wait_after_plan=False):
         self.executable = executable
         # A file the worker keeps the prepared input in (--input-cache,
         # input_cache.py). When it exists the mesh is not written out; if the
@@ -332,6 +340,13 @@ class RemeshJob:
         self._cache_checked = False
         # Only plan the run (--plan-only): the outcome carries a Plan, no mesh.
         self.plan = plan
+        # A run that plans itself and then waits (--wait-after-plan): once
+        # `waiting`, plan_outcome() has the plan and resume() lets the run go
+        # on to its mesh, which outcome() then has as for any run.
+        self.wait_after_plan = wait_after_plan and not plan
+        self.waiting = False
+        self.resumed = False
+        self._plan_outcome = None
         self.positions = positions
         self.triangles = triangles
         self.marked_edges = marked_edges
@@ -372,6 +387,9 @@ class RemeshJob:
         args += ["-o", self._path("plan.bin" if self.plan else "output.obj"),
                  "--report-json", self._path("report.json"),
                  "--stdin-control"] + (["--plan-only"] if self.plan else [])
+        if self.wait_after_plan:
+            args += ["--plan-output", self._path("plan.bin"), "--plan-report-json", self._path("plan.json"),
+                     "--wait-after-plan"]
         for name, value in self.parameters.items():
             if name == "target_quads":
                 value = int(value)
@@ -439,6 +457,9 @@ class RemeshJob:
                 break
             if line is None:
                 continue
+            if line == _WAITING_LINE and self.wait_after_plan and not self.resumed:
+                self.waiting = True
+                continue
             match = _PROGRESS_LINE.match(line)
             if match:
                 self._progress_time = time.monotonic()
@@ -451,6 +472,33 @@ class RemeshJob:
                 and time.monotonic() - self._cancel_time > CANCEL_GRACE_SECONDS):
             self._process.kill()
             self.killed = True
+
+    def plan_outcome(self):
+        """Once `waiting`: an Outcome with the plan (status "ok"), or why
+        there is none."""
+        if self._plan_outcome is None:
+            try:
+                with open(self._path("plan.json"), "r", encoding="utf-8") as f:
+                    report = json.load(f)
+                self._plan_outcome = Outcome("ok", report.get("message", ""), report,
+                                             plan=read_plan(self._path("plan.bin"), report))
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                self._plan_outcome = Outcome("failed", "no plan: %s" % error, log="\n".join(self._log))
+        return self._plan_outcome
+
+    def resume(self):
+        """Lets a waiting run go on to its mesh. False if it could not be
+        told (it has ended); then outcome() says why."""
+        if not self.waiting or self.resumed:
+            return False
+        self.resumed = True
+        self.waiting = False
+        try:
+            self._process.stdin.write("continue\n")
+            self._process.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            return False
+        return True
 
     def cancel(self):
         if self.cancel_requested or self._process is None:

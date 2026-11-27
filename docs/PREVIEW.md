@@ -509,6 +509,56 @@ Not changed here (0.4 candidates): within ±20 % the overlay barely moves (+13 %
 edge, about 4 % of the colour ramp, and the checker steps by 19 % in edge), and it replaces the
 model's own shading.
 
+### 4.8 Remesh goes on from the preview; grid over the shading (2026-11-27)
+
+Kajetan's 0.4 asks (plan-0.4 §5): a preview that shows a change of Target Quads, keeps the model
+readable, is not planned again on every press, and that Remesh reuses.
+
+**Plan reuse, chosen design.** The preview is now a real run that plans itself once every island is
+decimated (`RemeshCallbacks::planReady`, interface 1.17; CLI `--plan-output`, `--plan-report-json`,
+`--wait-after-plan`) and then waits. Remesh with the same object, mesh content (positions, triangles,
+marks and guides), worker and every run parameter tells it to go on (`continue` on stdin); anything else
+stops it. The plan is the one `planRemesh()` makes (same code, called between the decimation loop and
+the parameterize loop on the calling thread, so no TBB task blocks), and the run continues from the
+state it would have had anyway, so its mesh is the plain run's to the bit by construction (checked: head
+10k, 5 runs; `tests/plan_ready_test.cpp`; the add-on's `CliTest.test_wait_after_plan`). The run's
+progress is mapped so the plan lands at 50 %; the wait counts in no time of the report.
+Rejected: a disk cache of the solver state after the continuous cover (a second file format inside the
+solver to keep in step with it; the rounding builds and factors its system again anyway); a worker
+process kept alive between separate runs (same state, but a new protocol and lifetime for every stage).
+Not done: reusing the plan's own cover solve in the run (the plan solves each island once more, about
+the parameterize stage's cost). It needs the parameterizer split into a continuous and an integer phase
+held across all islands; that is the remaining ~40 % of a Remesh after a preview.
+
+Measured [M, CLI on master + this branch, cloud, 4 cores, one job at a time, median of 5 runs; every
+continued run's OBJ identical to the plain run's]:
+
+| Mesh | Triangles | Target | Plain Remesh | Preview (to the wait) | Remesh after preview |
+|---|---|---|---|---|---|
+| Head (private) | 138,876 | 10k | 8.97 s | 6.39 s | 5.64 s (−37 %) |
+| Lion statue (public) | 63,338 | 5k | 3.07 s | 2.05 s | 2.00 s (−35 %) |
+| Happy Buddha (test-only) | 1,087,716 | 10k | 42.2 s | 15.1 s | 28.4 s (−33 %), one run, *unconfirmed* |
+
+The preview (to the wait) costs about what `--plan-only` did (it adds the report's fold survey).
+
+**Plans kept.** Hide only stops drawing; the last four plans stay in memory, keyed on object, mesh
+content, plan settings and worker, so showing one again, or an undo after an edit, needs no plan. A mesh
+edit hides the preview; a Remesh hides it too (the result is what to look at). Only one run ever waits;
+it is stopped by another preview, a file load, a Remesh of anything else, or 15 minutes unused.
+
+**Overlay.** Drawn over Blender's shading (alpha blend, no depth write): lines of a cubic lattice in
+object space, step = the planned edge rounded to quarter octaves around the median edge at the current
+count, so the whole grid shrinks smoothly with Target Quads and only the local pattern steps; a lattice
+family within about 40° of the surface is left out (otherwise it draws wavy height contours on gently
+curved sides, or floods a flat face). Tint (off by default) is the old orange/blue, faint. The panel adds
+what Remesh will do ("goes on from the preview" or "runs from the start", and why), "Size only: loops and
+poles appear after Remesh", and, with guides, about how many quads go around each guide loop (length over
+the planned edge along it).
+
+Limits seen in the screenshots: big low-poly faces show diagonal steps where the plan's linear
+interpolation crosses a quarter-octave level (the old "shows its average" limit, now visible as a seam);
+near size steps the lattice lines break. Kajetan reviews both before this leaves draft.
+
 ## 5. Design critique (what may have been missed)
 
 - **The Decimate analogy breaks at the loops.** Decimate's preview *is* its result. Ours can only
