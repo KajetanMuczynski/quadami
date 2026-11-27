@@ -376,6 +376,7 @@ bool Parameterizer::parameterize()
             record.set("singularities_before", (double)simplifier.singularityCountBefore());
             record.set("singularities_after", (double)simplifier.singularityCountAfter());
             record.set("cancelled_pairs", (double)simplifier.cancelledPairCount());
+            record.set("guarded_pairs", (double)simplifier.guardedPairCount());
             m_diagnostics.push_back(std::move(record));
         }
     }

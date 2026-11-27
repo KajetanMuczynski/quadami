@@ -23,12 +23,16 @@
 #include <AutoRemesher/FrameField>
 #include <AutoRemesher/SingularitySimplifier>
 
+#include <Eigen/Sparse>
+#include <Eigen/SparseCholesky>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
+#include <cstdio>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <utility>
 
@@ -53,6 +57,114 @@ namespace {
         u = unit(u, Vector3(1, 0, 0));
         return { u, Vector3::crossProduct(normal, u) };
     }
+
+    // PROBE (keep parts): does cancelling a pair of cones leave curvature
+    // that the cones were there to take up?
+    //
+    // A cross field with cones of charge c_v (quarter turns) asks for a flat
+    // metric with cone angle 2 pi - c_v pi/2 at v.  Scaling the surface by
+    // exp(u) gets there when L u = b, b_v = K_v - c_v pi/2 (K: angle defect,
+    // L: cotangent Laplacian, u = 0 on the boundary), and u' L u = b' L^+ b
+    // measures how unevenly the map must scale (Ben-Chen, Gotsman and Bunin
+    // 2008).  Removing the pair (p, c), (q, -c) adds c pi/2 (e_p - e_q) to b:
+    //   dE = pi c (u_p - u_q) + (pi c / 2)^2 R_pq,
+    // R_pq = (e_p - e_q)' L^+ (e_p - e_q).  A pair that is field noise on a
+    // flat patch has u_p - u_q = -c pi/2 R_pq, so dE = -(pi c / 2)^2 R_pq;
+    // a pair that takes up the surface's own curvature has u = 0 around it,
+    // so dE = +(pi c / 2)^2 R_pq.  noiseShare() maps these to 1 and 0.
+    class DistortionGuard {
+    public:
+        DistortionGuard(const SurfaceMesh& mesh)
+            : m_mesh(mesh)
+        {
+            const size_t vertices = mesh.vertexCount();
+            m_row.assign(vertices, -1);
+            std::vector<char> boundary(vertices, 0);
+            std::vector<char> used(vertices, 0);
+            for (size_t c = 0; c < mesh.cornerCount(); ++c) {
+                used[mesh.cornerVertex(c)] = 1;
+                if (mesh.oppositeCorner(c) == SurfaceMesh::npos)
+                    boundary[mesh.cornerVertex(c)] = boundary[mesh.cornerVertex(mesh.nextCorner(c))] = 1;
+            }
+            bool anyBoundary = false;
+            for (size_t v = 0; v < vertices; ++v)
+                anyBoundary = anyBoundary || (used[v] && boundary[v]);
+            int rows = 0;
+            bool pinned = anyBoundary;
+            for (size_t v = 0; v < vertices; ++v) {
+                if (!used[v] || boundary[v])
+                    continue;
+                if (!pinned) {
+                    // A closed surface: u is fixed up to a constant.
+                    pinned = true;
+                    continue;
+                }
+                m_row[v] = rows++;
+            }
+            m_defect = Eigen::VectorXd::Constant(rows, 2.0 * M_PI);
+            std::vector<Eigen::Triplet<double>> entries;
+            entries.reserve(4 * mesh.cornerCount());
+            for (size_t c = 0; c < mesh.cornerCount(); ++c) {
+                const Vector3 a = mesh.edgeVector(c), b = -mesh.edgeVector(mesh.previousCorner(c));
+                const double cross = Vector3::crossProduct(a, b).length(), dot = Vector3::dotProduct(a, b);
+                const int v = m_row[mesh.cornerVertex(c)];
+                if (v >= 0)
+                    m_defect[v] -= std::atan2(cross, dot);
+                // Half the cotangent, on the edge across the corner; kept
+                // positive so that L stays positive definite.
+                const double weight = 0.5 * std::max(1e-6, cross > 1e-300 ? dot / cross : 1e-6);
+                const int i = m_row[mesh.cornerVertex(mesh.nextCorner(c))], j = m_row[mesh.cornerVertex(mesh.previousCorner(c))];
+                if (i >= 0)
+                    entries.emplace_back(i, i, weight);
+                if (j >= 0)
+                    entries.emplace_back(j, j, weight);
+                if (i >= 0 && j >= 0) {
+                    entries.emplace_back(i, j, -weight);
+                    entries.emplace_back(j, i, -weight);
+                }
+            }
+            if (0 == rows)
+                return;
+            Eigen::SparseMatrix<double> laplacian(rows, rows);
+            laplacian.setFromTriplets(entries.begin(), entries.end());
+            m_solver.compute(laplacian);
+            m_ok = Eigen::Success == m_solver.info();
+        }
+        bool ok() const { return m_ok; }
+        void update(const std::vector<int>& charges)
+        {
+            Eigen::VectorXd b = m_defect;
+            for (size_t v = 0; v < charges.size(); ++v)
+                if (m_row[v] >= 0)
+                    b[m_row[v]] -= 0.5 * M_PI * charges[v];
+            m_u = m_solver.solve(b);
+        }
+        // 1: the pair is noise (removing it relaxes the map by all the pair
+        // costs); 0: it takes up the surface's curvature exactly; below 0:
+        // the surface asks for more than the pair gives.
+        double noiseShare(size_t p, size_t q, int chargeP) const
+        {
+            Eigen::VectorXd delta = Eigen::VectorXd::Zero(m_defect.size());
+            if (m_row[p] >= 0)
+                delta[m_row[p]] += 1.0;
+            if (m_row[q] >= 0)
+                delta[m_row[q]] -= 1.0;
+            const Eigen::VectorXd w = m_solver.solve(delta);
+            const auto at = [&](const Eigen::VectorXd& x, size_t v) { return m_row[v] >= 0 ? x[m_row[v]] : 0.0; };
+            const double resistance = at(w, p) - at(w, q);
+            if (!(resistance > 0.0))
+                return 1.0;
+            const double c = (double)chargeP;
+            return -(at(m_u, p) - at(m_u, q)) / (0.5 * M_PI * c * resistance);
+        }
+
+    private:
+        const SurfaceMesh& m_mesh;
+        std::vector<int> m_row;
+        Eigen::VectorXd m_defect, m_u;
+        Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> m_solver;
+        bool m_ok = false;
+    };
 
     double angleInFrame(const Vector3& vector, const Frame& frame)
     {
@@ -496,6 +608,35 @@ void SingularitySimplifier::simplify()
             m_singularityCountBefore++;
     m_singularityCountAfter = m_singularityCountBefore;
     Workspace work(m_mesh);
+    // PROBE (keep parts): AR_PROBE_CANCEL=<minimum noise share> guards the
+    // cancellations (see DistortionGuard); AR_PROBE_CANCEL_FREE=<T edges>
+    // lets pairs no farther apart than that cancel unguarded;
+    // AR_PROBE_CANCEL_LOG=<file> lists every candidate.
+    std::unique_ptr<DistortionGuard> guard;
+    double minimumNoiseShare = 0.5, freeDistance = 0.0;
+    const double averageEdge = m_mesh.averageEdgeLength();
+    FILE* guardLog = nullptr;
+    if (const char* probe = std::getenv("AR_PROBE_CANCEL")) {
+        minimumNoiseShare = std::atof(probe);
+        guard.reset(new DistortionGuard(m_mesh));
+        if (!guard->ok())
+            guard.reset();
+        if (const char* free = std::getenv("AR_PROBE_CANCEL_FREE"))
+            freeDistance = std::atof(free) * averageEdge;
+        if (const char* log = std::getenv("AR_PROBE_CANCEL_LOG"))
+            guardLog = std::fopen(log, "a");
+    }
+    // AR_PROBE_BAN=x,y,z,r: no cancellation with a cone inside that ball.
+    Vector3 banCentre;
+    double banRadius = 0.0;
+    if (const char* probe = std::getenv("AR_PROBE_BAN")) {
+        double x = 0, y = 0, z = 0, r = 0;
+        if (4 == std::sscanf(probe, "%lf,%lf,%lf,%lf", &x, &y, &z, &r)) {
+            banCentre = Vector3(x, y, z);
+            banRadius = r;
+        }
+    }
+    m_guardedPairCount = 0;
     for (size_t round = 0; round < m_maximumRounds; ++round) {
         const auto charges = vertexCharges();
         std::vector<size_t> singular;
@@ -544,15 +685,40 @@ void SingularitySimplifier::simplify()
         std::sort(candidates.begin(), candidates.end(), [](const Candidate& x, const Candidate& y) { return x.hops < y.hops; });
         std::vector<char> used(singular.size(), 0);
         size_t cancelled = 0;
-        for (const Candidate& c : candidates)
-            if (!used[c.a] && !used[c.b] && cancelPair(singular[c.a], singular[c.b], c.hops, work)) {
+        if (guard)
+            guard->update(charges);
+        for (const Candidate& c : candidates) {
+            if (used[c.a] || used[c.b])
+                continue;
+            const size_t p = singular[c.a], q = singular[c.b];
+            if (banRadius > 0.0 && ((m_mesh.position(p) - banCentre).length() < banRadius || (m_mesh.position(q) - banCentre).length() < banRadius)) {
+                ++m_guardedPairCount;
+                continue;
+            }
+            if (guard) {
+                const double distance = (m_mesh.position(p) - m_mesh.position(q)).length();
+                const double share = guard->noiseShare(p, q, charges[p]);
+                const bool allowed = distance <= freeDistance || share >= minimumNoiseShare;
+                if (nullptr != guardLog)
+                    std::fprintf(guardLog, "%zu %zu %zu %d %.6g %.6g %d\n", round, p, q, charges[p], distance / averageEdge, share, allowed ? 1 : 0);
+                if (!allowed) {
+                    ++m_guardedPairCount;
+                    continue;
+                }
+            }
+            if (cancelPair(p, q, c.hops, work)) {
                 used[c.a] = used[c.b] = 1;
                 ++cancelled;
+                if (guard)
+                    guard->update(vertexCharges());
             }
+        }
         if (!cancelled)
             break;
         m_cancelledPairCount += cancelled;
     }
     m_singularityCountAfter = singularityCount();
+    if (nullptr != guardLog)
+        std::fclose(guardLog);
 }
 }

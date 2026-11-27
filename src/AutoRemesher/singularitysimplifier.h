@@ -47,13 +47,14 @@ public:
     size_t singularityCountBefore() const { return m_singularityCountBefore; }
     size_t singularityCountAfter() const { return m_singularityCountAfter; }
     size_t cancelledPairCount() const { return m_cancelledPairCount; }
+    size_t guardedPairCount() const { return m_guardedPairCount; }
 
 private:
     const SurfaceMesh& m_mesh;
     std::vector<Vector3>* m_field;
     size_t m_maximumPairDistance = 6, m_maximumRounds = 4, m_regionMargin = 6;
     const FeatureEdgeSet* m_sharpEdges = nullptr;
-    size_t m_singularityCountBefore = 0, m_singularityCountAfter = 0, m_cancelledPairCount = 0;
+    size_t m_singularityCountBefore = 0, m_singularityCountAfter = 0, m_cancelledPairCount = 0, m_guardedPairCount = 0;
     std::vector<double> m_angles, m_connection;
     std::vector<bool> m_sharpCorner;
     std::vector<Vector3> m_frameU, m_frameV;
