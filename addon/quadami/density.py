@@ -24,15 +24,17 @@ reads: every part's quads go as max(count * area share, floor), its edges
 with one over their square root, so following Target Quads is a redraw and
 nothing is recomputed.
 
-Drawn on top of Blender's own shading: thin lines about one planned quad
-apart (a lattice in object space, its spacing quantised in quarter octaves
-around the median quad edge at the current count, so the whole grid
-shrinks smoothly as Target Quads rises and only the local pattern steps),
-and, if asked, a faint tint where the plan puts smaller (orange) or larger
-(blue) quads than the median.
+Drawn on top of Blender's own shading: thin lines along the integer lines
+of the plan's continuous cover (the map the run rounds into its quads,
+drawn on the triangle mesh it was solved on), so they run where the quads'
+edges will and are one planned quad apart; following Target Quads scales
+each part's map by the square root of its quads.  If asked, a faint tint
+where the plan puts smaller (orange) or larger (blue) quads than the median.
 
-It shows planned size only, never the quads: loops, poles and spirals
-appear only in the run.  Not drawn once the object's mesh changed, a plan
+The map is the one before the rounding: its charts do not meet on whole
+quads yet, so lines jump along the seams between them, and the run's
+rounding still moves loops and poles.  So the lines show size and
+direction; the exact loops and poles appear only in the run.  Not drawn once the object's mesh changed, a plan
 setting (PLAN_SETTINGS) differs from the one it was made with, Target
 Quads left the plan's band, or the object is gone.
 """
@@ -84,6 +86,35 @@ def vertex_attributes(plan):
     return a.astype(np.float32), share.astype(np.float32), floor.astype(np.float32)
 
 
+def cover_attributes(plan):
+    """Per corner of the plan's cover (three per triangle, not shared): pos,
+    uv, and its island's share and floor (over edge_scaling^2) and quads at
+    the plan's count, q0, so the map at N quads is uv * sqrt(max(N * share,
+    floor) / q0).  Triangles of islands without quads are left out.  None
+    without a cover."""
+    cover = plan.cover
+    if cover is None:
+        return None
+    scale2 = plan.edge_scaling ** 2
+    q0 = plan.island_quads(plan.quads)
+    keep = q0[cover.island] > 0
+    island = np.repeat(cover.island[keep], 3)
+    return {
+        "pos": np.ascontiguousarray(cover.positions[cover.triangles[keep]].reshape(-1, 3), dtype=np.float32),
+        "uv": np.ascontiguousarray(cover.uvs[keep].reshape(-1, 2), dtype=np.float32),
+        "share": (plan.share / scale2)[island].astype(np.float32),
+        "floorq": (plan.floor / scale2)[island].astype(np.float32),
+        "q0": q0[island].astype(np.float32),
+    }
+
+
+def cover_scale(share, floor, q0, quads):
+    """What the grid's vertex shader computes: the map's factor at `quads`."""
+    q = np.maximum(quads * share.astype(np.float64), floor)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(q0 > 0, np.sqrt(q / q0), 0.0)
+
+
 def shader_edges(a, share, floor, quads):
     """What the vertex shader computes, for tests and the legend."""
     q = np.maximum(quads * share.astype(np.float64), floor)
@@ -111,6 +142,7 @@ class Preview:
         # Vertex pairs of the guide edges (guide_tool.py), for guide_loops().
         self.guide_pairs = np.zeros((0, 2), np.int64) if guide_pairs is None else np.asarray(guide_pairs, np.int64)
         self.batch = None
+        self.cover_batch = None
         self._median = (None, 0.0)
 
     def edge_range(self, quads):
@@ -177,7 +209,7 @@ def guide_loops(positions, pairs, edges):
 # The preview on show (at most one), and the draw handler.
 _preview = None
 _handler = None
-_shader = None
+_shaders = None
 
 
 def current():
@@ -235,85 +267,93 @@ def _remove_handler():
 
 # Push constants stay within the 128 bytes every GPU backend has: the
 # object-to-clip matrix, the eye in object space (w = 1: a position, w = 0:
-# the direction towards the viewer of an orthographic view) and four numbers.
-VERTEX_SOURCE = """
+# the direction towards the viewer of an orthographic view) and four numbers,
+# settings: x the preview count, y the median edge at that count, z
+# PUSH_EDGES, w 1 for the grid and 2 for the tint.
+TINT_VERTEX_SOURCE = """
 void main()
 {
     float q = max(settings.x * share, floorq);
     float e = (a > 0.0 && q > 0.0) ? a / sqrt(q) : 0.0;
     edge = e;
     vec3 toEye = eye.w > 0.5 ? normalize(eye.xyz - pos) : eye.xyz;
-    vec3 moved = pos + toEye * (settings.z * e);
-    objectPos = pos;
-    gl_Position = modelViewProjection * vec4(moved, 1.0);
+    gl_Position = modelViewProjection * vec4(pos + toEye * (settings.z * e), 1.0);
 }
 """
 
-# Over Blender's shading (alpha blended).  Lines: the planes of a cubic
-# lattice in object space where they cross the surface, the lattice step
-# being the planned edge rounded to quarter octaves around the median edge
-# (settings.y, at the current count), so about one line per quad and a step
-# in the pattern where the size steps.  A family of planes within about 40
-# degrees of the surface is left out (it would draw wavy height contours, or
-# flood a flat face), and lines fade
-# where they would come closer than a few pixels.  Tint (settings.w >= 2):
-# towards orange where quads are smaller than the median, blue where
-# larger, over two octaves, faint.  Parts with no quads are greyed.
-FRAGMENT_SOURCE = """
+# On the input mesh: with the tint, towards orange where quads are smaller
+# than the median, blue where larger, over two octaves, faint.  Parts with
+# no quads are greyed in either mode.
+TINT_FRAGMENT_SOURCE = """
 void main()
 {
     if (edge <= 0.0) {
         fragColor = vec4(0.5, 0.5, 0.5, 0.45);
         return;
     }
-    vec3 n = normalize(cross(dFdx(objectPos), dFdy(objectPos)));
-    float octaves = log2(edge / settings.y);
-    vec4 colour = vec4(0.0);
-    if (settings.w >= 1.5) {
-        float t = clamp(octaves * 0.5, -1.0, 1.0);
-        vec3 tint = t < 0.0 ? vec3(0.95, 0.42, 0.10) : vec3(0.18, 0.45, 0.95);
-        colour = vec4(tint, 0.45 * abs(t));
-    }
-    if (mod(settings.w, 2.0) >= 0.5) {
-        float size = settings.y * exp2(floor(octaves * 4.0 + 0.5) * 0.25);
-        vec3 p = objectPos / size;
-        vec3 w = max(fwidth(p), vec3(1e-6));
-        vec3 d = abs(fract(p - 0.5) - 0.5) / w;
-        vec3 line = 1.0 - clamp(d - 0.6, 0.0, 1.0);
-        vec3 crossing = 1.0 - smoothstep(0.6, 0.8, abs(n));
-        vec3 room = 1.0 - smoothstep(0.18, 0.35, w);
-        vec3 lines = line * crossing * room;
-        float l = max(max(lines.x, lines.y), lines.z);
-        colour = mix(colour, vec4(0.06, 0.06, 0.07, 0.85), l);
-    }
-    fragColor = colour;
+    if (settings.w < 1.5)
+        discard;
+    float t = clamp(log2(edge / settings.y) * 0.5, -1.0, 1.0);
+    vec3 tint = t < 0.0 ? vec3(0.95, 0.42, 0.10) : vec3(0.18, 0.45, 0.95);
+    fragColor = vec4(tint, 0.45 * abs(t));
+}
+"""
+
+GRID_VERTEX_SOURCE = """
+void main()
+{
+    float q = max(settings.x * share, floorq);
+    coverUv = uv * (q0 > 0.0 ? sqrt(q / q0) : 0.0);
+    vec3 toEye = eye.w > 0.5 ? normalize(eye.xyz - pos) : eye.xyz;
+    gl_Position = modelViewProjection * vec4(pos + toEye * (settings.z * settings.y), 1.0);
+}
+"""
+
+# On the plan's cover mesh: the integer lines of u and v, about a pixel
+# wide, faded where they would come closer than about three pixels.
+GRID_FRAGMENT_SOURCE = """
+void main()
+{
+    vec2 w = max(fwidth(coverUv), vec2(1e-6));
+    vec2 d = abs(fract(coverUv - 0.5) - 0.5) / w;
+    vec2 lines = (1.0 - clamp(d - 0.6, 0.0, 1.0)) * (1.0 - smoothstep(0.18, 0.35, w));
+    float l = max(lines.x, lines.y);
+    if (l <= 0.0)
+        discard;
+    fragColor = vec4(0.06, 0.06, 0.07, 0.85 * l);
 }
 """
 
 
-def _get_shader():
-    global _shader
-    if _shader is None:
-        import gpu
-        interface = gpu.types.GPUStageInterfaceInfo(NAME_PREFIX + "_density")
-        interface.smooth("FLOAT", "edge")
-        interface.smooth("VEC3", "objectPos")
-        interface.smooth("VEC3", "viewPos")
-        info = gpu.types.GPUShaderCreateInfo()
-        info.push_constant("MAT4", "modelViewProjection")
-        info.push_constant("VEC4", "eye")
-        # x: preview count, y: the median edge at that count, z: PUSH_EDGES, w: 1 grid + 2 tint.
-        info.push_constant("VEC4", "settings")
-        info.vertex_in(0, "VEC3", "pos")
-        info.vertex_in(1, "FLOAT", "a")
-        info.vertex_in(2, "FLOAT", "share")
-        info.vertex_in(3, "FLOAT", "floorq")
-        info.vertex_out(interface)
-        info.fragment_out(0, "VEC4", "fragColor")
-        info.vertex_source(VERTEX_SOURCE)
-        info.fragment_source(FRAGMENT_SOURCE)
-        _shader = gpu.shader.create_from_info(info)
-    return _shader
+def _create_shader(name, inputs, outputs, vertex_source, fragment_source):
+    import gpu
+    interface = gpu.types.GPUStageInterfaceInfo(NAME_PREFIX + "_" + name)
+    for kind, out in outputs:
+        interface.smooth(kind, out)
+    info = gpu.types.GPUShaderCreateInfo()
+    info.push_constant("MAT4", "modelViewProjection")
+    info.push_constant("VEC4", "eye")
+    info.push_constant("VEC4", "settings")
+    for slot, (kind, attribute) in enumerate(inputs):
+        info.vertex_in(slot, kind, attribute)
+    info.vertex_out(interface)
+    info.fragment_out(0, "VEC4", "fragColor")
+    info.vertex_source(vertex_source)
+    info.fragment_source(fragment_source)
+    return gpu.shader.create_from_info(info)
+
+
+def _get_shaders():
+    global _shaders
+    if _shaders is None:
+        _shaders = (
+            _create_shader("density_tint", (("VEC3", "pos"), ("FLOAT", "a"), ("FLOAT", "share"), ("FLOAT", "floorq")),
+                           (("FLOAT", "edge"),), TINT_VERTEX_SOURCE, TINT_FRAGMENT_SOURCE),
+            _create_shader("density_grid", (("VEC3", "pos"), ("VEC2", "uv"), ("FLOAT", "share"), ("FLOAT", "floorq"),
+                                            ("FLOAT", "q0")),
+                           (("VEC2", "coverUv"),), GRID_VERTEX_SOURCE, GRID_FRAGMENT_SOURCE),
+        )
+    return _shaders
 
 
 NAME_PREFIX = "quadami"
@@ -349,12 +389,14 @@ def draw_preview(preview, matrix, view_matrix, window_matrix, perspective, quads
 
     if not (grid or tint):
         return
-    shader = _get_shader()
+    tint_shader, grid_shader = _get_shaders()
     if preview.batch is None:
         a, share, floor = vertex_attributes(preview.plan)
-        preview.batch = batch_for_shader(shader, "TRIS", {
+        preview.batch = batch_for_shader(tint_shader, "TRIS", {
             "pos": preview.positions, "a": a, "share": share, "floorq": floor},
             indices=preview.triangles)
+    if grid and preview.cover_batch is None and preview.plan.cover is not None:
+        preview.cover_batch = batch_for_shader(grid_shader, "TRIS", cover_attributes(preview.plan))
     inverse = matrix.inverted_safe()
     view_inverse = view_matrix.inverted_safe()
     if perspective:
@@ -366,11 +408,16 @@ def draw_preview(preview, matrix, view_matrix, window_matrix, perspective, quads
     gpu.state.depth_test_set("LESS_EQUAL")
     gpu.state.depth_mask_set(False)
     gpu.state.blend_set("ALPHA")
-    shader.bind()
-    shader.uniform_float("modelViewProjection", window_matrix @ view_matrix @ matrix)
-    shader.uniform_float("eye", eye)
-    shader.uniform_float("settings", (float(quads), preview.median_edge(quads), PUSH_EDGES,
-                                      (1.0 if grid else 0.0) + (2.0 if tint else 0.0)))
-    preview.batch.draw(shader)
+    settings = (float(quads), preview.median_edge(quads), PUSH_EDGES,
+                (1.0 if grid else 0.0) + (2.0 if tint else 0.0))
+    batches = [(tint_shader, preview.batch)]
+    if grid and preview.cover_batch is not None:
+        batches.append((grid_shader, preview.cover_batch))
+    for shader, batch in batches:
+        shader.bind()
+        shader.uniform_float("modelViewProjection", window_matrix @ view_matrix @ matrix)
+        shader.uniform_float("eye", eye)
+        shader.uniform_float("settings", settings)
+        batch.draw(shader)
     gpu.state.blend_set("NONE")
     gpu.state.depth_test_set("NONE")

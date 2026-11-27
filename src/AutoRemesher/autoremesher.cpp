@@ -2661,6 +2661,7 @@ bool AutoRemesher::remeshIslands()
     // coarser than T (transferPlannedEdges()).
     if (m_planOnly || m_planReadyHandler) {
         m_planIslands.assign(islandContexes.size(), PlanIsland());
+        m_planCovers.assign(islandContexes.size(), PlanCover());
         m_planVertexEdgeLengths.assign(givenVertexCount, 0.0f);
         m_planVertexIslands.assign(givenVertexCount, NoPlanIsland);
         for (size_t i = 0; i < islandContexes.size(); ++i) {
@@ -2695,8 +2696,8 @@ bool AutoRemesher::remeshIslands()
                     parameterizer.setFeatureEdges(&islandRuns[i].isotropicFeatureEdges);
                     // A plan has no extraction: the solve fills the rest of the bar.
                     parameterizer.setProgressHandler(makeStageProgress(i, stages.resampleEnd, planInRun ? stages.planEnd : 1.0f, 0.0f));
-                    std::vector<double> faceEdges;
-                    parameterizer.setPlanFaceEdges(&faceEdges);
+                    QuadParameterizer::Plan cover;
+                    parameterizer.setPlan(&cover);
                     bool solved = false;
                     try {
                         solved = parameterizer.parameterize();
@@ -2705,9 +2706,16 @@ bool AutoRemesher::remeshIslands()
                     } catch (const std::exception&) {
                         // As in a run: the island falls back, the plan goes on.
                     }
-                    // Without a cover, what the cover is asked for.
-                    if (!solved || faceEdges.size() != ctx.triangles.size())
+                    std::vector<double> faceEdges = std::move(cover.faceEdges);
+                    if (solved && faceEdges.size() == ctx.triangles.size() && cover.cornerUvs.size() == 3 * ctx.triangles.size()) {
+                        auto& planCover = m_planCovers[i];
+                        planCover.vertices = ctx.vertices;
+                        planCover.triangles = ctx.triangles;
+                        planCover.cornerUvs = std::move(cover.cornerUvs);
+                    } else {
+                        // Without a cover, what the cover is asked for.
                         faceEdges = parameterizer.plannedFaceEdgeLengths();
+                    }
                     for (auto& edge : faceEdges) {
                         // Faces the map degenerates on take their neighbours' value.
                         if (!(edge > 0.0) || !std::isfinite(edge))

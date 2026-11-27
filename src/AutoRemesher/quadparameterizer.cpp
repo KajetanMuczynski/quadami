@@ -111,9 +111,9 @@ namespace {
         const std::vector<double>& scalingV;
         const std::vector<double>* faceScaling;
         double scale;
-        // Set in a plan: the first (continuous) solve's quad edge per face,
-        // then the solve stops.
-        std::vector<double>* planFaceEdges;
+        // Set in a plan: the first (continuous) solve's quad edge per face
+        // and map per corner, then the solve stops.
+        QuadParameterizer::Plan* plan;
     };
 
     void initializeFieldAndNormals(const SurfaceMesh& mesh, const std::vector<Vector3>* guidance,
@@ -1415,15 +1415,19 @@ namespace {
                 const std::vector<double> uvs = cornerUvs(s, uvVariables);
                 appendUvOrientation(result, "continuous", measureUvOrientation(uvs));
                 appendWinding(result, "continuous", measureWinding(mesh, rotation, frames, uvs));
-                if (nullptr != ctx.planFaceEdges) {
+                if (nullptr != ctx.plan) {
                     // sqrt(3D area / uv area): the edge of a unit cell on the face.
-                    ctx.planFaceEdges->assign(mesh.faceCount(), 0.0);
+                    ctx.plan->faceEdges.assign(mesh.faceCount(), 0.0);
+                    ctx.plan->cornerUvs.resize(3 * mesh.faceCount());
+                    for (size_t corner = 0; corner < 3 * mesh.faceCount(); ++corner)
+                        ctx.plan->cornerUvs[corner] = Vector2(s.value(2 * corner), s.value(2 * corner + 1));
                     for (size_t f = 0; f < mesh.faceCount(); ++f) {
-                        const size_t a = 3 * f, b = 3 * f + 1, c = 3 * f + 2;
-                        const double ax = s.value(2 * a), ay = s.value(2 * a + 1);
-                        const double uvArea = .5 * std::fabs((s.value(2 * b) - ax) * (s.value(2 * c + 1) - ay) - (s.value(2 * c) - ax) * (s.value(2 * b + 1) - ay));
-                        const double area = .5 * Vector3::crossProduct(mesh.edgeVector(a), -mesh.edgeVector(c)).length();
-                        (*ctx.planFaceEdges)[f] = uvArea > 0.0 && area > 0.0 ? std::sqrt(area / uvArea) : 0.0;
+                        const Vector2& a = ctx.plan->cornerUvs[3 * f];
+                        const Vector2& b = ctx.plan->cornerUvs[3 * f + 1];
+                        const Vector2& c = ctx.plan->cornerUvs[3 * f + 2];
+                        const double uvArea = .5 * std::fabs((b.x() - a.x()) * (c.y() - a.y()) - (c.x() - a.x()) * (b.y() - a.y()));
+                        const double area = .5 * Vector3::crossProduct(mesh.edgeVector(3 * f), -mesh.edgeVector(3 * f + 2)).length();
+                        ctx.plan->faceEdges[f] = uvArea > 0.0 && area > 0.0 ? std::sqrt(area / uvArea) : 0.0;
                     }
                     return true;
                 }
@@ -1566,7 +1570,7 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     const std::vector<double>* faceScalingV,
     const ProgressHandler* progressHandler,
     const SurfaceMesh* surfaceMesh,
-    std::vector<double>* planFaceEdges)
+    Plan* plan)
 {
     const auto report = [progressHandler](float fraction, const char* name) {
         if (nullptr != progressHandler && *progressHandler)
@@ -1660,7 +1664,7 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
     const std::vector<char> seam = computeSeam(mesh, rotation);
 
     const CoverContext ctx { mesh, result->field, normals, rotation, seam, cornerConstraints,
-        activeScalingU, activeScalingV, faceScaling, scale, planFaceEdges };
+        activeScalingU, activeScalingV, faceScaling, scale, plan };
 
     // The cover solve reports on its own 0..1, so remap it into the tail of this
     // function's range and keep the fractions monotonic end to end.
@@ -1678,7 +1682,7 @@ bool QuadParameterizer::parameterize(const std::vector<Vector3>& vertices,
         result->diagnostics.push_back(std::move(coverResult));
         return false;
     }
-    if (nullptr != planFaceEdges) {
+    if (nullptr != plan) {
         result->diagnostics.push_back(std::move(coverResult));
         return true;
     }

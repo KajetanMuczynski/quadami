@@ -726,6 +726,26 @@ class PlanTest(unittest.TestCase):
             np.testing.assert_allclose(density.shader_edges(a, share, floor, quads), plan.edge_at(quads),
                                        rtol=1e-5)
 
+    def test_cover_attributes(self):
+        plan = self.plan()
+        # Two triangles on island 0, one on island 1, one on the left-out sliver.
+        positions = np.arange(15, dtype=np.float32).reshape(5, 3)
+        triangles = np.array([[0, 1, 2], [1, 2, 3], [2, 3, 4], [0, 3, 4]], dtype=np.int32)
+        uvs = np.arange(24, dtype=np.float32).reshape(4, 3, 2)
+        plan.cover = worker.PlanCover(positions, triangles, uvs, np.array([0, 0, 1, 2]))
+        attributes = density.cover_attributes(plan)
+        self.assertEqual(attributes["pos"].shape, (9, 3))
+        np.testing.assert_array_equal(attributes["pos"][3:6], positions[[1, 2, 3]])
+        np.testing.assert_array_equal(attributes["uv"], uvs[:3].reshape(-1, 2))
+        # The map's factor follows each island's quads: sqrt(q(N) / q0).
+        for quads in (200, 1000, 1250):
+            q, q0 = plan.island_quads(quads)[:2], plan.island_quads(plan.quads)[:2]
+            np.testing.assert_allclose(
+                density.cover_scale(attributes["share"], attributes["floorq"], attributes["q0"], quads),
+                np.sqrt(q / q0)[[0, 0, 0, 0, 0, 0, 1, 1, 1]], rtol=1e-5)
+        plan.cover = None
+        self.assertIsNone(density.cover_attributes(plan))
+
     def test_band(self):
         self.assertTrue(density.in_band(5000, 4000))
         self.assertTrue(density.in_band(5000, 6000))
@@ -986,6 +1006,14 @@ class CliTest(unittest.TestCase):
             self.assertEqual(outcome.status, "ok", outcome.message)
             np.testing.assert_array_equal(outcome.plan.edge, planned.plan.edge)
             self.assertEqual(outcome.plan.quads, 1500)
+            # The cover: one uv unit is one quad, so its uv area is about the planned quads.
+            cover = outcome.plan.cover
+            self.assertIsNotNone(cover)
+            self.assertEqual(cover.uvs.shape, (len(cover.triangles), 3, 2))
+            self.assertLess(int(cover.triangles.max()), len(cover.positions))
+            e1, e2 = cover.uvs[:, 1] - cover.uvs[:, 0], cover.uvs[:, 2] - cover.uvs[:, 0]
+            uv_area = 0.5 * np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum()
+            self.assertAlmostEqual(uv_area / outcome.plan.planned_quads(1500), 1.0, delta=0.25)
             self.assertTrue(job.resume())
             while not job.done and time.monotonic() < deadline:
                 job.poll()

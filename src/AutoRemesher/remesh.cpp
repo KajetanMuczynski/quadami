@@ -1177,6 +1177,25 @@ static void fillPlan(const RemeshRequest& request, const ::AutoRemesher::AutoRem
         plan.plannedQuads += out.plannedQuads;
         plan.islands.push_back(out);
     }
+    PlanCover& cover = plan.cover;
+    const auto& covers = engine.planCovers();
+    for (size_t i = 0; i < covers.size(); ++i) {
+        const uint32_t first = (uint32_t)(cover.positions.size() / 3);
+        for (const auto& v : covers[i].vertices) {
+            cover.positions.push_back((float)v.x());
+            cover.positions.push_back((float)v.y());
+            cover.positions.push_back((float)v.z());
+        }
+        for (const auto& t : covers[i].triangles) {
+            for (const size_t v : t)
+                cover.triangles.push_back(first + (uint32_t)v);
+            cover.triangleIslands.push_back((uint32_t)i);
+        }
+        for (const auto& uv : covers[i].cornerUvs) {
+            cover.cornerUvs.push_back((float)uv.x());
+            cover.cornerUvs.push_back((float)uv.y());
+        }
+    }
     warnAboutFloor(result->report, request.parameters.targetQuadCount);
 }
 
@@ -1664,6 +1683,8 @@ std::string toJson(const RemeshResult& result)
         const RemeshPlan& plan = result.plan;
         out << "  \"plan\": {\"vertices\": " << jsonCount(plan.vertexEdgeLengths.size())
             << ", \"planned_quads\": " << jsonNumber(plan.plannedQuads)
+            << ", \"cover_vertices\": " << jsonCount(plan.cover.positions.size() / 3)
+            << ", \"cover_triangles\": " << jsonCount(plan.cover.triangleIslands.size())
             << ", \"islands\": [";
         for (size_t i = 0; i < plan.islands.size(); ++i) {
             const PlanIsland& island = plan.islands[i];

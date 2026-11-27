@@ -358,11 +358,27 @@ struct PlanIsland {
 // takes the values of the nearest one that has them.  Planned, not
 // realised: the run's extraction, retries and rounding move the count and
 // the size by some percent.
+//
+// Since 1.17, `cover`: the meshes the islands were planned on (their
+// isotropic remesh, in input units) with the continuous cover's map of each
+// corner, where one uv unit is one quad of the island's plannedQuads and the
+// quads' edges run along the integer lines of u and v.  The charts of two
+// neighbouring faces differ by a quarter turn and a translation that is not
+// yet an integer (the run rounds it), so lines jump there.  It holds no face
+// of a left-out island or of one whose cover solve failed.
+struct PlanCover {
+    std::vector<float> positions; // 3 per vertex
+    std::vector<uint32_t> triangles; // 3 per face
+    std::vector<float> cornerUvs; // 2 per corner, corner c of face f at 3f + c
+    std::vector<uint32_t> triangleIslands; // per face, the index in RemeshPlan::islands
+};
+
 struct RemeshPlan {
     std::vector<float> vertexEdgeLengths;
     std::vector<uint32_t> vertexIslands;
     std::vector<PlanIsland> islands;
     double plannedQuads = 0.0;
+    PlanCover cover;
 };
 
 struct RemeshResult {

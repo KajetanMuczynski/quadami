@@ -25,6 +25,7 @@
 #include <AutoRemesher/Diagnostics>
 #include <AutoRemesher/FeatureEdges>
 #include <AutoRemesher/Progress>
+#include <AutoRemesher/Vector2>
 #include <AutoRemesher/Vector3>
 #include <atomic>
 #include <chrono>
@@ -333,6 +334,20 @@ public:
         return m_planIslands;
     }
 
+    // Per island of the plan: the mesh it was planned on (its isotropic
+    // remesh) and the continuous cover's map of each corner (corner c of
+    // face f is 3f + c, one uv unit is one quad of the planned count).
+    // Empty for a left-out island and one whose cover solve failed.
+    struct PlanCover {
+        std::vector<Vector3> vertices;
+        std::vector<std::vector<size_t>> triangles;
+        std::vector<Vector2> cornerUvs;
+    };
+    const std::vector<PlanCover>& planCovers() const
+    {
+        return m_planCovers;
+    }
+
     // Input vertices of the sliver islands remeshIslands() left out, so the
     // lost-part measure does not count them as lost.
     const std::vector<size_t>& leftOutVertices() const
@@ -615,6 +630,7 @@ private:
     std::vector<float> m_planVertexEdgeLengths;
     std::vector<uint32_t> m_planVertexIslands;
     std::vector<PlanIsland> m_planIslands;
+    std::vector<PlanCover> m_planCovers;
     ModelType m_modelType = ModelType::Organic;
     AutoRemesherProgressHandler m_progressHandler = nullptr;
     void* m_tag = nullptr;

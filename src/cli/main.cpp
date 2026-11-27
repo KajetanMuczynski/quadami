@@ -89,6 +89,12 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "                              input vertex, the planned quad edge length as\n"
                           "                              float32 and then its island as uint32, both\n"
                           "                              little-endian; the islands are in the report\n"
+                          "  --plan-cover-output <file>  with --plan-only or --plan-output: the mesh\n"
+                          "                              the plan was made on, as float32 xyz per\n"
+                          "                              vertex, uint32 corners per triangle, float32\n"
+                          "                              uv per corner (one unit is one quad) and the\n"
+                          "                              uint32 island of each triangle, little-endian;\n"
+                          "                              the counts are in the report's plan\n"
                           "  --lost-parts-reference <count>\n"
                           "                              also count lost parts in the report at the quad\n"
                           "                              width of this target (an earlier run's), so its\n"
@@ -120,6 +126,7 @@ struct Options {
     bool planOnly = false;
     std::string planOutputPath;
     std::string planReportJsonPath;
+    std::string planCoverOutputPath;
     bool waitAfterPlan = false;
 };
 
@@ -161,6 +168,22 @@ bool writePlan(const std::string& path, const RemeshPlan& plan, std::string* err
         std::memcpy(&bytes[0], plan.vertexEdgeLengths.data(), plan.vertexEdgeLengths.size() * 4);
     if (!plan.vertexIslands.empty())
         std::memcpy(&bytes[plan.vertexEdgeLengths.size() * 4], plan.vertexIslands.data(), plan.vertexIslands.size() * 4);
+    return Cli::writeTextFile(path, bytes, error);
+}
+
+// The file of --plan-cover-output: positions, triangles, corner uvs and the
+// triangles' islands, one array after the other, little-endian.
+bool writePlanCover(const std::string& path, const PlanCover& cover, std::string* error)
+{
+    std::string bytes;
+    const auto append = [&bytes](const void* data, size_t size) {
+        if (size > 0)
+            bytes.append(static_cast<const char*>(data), size);
+    };
+    append(cover.positions.data(), cover.positions.size() * 4);
+    append(cover.triangles.data(), cover.triangles.size() * 4);
+    append(cover.cornerUvs.data(), cover.cornerUvs.size() * 4);
+    append(cover.triangleIslands.data(), cover.triangleIslands.size() * 4);
     return Cli::writeTextFile(path, bytes, error);
 }
 
@@ -221,6 +244,8 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
             options->planOutputPath = value;
         else if ("--plan-report-json" == name)
             options->planReportJsonPath = value;
+        else if ("--plan-cover-output" == name)
+            options->planCoverOutputPath = value;
         else if ("--target-quads" == name)
             valid = parseCount(value, &parameters.targetQuadCount);
         else if ("--adaptivity" == name)
@@ -277,6 +302,10 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
     }
     if (!options->planOutputPath.empty() && options->planOnly) {
         std::fprintf(stderr, "Error: --plan-output is for a run; --plan-only writes its plan to --output\n");
+        return 1;
+    }
+    if (!options->planCoverOutputPath.empty() && !options->planOnly && options->planOutputPath.empty()) {
+        std::fprintf(stderr, "Error: --plan-cover-output needs --plan-only or --plan-output\n");
         return 1;
     }
     if ((!options->planReportJsonPath.empty() || options->waitAfterPlan) && options->planOutputPath.empty()) {
@@ -351,6 +380,11 @@ int run(const std::vector<std::string>& arguments)
                     std::fprintf(stderr, "Error: %s\n", planError.c_str());
                     return false;
                 }
+                if (!options.planCoverOutputPath.empty()
+                    && !writePlanCover(options.planCoverOutputPath, plan.plan.cover, &planError)) {
+                    std::fprintf(stderr, "Error: %s\n", planError.c_str());
+                    return false;
+                }
                 if (!writePlan(options.planOutputPath, plan.plan, &planError)) {
                     std::fprintf(stderr, "Error: %s\n", planError.c_str());
                     return false;
@@ -374,7 +408,8 @@ int run(const std::vector<std::string>& arguments)
     }
 
     if (RemeshStatus::Ok == result.status && options.planOnly) {
-        if (!writePlan(options.outputPath, result.plan, &error)) {
+        if ((!options.planCoverOutputPath.empty() && !writePlanCover(options.planCoverOutputPath, result.plan.cover, &error))
+            || !writePlan(options.outputPath, result.plan, &error)) {
             result.status = RemeshStatus::Failed;
             result.message = error;
         }

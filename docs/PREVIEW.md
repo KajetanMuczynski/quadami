@@ -509,7 +509,7 @@ Not changed here (0.4 candidates): within ±20 % the overlay barely moves (+13 %
 edge, about 4 % of the colour ramp, and the checker steps by 19 % in edge), and it replaces the
 model's own shading.
 
-### 4.8 Remesh goes on from the preview; grid over the shading (2026-11-27)
+### 4.8 Remesh goes on from the preview; the plan's quad lines over the shading (2026-11-27)
 
 Kajetan's 0.4 asks (plan-0.4 §5): a preview that shows a change of Target Quads, keeps the model
 readable, is not planned again on every press, and that Remesh reuses.
@@ -546,18 +546,26 @@ content, plan settings and worker, so showing one again, or an undo after an edi
 edit hides the preview; a Remesh hides it too (the result is what to look at). Only one run ever waits;
 it is stopped by another preview, a file load, a Remesh of anything else, or 15 minutes unused.
 
-**Overlay.** Drawn over Blender's shading (alpha blend, no depth write): lines of a cubic lattice in
-object space, step = the planned edge rounded to quarter octaves around the median edge at the current
-count, so the whole grid shrinks smoothly with Target Quads and only the local pattern steps; a lattice
-family within about 40° of the surface is left out (otherwise it draws wavy height contours on gently
-curved sides, or floods a flat face). Tint (off by default) is the old orange/blue, faint. The panel adds
-what Remesh will do ("goes on from the preview" or "runs from the start", and why), "Size only: loops and
-poles appear after Remesh", and, with guides, about how many quads go around each guide loop (length over
-the planned edge along it).
+**Overlay.** Drawn over Blender's shading (alpha blend, no depth write). Grid: the integer lines of u
+and v of the plan's continuous cover (the map the run rounds into its quads, before the rounding), drawn
+on the isotropic mesh T it was solved on, which the worker hands over with the plan
+(`--plan-cover-output`: T's positions and triangles, a uv per corner, the island per triangle). One uv
+unit is one quad at the planned count, so at Target Quads N each island's map is scaled by
+sqrt(max(N share, floor) / q0) in the vertex shader: the lines run along the quads' directions, one
+planned quad apart, and follow the count smoothly. Lines closer than about 3 px fade out. Tint (off by
+default) is the old orange/blue on the input mesh, faint; left-out parts are grey. The panel adds what
+Remesh will do ("goes on from the preview" or "runs from the start", and why), that exact loops and poles
+appear after Remesh, and, with guides, about how many quads go around each guide loop (length over the
+planned edge along it).
 
-Limits seen in the screenshots: big low-poly faces show diagonal steps where the plan's linear
-interpolation crosses a quarter-octave level (the old "shows its average" limit, now visible as a seam);
-near size steps the lattice lines break. Kajetan reviews both before this leaves draft.
+Round 1 drew an object-space cubic lattice instead (step = planned edge rounded to quarter octaves). It
+was rejected in review (2026-11-27, "the lines don't align, it looks bugged"): the lattice ignores the
+quads' directions, so its lines cut across the surface at arbitrary angles, break where the step changes
+and turn into contours on curved sides.
+
+Limit of the cover grid: the charts of neighbouring triangles differ by a quarter turn and a translation
+that the continuous solve has not yet made an integer (the rounding does that), so lines jump along the
+cover's seams, and cones show as points where 3 or 5 lines meet but can still move in the rounding.
 
 ## 5. Design critique (what may have been missed)
 

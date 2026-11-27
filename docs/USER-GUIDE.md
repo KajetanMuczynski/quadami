@@ -277,8 +277,10 @@ Known limits (0.3 preview):
 model, without remeshing. It plans the run once (a progress bar; Esc cancels), which takes about half as
 long as a Remesh at the same Target Quads. Then:
 
-- **Grid** draws lines about one quad apart over the model's own shading, so you can see whether a detail
-  (an ear, a finger, a ridge) gets one quad or several. The panel says about how many quads are planned
+- **Grid** draws the lines the quads' edges are planned along, about one quad apart, over the model's own
+  shading, so you can see whether a detail (an ear, a finger, a ridge) gets one quad or several and which
+  way the quads run. Where the lines jump or meet in threes and fives, the run still settles the exact
+  loops and poles. The panel says about how many quads are planned
   and the quad edge length in scene units. **Tint** (off at first) adds a faint orange where the quads
   come out smaller than the median and blue where larger.
 - Type or drag a new **Target Quads** within ±20 % of the planned count (the panel names the range): the

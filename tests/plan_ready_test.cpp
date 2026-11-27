@@ -106,7 +106,21 @@ bool samePlan(const RemeshPlan& a, const RemeshPlan& b)
             || a.islands[i].floorQuads != b.islands[i].floorQuads || a.islands[i].leftOut != b.islands[i].leftOut)
             return false;
     }
-    return true;
+    const PlanCover &ca = a.cover, &cb = b.cover;
+    return ca.positions == cb.positions && ca.triangles == cb.triangles && ca.cornerUvs == cb.cornerUvs
+        && ca.triangleIslands == cb.triangleIslands;
+}
+
+// The cover's uv area per island, in quads.
+std::vector<double> coverQuads(const RemeshPlan& plan)
+{
+    std::vector<double> quads(plan.islands.size(), 0.0);
+    const PlanCover& cover = plan.cover;
+    for (size_t f = 0; f < cover.triangleIslands.size(); ++f) {
+        const float* uv = &cover.cornerUvs[6 * f];
+        quads[cover.triangleIslands[f]] += 0.5 * std::fabs((uv[2] - uv[0]) * (uv[5] - uv[1]) - (uv[4] - uv[0]) * (uv[3] - uv[1]));
+    }
+    return quads;
 }
 
 }
@@ -144,6 +158,23 @@ int main()
         "same mesh as a plain run, to the bit");
     check(RemeshStatus::Ok == handed.status && samePlan(handed.plan, planned.plan), "the handed plan is planRemesh()'s");
     check(2 == handed.plan.islands.size() && 2 == handed.report.islandCount, "both islands planned");
+    {
+        const PlanCover& cover = planned.plan.cover;
+        const size_t faces = cover.triangleIslands.size();
+        bool indices = faces > 0 && cover.triangles.size() == 3 * faces && cover.cornerUvs.size() == 6 * faces;
+        for (const uint32_t v : cover.triangles)
+            indices = indices && 3 * (size_t)v < cover.positions.size();
+        check(indices, "the cover has a map per corner and its corners name its vertices");
+        // One uv unit is one quad: the map covers about the planned quads.
+        const std::vector<double> quads = coverQuads(planned.plan);
+        bool sized = true;
+        for (size_t i = 0; i < quads.size(); ++i) {
+            const double ratio = quads[i] / planned.plan.islands[i].plannedQuads;
+            std::printf("  island %zu: cover %.0f quads, planned %.0f\n", i, quads[i], planned.plan.islands[i].plannedQuads);
+            sized = sized && ratio > 0.8 && ratio < 1.25;
+        }
+        check(sized, "each island's map covers its planned quads within 25 %");
+    }
     check(handed.report.inputTriangleCount == request.triangles.size() / 3, "the plan's report has the input counts");
     check(atPlan <= PlanReadyProgress + 1e-6f && atPlan > 0.1f, "progress has got near PlanReadyProgress at the plan");
     bool rising = true;

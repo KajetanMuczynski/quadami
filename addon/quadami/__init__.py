@@ -279,7 +279,7 @@ class RemeshSettings(bpy.types.PropertyGroup):
     # Not remesh parameters: how the density preview is drawn.
     preview_grid: BoolProperty(
         name="Grid", default=True, update=lambda self, context: _redraw(context),
-        description="Draw lines about one planned quad apart over the model")
+        description="Draw lines along the planned quad directions, about one planned quad apart")
     preview_tint: BoolProperty(
         name="Tint", default=False, update=lambda self, context: _redraw(context),
         description="Tint where the plan puts smaller quads than the median orange, larger ones blue")
@@ -1026,12 +1026,15 @@ def _draw_density(layout, context, settings, room):
                                                       " (and %d more)" % (len(loops) - 4) if len(loops) > 4 else ""))
     lines(texts)
     lines([_remesh_line(context, preview, quads, planned)], "PLAY")
-    lines(["Size only: loops and poles appear after Remesh",
+    lines(["Lines follow the planned quads; exact loops and poles appear after Remesh",
            "Target Quads %s to %s redraws without planning again"
            % (format(math.ceil(planned * (1.0 - density.BAND / 100.0)), ","),
               format(math.floor(planned * (1.0 + density.BAND / 100.0)), ","))])
     row = box.row(align=True)
-    row.prop(settings, "preview_grid", toggle=True)
+    grid = row.row(align=True)
+    # A plan from a worker before the cover (it can only plan) has no lines.
+    grid.enabled = preview.plan.cover is not None
+    grid.prop(settings, "preview_grid", toggle=True)
     row.prop(settings, "preview_tint", toggle=True)
     if settings.preview_tint:
         lines(["Orange: smaller quads than the median, blue: larger"])
