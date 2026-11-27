@@ -17,7 +17,8 @@ Contents: [1 Words used here](#1-words-used-here) · [2 Install and update](#2-i
 [5 Reading the result](#5-reading-the-result) · [6 Warnings and what to do](#6-warnings-and-what-to-do) ·
 [7 Sculpts: what works and what struggles](#7-sculpts-what-works-and-what-struggles) ·
 [8 Folded input and Repair Folds](#8-folded-input-and-repair-folds) ·
-[9 Troubleshooting](#9-troubleshooting)
+[9 Troubleshooting](#9-troubleshooting) ·
+[10 Textures: keep or bake](#10-textures-keep-or-bake)
 
 ---
 
@@ -190,7 +191,7 @@ if the original was flat. Under **Keep from Original** (a collapsed section of t
 | Option | Default | What the result gets | Limits |
 |---|---|---|---|
 | **Materials, Groups, Marks** | on | The original's materials (each face takes the material of the original under it), vertex groups and colour attributes (blended from the original's surface), and its **sharp**, **crease** and **seam** marks. | The quads do not follow material borders, and they follow marked lines only with **Follow Marks**: otherwise a border or a marked line becomes the connected run of quad edges nearest to it (straight where the quads run along it, a staircase where they cross it). Lines shorter than about one quad are dropped. Shape keys and face sets are not kept. |
-| **UV Maps** | off | The original's UV maps, with each face kept inside one UV island, so a texture still fits. | A face that crosses a UV seam reaches a little past its island's border in the texture (into the margin around the island); on test models with many small islands up to 6 % of the faces came out distorted. For a clean new map instead: keep this off, select the result, **Tab**, **A**, **U > Unwrap** *(from memory, check)*: the copied seams cut the same islands as on the original. |
+| **UV Maps** | off | The original's UV maps, with each face kept inside one UV island, so a texture still fits. | A face that crosses a UV seam reaches a little past its island's border in the texture (into the margin around the island); on test models with many small islands up to 6 % of the faces came out distorted. For a clean new map instead: keep this off, select the result, **Tab**, **A**, **U > Unwrap Angle Based** (Blender 4.2: **U > Unwrap**): the copied seams cut the same islands as on the original. Textured models: [§10](#10-textures-keep-or-bake). |
 
 The panel line **"Copied from the original: …"** lists what came across. Copying takes a few seconds on
 large models, and Blender waits meanwhile: at 50,000 quads about 1.5 s from a 330,000-triangle
@@ -482,3 +483,82 @@ so; models are kept private and only their numbers go into the project.
 Without Copy Report (an older build), send the **build line**, the settings (Target Quads, Fast/Quality,
 anything changed), a screenshot of the result box, and, if possible, start Blender from a terminal (Windows:
 **Window > Toggle System Console**) and copy the text after `Quadami worker output:`.
+
+## 10. Textures: keep or bake
+
+The remesh looks at the shape only: textures, materials and paint never change where the quads go.
+They reach the result in one of two ways: the result **keeps** the original's UV map and colours
+(**Keep from Original**, [§4](#4-the-settings)), or you **bake** them from the original onto the result,
+the usual step with any remesher.
+
+### Which way
+
+| Your model | Do this |
+|---|---|
+| Textured (image textures, a UV map), you want it to look the same, high Target Quads | Tick **Keep from Original > UV Maps** before **Remesh**. Quick, no extra steps. |
+| Textured, for a game or export, or with a normal map, or low Target Quads | Remesh, unwrap the result, **bake** colour and normal map from the original (below). |
+| Painted sculpt (colours painted in Sculpt or Vertex Paint Mode) | At 10,000 quads and up the kept colours (on by default) are often enough; for fewer quads, crisp paint or a texture for export, **bake**. |
+| Several materials with their own textures | **Bake**: it puts everything into one texture on one material. |
+
+**UV Maps is off by default.** On a textured model the result then gets the original's materials but no UV
+map, so its textures show up wrong (one flat colour or smears). Tick **UV Maps** and run again, or bake.
+
+What we measured (6 textured public models and one painted sculpt, Blender 4.5, rendered from 6 sides and
+compared with the original; 5 runs each, all agreeing):
+- **UV Maps off:** on 5 of the 6 textured models a third or more of the surface showed a clearly wrong colour.
+- **UV Maps on:** at 10,000 quads the colours matched closely (at most 7 % of the surface clearly off, on the
+  model with the most small UV islands); at 2,000 quads up to 13 %.
+- **Normal maps:** the original's normal map, kept on the result, adds almost nothing: it was made for the
+  original's surface, not the new one. Bake a new one.
+- **Baked:** colour as close as UV Maps or closer on most models, and the normal map brings back most of the
+  small detail the quads cannot hold. On the painted sculpt at 2,000 quads, 18 % of the surface was clearly off
+  with the kept colours and 2 % after baking; at 10,000 quads 4 % and under 1 %.
+
+### Bake, step by step (Blender 4.5, Cycles)
+
+You need the result and the original, both visible. Menu names are checked against Blender 4.5; where a
+step is marked *(from memory, check)*, trust your screen.
+
+1. **Unwrap the result.** Select the result (`<name>_remesh`), **Tab**, **A**, **U > Smart UV Project**, **OK**,
+   **Tab**. (With seams copied from the original, **U > Unwrap Angle Based** gives fewer, larger islands;
+   Blender 4.2: **U > Unwrap**.)
+2. **Give it a material with an empty image.** With the result selected: **Properties** editor, **Material**
+   tab (red sphere), remove the copied slots with **−** and press **New**. Open the **Shading** workspace
+   (tab at the top). In the node editor: **Shift A > Texture > Image Texture**, press **New** on it, name it
+   `colour`, size 2048 × 2048, **OK**, and connect its **Color** to the **Base Color** of the Principled BSDF.
+   Add a second Image Texture, **New**, name `normal`, tick **32-bit Float**, **OK**, set its **Color Space**
+   to **Non-Color**; add **Shift A > Vector > Normal Map**, connect image **Color** to Normal Map **Color** and
+   Normal Map **Normal** to the BSDF's **Normal**.
+3. **Show the original.** Quadami hid it. In the **Outliner**, click the original's eye icon. (A hidden
+   original makes the bake stop with *"No valid selected objects"*.)
+4. **Select both, the result last.** Click the original, then **Shift**-click the result, so the result is
+   active (lighter orange outline).
+5. **Bake settings.** **Properties > Render** tab: **Render Engine: Cycles**. Open the **Bake** panel, tick
+   **Selected to Active** and set **Extrusion** to about one quad edge of the result (the median **Quad edge**
+   the Density Preview shows, [§4](#4-the-settings)). Under **Output > Margin**, **Size** 8 to 16 px (we tested 8).
+6. **Bake the colour.** In the node editor click the `colour` image node (it must be the selected node, white
+   outline). **Bake Type: Diffuse**, under **Influence** untick **Direct** and **Indirect**, keep **Color**.
+   Press **Bake**. It takes seconds to a minute.
+7. **Bake the normal map.** Click the `normal` image node. **Bake Type: Normal**, **Space: Tangent**. **Bake**.
+8. **Save both images.** In the **Image Editor** (bottom left of the Shading workspace) pick each image and use
+   **Image > Save As** *(from memory, check)*. Baked images live only in memory until saved: closing Blender
+   loses them.
+9. Hide the original again (eye icon). The result now carries its own textures.
+
+Other maps (roughness, metallic) bake the same way into one more image node each; we did not test them.
+
+### When it goes wrong
+
+| What you see | Why | Do this |
+|---|---|---|
+| *"No valid selected objects"* | The original is hidden or not selected. | Step 3 and 4: eye icon on, original selected, result active. |
+| An error about no active image in the material, or the bake lands in the wrong image *(from memory, check)* | The image node to bake into is not the selected node of the result's material. | Click that image node before **Bake**. |
+| The baked texture is black or patchy | Baking onto the UV map copied with **UV Maps** (instead of a fresh unwrap): many textured models reuse one area of the texture for several parts (mirrored halves, several materials), or lay their UVs outside the image's square. On 2 of 6 test models this baked black or mixed-up colours. | Unwrap the result (step 1) and bake again. |
+| Black or smeared spots on the result | **Extrusion** too small: the rays start under the original's surface. | Double **Extrusion** and bake again. |
+| Colour from a nearby part (a finger on the next finger, the inside of an ear) | **Extrusion** too large. | Halve it, or set **Max Ray Distance** to about twice the Extrusion. |
+| Thin lines along the island borders | Margin too small for the texture's size. | **Margin Size** 16–32 px. |
+| The normal map makes the result look dented or inside out | The `normal` image is not **Non-Color**, or the Normal Map node is missing. | Step 2. |
+
+In our tests (3 models, 3 runs each) one quad edge for Extrusion was the best setting or close to it; a quarter
+of that left more colour errors on the corset, ten times as much gave clearly worse colour and normals on the
+lion statue.
