@@ -73,6 +73,16 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "                              how the extracted quads are smoothed: tangential\n"
                           "                              slides them along the surface and keeps ridges\n"
                           "                              and creases (default laplacian)\n"
+                          "  --plan-output <file>        also plan the run as --plan-only does, once\n"
+                          "                              every part is decimated, and write the plan\n"
+                          "                              there (same format) before going on; the\n"
+                          "                              mesh is the same as without it\n"
+                          "  --plan-report-json <file>   with --plan-output: the plan's report (as\n"
+                          "                              --report-json of --plan-only)\n"
+                          "  --wait-after-plan           with --plan-output and --stdin-control: after\n"
+                          "                              the plan, print 'Waiting for \"continue\"' and\n"
+                          "                              go on only when stdin receives that line\n"
+                          "                              (\"cancel\" or a closed stdin cancels)\n"
                           "  --plan-only                 only plan the run (the run up to the continuous\n"
                           "                              cover solve, about half its time; no rounding,\n"
                           "                              no quads): --output then gets, per\n"
@@ -108,6 +118,9 @@ struct Options {
     RemeshParameters parameters;
     bool stdinControl = false;
     bool planOnly = false;
+    std::string planOutputPath;
+    std::string planReportJsonPath;
+    bool waitAfterPlan = false;
 };
 
 // Above this many quads the run needs gigabytes, so the command line says
@@ -116,6 +129,7 @@ const uint32_t largeTargetQuadCount = 200000;
 
 // Lives until exit, so the detached stdin reader never outlives it.
 CancelToken g_stdinCancelToken;
+Cli::ContinueGate g_continueGate;
 
 bool parseDouble(const std::string& text, double* value)
 {
@@ -136,6 +150,18 @@ bool parseCount(const std::string& text, uint32_t* value)
         return false;
     *value = (uint32_t)parsed;
     return true;
+}
+
+// The plan file of --plan-only and --plan-output: per input vertex the
+// planned quad edge as float32, then its island as uint32, little-endian.
+bool writePlan(const std::string& path, const RemeshPlan& plan, std::string* error)
+{
+    std::string bytes(plan.vertexEdgeLengths.size() * 4 + plan.vertexIslands.size() * 4, '\0');
+    if (!plan.vertexEdgeLengths.empty())
+        std::memcpy(&bytes[0], plan.vertexEdgeLengths.data(), plan.vertexEdgeLengths.size() * 4);
+    if (!plan.vertexIslands.empty())
+        std::memcpy(&bytes[plan.vertexEdgeLengths.size() * 4], plan.vertexIslands.data(), plan.vertexIslands.size() * 4);
+    return Cli::writeTextFile(path, bytes, error);
 }
 
 // Returns 0 to run, otherwise the exit status (after --help or an error).
@@ -168,6 +194,10 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
             options->planOnly = true;
             continue;
         }
+        if ("--wait-after-plan" == name) {
+            options->waitAfterPlan = true;
+            continue;
+        }
         if (!hasValue) {
             if (i + 1 >= arguments.size()) {
                 std::fprintf(stderr, "Error: %s needs a value\n", name.c_str());
@@ -187,6 +217,10 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
             options->reportJsonPath = value;
         else if ("--stage-diagnostics" == name)
             options->stageDiagnosticsPath = value;
+        else if ("--plan-output" == name)
+            options->planOutputPath = value;
+        else if ("--plan-report-json" == name)
+            options->planReportJsonPath = value;
         else if ("--target-quads" == name)
             valid = parseCount(value, &parameters.targetQuadCount);
         else if ("--adaptivity" == name)
@@ -241,6 +275,18 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
         std::fprintf(stderr, "Error: --input (or --input-cache) and --output are required (see --help)\n");
         return 1;
     }
+    if (!options->planOutputPath.empty() && options->planOnly) {
+        std::fprintf(stderr, "Error: --plan-output is for a run; --plan-only writes its plan to --output\n");
+        return 1;
+    }
+    if ((!options->planReportJsonPath.empty() || options->waitAfterPlan) && options->planOutputPath.empty()) {
+        std::fprintf(stderr, "Error: --plan-report-json and --wait-after-plan need --plan-output\n");
+        return 1;
+    }
+    if (options->waitAfterPlan && !options->stdinControl) {
+        std::fprintf(stderr, "Error: --wait-after-plan needs --stdin-control (it waits for \"continue\")\n");
+        return 1;
+    }
     if (options->parameters.flattenSpikes && !options->parameters.repairFolds) {
         std::fprintf(stderr, "Error: --flatten-spikes on needs --fold-repair on\n");
         return 1;
@@ -280,7 +326,7 @@ int run(const std::vector<std::string>& arguments)
         return parsed < 0 ? 0 : parsed;
 
     if (options.stdinControl)
-        Cli::startStdinCancelReader(&g_stdinCancelToken);
+        Cli::startStdinControlReader(&g_stdinCancelToken, &g_continueGate);
 
     RemeshResult result;
     RemeshRequest request;
@@ -295,6 +341,31 @@ int run(const std::vector<std::string>& arguments)
         callbacks.progress = printProgress;
         if (options.stdinControl)
             callbacks.cancel = &g_stdinCancelToken;
+        if (!options.planOutputPath.empty()) {
+            // Written while the run waits (the plan file last: a host that
+            // sees the line below finds both complete).
+            callbacks.planReady = [&options](const RemeshResult& plan) {
+                std::string planError;
+                if (!options.planReportJsonPath.empty()
+                    && !Cli::writeTextFile(options.planReportJsonPath, toJson(plan), &planError)) {
+                    std::fprintf(stderr, "Error: %s\n", planError.c_str());
+                    return false;
+                }
+                if (!writePlan(options.planOutputPath, plan.plan, &planError)) {
+                    std::fprintf(stderr, "Error: %s\n", planError.c_str());
+                    return false;
+                }
+                std::printf("Planned: about %.0f quads on %zu islands in %.2f s\n",
+                    plan.plan.plannedQuads, plan.plan.islands.size(), plan.report.seconds);
+                if (!options.waitAfterPlan) {
+                    std::fflush(stdout);
+                    return true;
+                }
+                std::printf("Waiting for \"continue\"\n");
+                std::fflush(stdout);
+                return g_continueGate.wait();
+            };
+        }
         result = options.planOnly ? planRemesh(request, callbacks) : remesh(request, callbacks);
     } else {
         result.status = RemeshStatus::InvalidInput;
@@ -303,13 +374,7 @@ int run(const std::vector<std::string>& arguments)
     }
 
     if (RemeshStatus::Ok == result.status && options.planOnly) {
-        const RemeshPlan& plan = result.plan;
-        std::string bytes(plan.vertexEdgeLengths.size() * 4 + plan.vertexIslands.size() * 4, '\0');
-        if (!plan.vertexEdgeLengths.empty())
-            std::memcpy(&bytes[0], plan.vertexEdgeLengths.data(), plan.vertexEdgeLengths.size() * 4);
-        if (!plan.vertexIslands.empty())
-            std::memcpy(&bytes[plan.vertexEdgeLengths.size() * 4], plan.vertexIslands.data(), plan.vertexIslands.size() * 4);
-        if (!Cli::writeTextFile(options.outputPath, bytes, &error)) {
+        if (!writePlan(options.outputPath, result.plan, &error)) {
             result.status = RemeshStatus::Failed;
             result.message = error;
         }

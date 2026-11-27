@@ -58,9 +58,32 @@ namespace Cli {
 
     }
 
+    void ContinueGate::release(bool goOn)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (0 != m_state)
+                return;
+            m_state = goOn ? 1 : 2;
+        }
+        m_changed.notify_all();
+    }
+
+    bool ContinueGate::wait()
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_changed.wait(lock, [this] { return 0 != m_state; });
+        return 1 == m_state;
+    }
+
     void startStdinCancelReader(CancelToken* token)
     {
-        std::thread([token] {
+        startStdinControlReader(token, nullptr);
+    }
+
+    void startStdinControlReader(CancelToken* token, ContinueGate* gate)
+    {
+        std::thread([token, gate] {
             std::string pending;
             std::string chunk;
             while (readStdinChunk(chunk)) {
@@ -73,11 +96,17 @@ namespace Cli {
                         line.pop_back();
                     if ("cancel" == line) {
                         token->requestCancel();
+                        if (nullptr != gate)
+                            gate->release(false);
                         return;
                     }
+                    if ("continue" == line && nullptr != gate)
+                        gate->release(true);
                 }
             }
             token->requestCancel();
+            if (nullptr != gate)
+                gate->release(false);
         }).detach();
     }
 

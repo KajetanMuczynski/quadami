@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 16;
+const int InterfaceVersionMinor = 17;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -166,9 +166,29 @@ private:
 // at once.  It should return quickly and must not call back into the core.
 typedef std::function<void(float fraction, const char* step)> RemeshProgressHandler;
 
+struct RemeshResult;
+
+// Since 1.17.  See RemeshCallbacks::planReady.
+typedef std::function<bool(const RemeshResult& plan)> RemeshPlanHandler;
+
+// Since 1.17.  With RemeshCallbacks::planReady, the run's progress is
+// mapped so that it reaches this fraction when the plan is ready.
+constexpr float PlanReadyProgress = 0.5f;
+
 struct RemeshCallbacks {
     RemeshProgressHandler progress;
     const CancelToken* cancel = nullptr;
+    // Since 1.17.  remesh() only: when set, the run also plans itself as
+    // planRemesh() does, once every island is decimated and before any is
+    // parameterized, and calls this on the calling thread with what
+    // planRemesh() would return for the same request (status Ok, the plan,
+    // the input counts and the diagnostics so far).  Returning true goes on
+    // with the run, false ends it as Cancelled.  The run's mesh is the same
+    // with or without it; planning costs about as much again as the run's
+    // own solve of each island.  This is how a host shows a density preview
+    // and then lets the same run continue instead of starting over
+    // (docs/PREVIEW.md §4.8).
+    RemeshPlanHandler planReady;
 };
 
 enum class RemeshStatus {

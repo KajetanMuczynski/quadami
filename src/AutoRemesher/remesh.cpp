@@ -1161,6 +1161,25 @@ static void reportInputCache(const RemeshRequest& request, const ::AutoRemesher:
         report->diagnostics.emplace_back("input_cache_write_failed", 1.0);
 }
 
+// The plan the engine made, its floor warning, into result.
+static void fillPlan(const RemeshRequest& request, const ::AutoRemesher::AutoRemesher& engine, RemeshResult* result)
+{
+    RemeshPlan& plan = result->plan;
+    plan.vertexEdgeLengths = engine.planVertexEdgeLengths();
+    plan.vertexIslands = engine.planVertexIslands();
+    const double scaling = request.parameters.edgeScaling > 0.0 ? request.parameters.edgeScaling : 1.0;
+    for (const auto& island : engine.planIslands()) {
+        PlanIsland out;
+        out.areaShare = island.areaShare;
+        out.floorQuads = island.floorQuads;
+        out.leftOut = island.leftOut;
+        out.plannedQuads = island.leftOut ? 0.0 : island.plannedQuads / (scaling * scaling);
+        plan.plannedQuads += out.plannedQuads;
+        plan.islands.push_back(out);
+    }
+    warnAboutFloor(result->report, request.parameters.targetQuadCount);
+}
+
 static RemeshResult runRemesh(const RemeshRequest& request,
     const RemeshCallbacks& callbacks,
     RemeshPreview* preview,
@@ -1173,10 +1192,12 @@ static RemeshResult runRemesh(const RemeshRequest& request,
     report.inputVertexCount = request.positions.size() / 3;
     report.inputTriangleCount = request.triangles.size() / 3;
     report.inputFeatureEdgeCount = request.featureEdges.size() / 2;
+    // The host's wait after the plan (RemeshCallbacks::planReady) is no time of the run.
+    double waited = 0.0;
     const auto finish = [&](RemeshStatus status, const std::string& message) {
         result.status = status;
         result.message = message;
-        report.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        report.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() - waited;
         return result;
     };
 
@@ -1189,6 +1210,37 @@ static RemeshResult runRemesh(const RemeshRequest& request,
     auto& engine = *enginePointer;
     const RemeshParameters& parameters = request.parameters;
     engine.setKeepPreviewData(nullptr != preview);
+    if (callbacks.planReady) {
+        engine.setPlanReadyHandler([&]() {
+            RemeshResult plan;
+            plan.status = RemeshStatus::Ok;
+            plan.parameters = parameters;
+            plan.report.inputVertexCount = report.inputVertexCount;
+            plan.report.inputTriangleCount = report.inputTriangleCount;
+            plan.report.inputFeatureEdgeCount = report.inputFeatureEdgeCount;
+            plan.report.ignoredFeatureEdgeCount = engine.ignoredMarkedEdgeCount();
+            plan.stageDiagnostics = engine.diagnostics();
+            if (!plan.stageDiagnostics.empty())
+                plan.report.diagnostics = summarizeDiagnostics(plan.stageDiagnostics);
+            reportInputCache(request, engine, *cache, &plan.report);
+            plan.report.islandCount = engine.planIslands().size();
+            fillPlan(request, engine, &plan);
+            plan.report.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            return callbacks.planReady(plan);
+        });
+    }
+    // The run's progress, mapped so the plan lands at PlanReadyProgress.
+    RemeshProgressHandler mappedProgress;
+    if (callbacks.planReady && callbacks.progress) {
+        const float planned = engine.planReadyProgress();
+        mappedProgress = [&callbacks, planned](float fraction, const char* step) {
+            const float mapped = fraction <= planned
+                ? PlanReadyProgress * fraction / planned
+                : PlanReadyProgress + (1.0f - PlanReadyProgress) * (fraction - planned) / (1.0f - planned);
+            callbacks.progress(std::min(1.0f, std::max(0.0f, mapped)), step);
+        };
+        engine.setTag(&mappedProgress);
+    }
 
     // Hosts get every outcome as a status: a worker process should report an
     // error, and an exception escaping into a Qt thread would end the app.
@@ -1196,8 +1248,10 @@ static RemeshResult runRemesh(const RemeshRequest& request,
     try {
         completed = engine.remesh();
     } catch (const std::exception& e) {
+        waited = engine.planWaitSeconds();
         return finish(RemeshStatus::Failed, std::string("remeshing failed: ") + e.what());
     }
+    waited = engine.planWaitSeconds();
 
     report.ignoredFeatureEdgeCount = engine.ignoredMarkedEdgeCount();
     const size_t marksDroppedIslands = engine.markedEdgesDroppedIslandCount();
@@ -1495,21 +1549,7 @@ static RemeshResult runPlan(const RemeshRequest& request, const RemeshCallbacks&
     for (const auto& step : engine.stepTimes())
         report.stepSeconds.emplace_back(step.name, step.microseconds / 1e6);
     report.islandCount = engine.islandCount();
-
-    RemeshPlan& plan = result.plan;
-    plan.vertexEdgeLengths = engine.planVertexEdgeLengths();
-    plan.vertexIslands = engine.planVertexIslands();
-    const double scaling = request.parameters.edgeScaling > 0.0 ? request.parameters.edgeScaling : 1.0;
-    for (const auto& island : engine.planIslands()) {
-        PlanIsland out;
-        out.areaShare = island.areaShare;
-        out.floorQuads = island.floorQuads;
-        out.leftOut = island.leftOut;
-        out.plannedQuads = island.leftOut ? 0.0 : island.plannedQuads / (scaling * scaling);
-        plan.plannedQuads += out.plannedQuads;
-        plan.islands.push_back(out);
-    }
-    warnAboutFloor(report, request.parameters.targetQuadCount);
+    fillPlan(request, engine, &result);
     return finish(RemeshStatus::Ok, std::string());
 }
 
