@@ -1416,6 +1416,62 @@ bool AutoRemesher::decimateIfTooDense(std::vector<Vector3>& vertices,
     if (!featureEdges.empty())
         vertexLock = featureVertexLock(featureEdges, vertices.size());
 
+    // Research (TODO 5.7, --experiment decimate_guide_band=N): the vertices
+    // within N target edge lengths of a hard (guide) edge, measured along
+    // the mesh's edges, are locked as well, so the surface next to a guide
+    // keeps the input's density and the remesh can coarsen the guide itself.
+    if (const char* bandText = std::getenv("AUTOREMESHER_DECIMATE_GUIDE_BAND")) {
+        const double band = std::atof(bandText);
+        std::vector<size_t> sources;
+        for (size_t i = 0; i < featureEdges.edges.size(); ++i) {
+            if (0 != (featureEdges.flags[i] & FeatureEdgeSet::Hard)) {
+                sources.push_back(featureEdges.edges[i].first);
+                sources.push_back(featureEdges.edges[i].second);
+            }
+        }
+        if (band > 0.0 && !sources.empty()) {
+            double area = 0.0;
+            for (const auto& triangle : triangles)
+                area += Vector3::area(vertices[triangle[0]], vertices[triangle[1]], vertices[triangle[2]]);
+            // Equilateral triangles of the target count: area = sqrt(3) / 4 * length^2 each.
+            const double reach = band * std::sqrt(area / (0.4330127 * islandTargetTriangleCount));
+            std::vector<std::vector<size_t>> neighbors(vertices.size());
+            for (const auto& triangle : triangles) {
+                for (size_t i = 0; i < 3; ++i) {
+                    neighbors[triangle[i]].push_back(triangle[(i + 1) % 3]);
+                    neighbors[triangle[(i + 1) % 3]].push_back(triangle[i]);
+                }
+            }
+            std::vector<double> distance(vertices.size(), std::numeric_limits<double>::max());
+            std::priority_queue<std::pair<double, size_t>, std::vector<std::pair<double, size_t>>, std::greater<std::pair<double, size_t>>> queue;
+            for (const size_t source : sources) {
+                if (distance[source] > 0.0) {
+                    distance[source] = 0.0;
+                    queue.push(std::make_pair(0.0, source));
+                }
+            }
+            size_t locked = 0;
+            while (!queue.empty()) {
+                const std::pair<double, size_t> top = queue.top();
+                queue.pop();
+                if (top.first > distance[top.second])
+                    continue;
+                if (0 == (vertexLock[top.second] & meshopt_SimplifyVertex_Lock))
+                    ++locked;
+                vertexLock[top.second] |= meshopt_SimplifyVertex_Lock;
+                for (const size_t next : neighbors[top.second]) {
+                    const double through = top.first + (vertices[next] - vertices[top.second]).length();
+                    if (through <= reach && through < distance[next]) {
+                        distance[next] = through;
+                        queue.push(std::make_pair(through, next));
+                    }
+                }
+            }
+            if (nullptr != std::getenv("AUTOREMESHER_GUIDE_RINGS_DEBUG"))
+                std::cerr << "guide band: " << locked << " of " << vertices.size() << " vertices kept from the decimation, within " << reach << std::endl;
+        }
+    }
+
     // T must keep the input's topology: a non-manifold edge in it becomes a
     // hole or a wrong genus in the output.  Plain meshopt merges vertices by
     // position (on the cat 50 coincident pairs made 100 non-manifold edges)
