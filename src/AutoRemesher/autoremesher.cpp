@@ -2879,6 +2879,14 @@ bool AutoRemesher::remeshIslands()
             && surfaceTopology(run.remeshedQuads, run.remeshedVertices.size()).eulerCharacteristic == ctx.inputTopology.eulerCharacteristic
             && (double)quads >= 0.5 * ctx.targetQuadCount;
     };
+    // A run that collapsed (under half the planned quads) or came out in
+    // several pieces or with non-manifold edges.
+    const auto isCollapsedOrTorn = [](const IslandRun& run, const IslandContext& ctx) {
+        const size_t quads = (size_t)std::count_if(run.remeshedQuads.begin(), run.remeshedQuads.end(),
+            [](const std::vector<size_t>& face) { return 4 == face.size(); });
+        const SurfaceTopology topology = surfaceTopology(run.remeshedQuads, run.remeshedVertices.size());
+        return (double)quads < 0.5 * ctx.targetQuadCount || 1 != topology.components || 0 != topology.nonManifoldEdges;
+    };
     const auto badFaces = [&isFaithful](const IslandRun& run, bool* faithful, const IslandContext& ctx,
                               std::vector<char>* flags) {
         RemeshMesh mesh;
@@ -3048,7 +3056,14 @@ bool AutoRemesher::remeshIslands()
     // run without them is kept only if it is faithful, so a guard that
     // does not help changes nothing.  Islands without sharp edges on T, or
     // with a faithful run, pay nothing; nor do islands with a non-manifold
-    // input (below).
+    // input (below).  Nor, since 2026-11-27, do islands whose run came out in
+    // one piece with at least half its quads and only lost or gained handles
+    // or boundary loops: the run without sharp edges was kept for 21 of 370
+    // such islands of the public sets (u0 and u1), and which ones changed
+    // with the replicate, while it doubled the time of single-island scans
+    // with tunnels thinner than a quad (demosthenes, boot, violin); for
+    // collapsed or torn runs it was kept for 76 of 116
+    // (research/handoff-fallback-speed-2026-11-27.md).
     std::vector<char> sharpEdgesDropped(islandContexes.size(), 0);
     tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
         [&](const tbb::blocked_range<size_t>& range) {
@@ -3068,7 +3083,7 @@ bool AutoRemesher::remeshIslands()
                 if (std::none_of(flags.begin(), flags.end(),
                         [](unsigned char f) { return 0 == (f & FeatureEdgeSet::Hard); }))
                     continue;
-                if (isFaithful(islandRuns[i], islandContexes[i]))
+                if (isFaithful(islandRuns[i], islandContexes[i]) || !isCollapsedOrTorn(islandRuns[i], islandContexes[i]))
                     continue;
                 IslandContext ctx;
                 buildIslandContext(i, ctx);
