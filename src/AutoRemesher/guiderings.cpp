@@ -317,13 +317,60 @@ GuideRingStats padGuideRings(std::vector<Vector3>* positions, std::vector<std::v
     stats.loops = loops.size();
     if (loops.empty())
         return stats;
-    if (nullptr != std::getenv("AUTOREMESHER_GUIDE_RINGS_DEBUG"))
+    if (nullptr != std::getenv("AUTOREMESHER_GUIDE_RINGS_DEBUG")) {
         for (size_t l = 0; l < loops.size(); ++l) {
             std::cerr << "guide chain: loop " << l;
             for (const size_t v : loops[l].vertices)
                 std::cerr << " " << triangleVertices[v].x() << "," << triangleVertices[v].y() << "," << triangleVertices[v].z();
             std::cerr << std::endl;
         }
+        // The turn of each chain in the surface, per vertex in degrees: the
+        // angles of T's triangles at the vertex on one side of the chain,
+        // against half of all of them (a straight line over a ridge turns 0).
+        // -1 where the fan around the vertex is not a closed disc.
+        std::unordered_map<size_t, std::vector<size_t>> around;
+        for (const Loop& loop : loops)
+            for (const size_t v : loop.vertices)
+                around[v];
+        for (size_t t = 0; t < triangles.size(); ++t)
+            for (const size_t v : triangles[t]) {
+                const auto found = around.find(v);
+                if (around.end() != found)
+                    found->second.push_back(t);
+            }
+        for (size_t l = 0; l < loops.size(); ++l) {
+            const std::vector<size_t>& chain = loops[l].vertices;
+            std::cerr << "guide chain turns: loop " << l;
+            for (size_t i = 0; i < chain.size(); ++i) {
+                const size_t v = chain[i], previous = chain[(i + chain.size() - 1) % chain.size()], next = chain[(i + 1) % chain.size()];
+                std::unordered_map<size_t, std::pair<size_t, double>> fan;
+                double total = 0.0;
+                for (const size_t t : around[v]) {
+                    const std::vector<size_t>& triangle = triangles[t];
+                    const size_t k = triangle[0] == v ? 0 : (triangle[1] == v ? 1 : 2);
+                    const size_t a = triangle[(k + 1) % 3], b = triangle[(k + 2) % 3];
+                    const double angle = Vector3::angle(triangleVertices[a] - triangleVertices[v], triangleVertices[b] - triangleVertices[v]);
+                    fan[a] = std::make_pair(b, angle);
+                    total += angle;
+                }
+                double side = 0.0;
+                size_t at = next, steps = 0;
+                while (at != previous && steps <= fan.size()) {
+                    const auto found = fan.find(at);
+                    if (fan.end() == found)
+                        break;
+                    side += found->second.second;
+                    at = found->second.first;
+                    ++steps;
+                }
+                if (at != previous || total <= 0.0)
+                    std::cerr << " -1";
+                else
+                    std::cerr << " " << std::abs(180.0 - 360.0 * side / total);
+            }
+            std::cerr << std::endl;
+        }
+    }
 
     // The output vertices on each loop, by arc length along it.
     const double meanLength = featureEdgeLength(featureEdges, triangleVertices) / featureEdges.size();
