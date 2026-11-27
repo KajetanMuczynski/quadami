@@ -815,6 +815,15 @@ void IsotropicHalfedgeMesh::relinkFlippedEdge(Halfedge *halfedge)
     linkFaceHalfedges(newRightHalfedges);
 }
 
+static bool hardStubsCollapse()
+{
+    static const bool collapse = [] {
+        const char *text = std::getenv("AUTOREMESHER_GUIDE_STUBS");
+        return nullptr != text && std::string("collapse") == text;
+    }();
+    return collapse;
+}
+
 bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengthSquared)
 {
     // Collapsing a boundary edge would need the face on the other side, which
@@ -854,20 +863,45 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
         // that this edge does not follow.
         if (!halfedge->feature)
             return false;
+        // Research (Quadami, TODO 5.7, AUTOREMESHER_GUIDE_STUBS=collapse): a
+        // stub of a hard line, under 0.4 of the target length (the limit
+        // given is 4/3 of it), collapses where the rules below refuse: in a
+        // face with the line's next edge (an ear at a kink; the ear's third
+        // side merges into that edge and the kink is gone), on a plain
+        // stretch of one line only, and where a neighbouring edge would grow
+        // past the limit, up to twice it (the next split pass shortens it).
+        const bool stub = hardStubsCollapse() && halfedge->hard() &&
+            (startVertex->position - endVertex->position).lengthSquared() < 0.09 * maxEdgeLengthSquared;
+        double limit = maxEdgeLengthSquared;
         // The collapse would merge a feature edge of a face next to it.
         if (halfedge->previousHalfedge->feature || halfedge->nextHalfedge->feature ||
-                opposite->previousHalfedge->feature || opposite->nextHalfedge->feature)
-            return false;
+                opposite->previousHalfedge->feature || opposite->nextHalfedge->feature) {
+            if (!stub)
+                return false;
+            for (Halfedge *beside : { halfedge->previousHalfedge, halfedge->nextHalfedge,
+                    opposite->previousHalfedge, opposite->nextHalfedge }) {
+                if (beside->feature && !beside->hard())
+                    return false;
+            }
+            if (2 != featureDegree(startVertex) || 2 != featureDegree(endVertex))
+                return false;
+        }
+        if (stub)
+            limit = 4.0 * maxEdgeLengthSquared;
         const bool startFixed = startVertex->featured || startVertex->featureCorner;
         const bool endFixed = endVertex->featured || endVertex->featureCorner;
         if (startFixed && endFixed)
             return false;
+        bool collapsed = false;
         if (startFixed)
-            return collapseEdgeTo(opposite, startVertex->position, maxEdgeLengthSquared);
-        if (endFixed)
-            return collapseEdgeTo(halfedge, endVertex->position, maxEdgeLengthSquared);
-        return collapseEdgeTo(halfedge, (startVertex->position + endVertex->position) * 0.5,
-            maxEdgeLengthSquared);
+            collapsed = collapseEdgeTo(opposite, startVertex->position, limit);
+        else if (endFixed)
+            collapsed = collapseEdgeTo(halfedge, endVertex->position, limit);
+        else
+            collapsed = collapseEdgeTo(halfedge, (startVertex->position + endVertex->position) * 0.5, limit);
+        if (collapsed && stub)
+            ++hardStubCollapses;
+        return collapsed;
     }
     if (startOnFeature)
         return collapseEdgeTo(opposite, startVertex->position, maxEdgeLengthSquared);
@@ -891,6 +925,53 @@ bool IsotropicHalfedgeMesh::collapseEdge(Halfedge *halfedge, double maxEdgeLengt
             halfedge->nextHalfedge->startVertex->position) * 0.5;
     }
     return collapseEdgeTo(halfedge, collapseTo, maxEdgeLengthSquared);
+}
+
+void IsotropicHalfedgeMesh::reportHardStubs(double targetLength, double ratio)
+{
+    size_t hardEdges = 0, stubs = 0, fixed = 0, ear = 0, join = 0, lengthens = 0, open = 0;
+    for (Face *face = m_firstFace; nullptr != face; face = face->nextFace) {
+        if (face->removed)
+            continue;
+        Halfedge *halfedge = face->halfedge;
+        do {
+            Halfedge *opposite = halfedge->oppositeHalfedge;
+            Vertex *start = halfedge->startVertex;
+            Vertex *end = halfedge->nextHalfedge->startVertex;
+            // Each edge once, from the side of its lower vertex.
+            if (halfedge->feature && halfedge->hard() && (nullptr == opposite || start < end)) {
+                ++hardEdges;
+                double target = targetLength;
+                if (start->targetEdgeLength > 0.0 && end->targetEdgeLength > 0.0)
+                    target = 0.5 * (start->targetEdgeLength + end->targetEdgeLength);
+                const double maxLengthSquared = std::pow(4.0 / 3.0 * target, 2);
+                if ((start->position - end->position).length() < ratio * target) {
+                    ++stubs;
+                    const bool startFixed = start->featured || start->featureCorner;
+                    const bool endFixed = end->featured || end->featureCorner;
+                    const Vector3 to = startFixed ? start->position : (endFixed ? end->position : (start->position + end->position) * 0.5);
+                    if (nullptr == opposite)
+                        ++open;
+                    else if (startFixed && endFixed)
+                        ++fixed;
+                    else if (halfedge->previousHalfedge->feature || halfedge->nextHalfedge->feature ||
+                            opposite->previousHalfedge->feature || opposite->nextHalfedge->feature)
+                        ++ear;
+                    else if (testCollapseWouldJoinFeatureEdges(halfedge))
+                        ++join;
+                    else if (testLengthSquaredAroundVertex(start, to, maxLengthSquared) ||
+                            testLengthSquaredAroundVertex(end, to, maxLengthSquared))
+                        ++lengthens;
+                }
+            }
+            halfedge = halfedge->nextHalfedge;
+        } while (halfedge != face->halfedge);
+    }
+    if (hardEdges > 0)
+        std::cerr << "guide stubs: collapsed " << hardStubCollapses << "; left " << stubs << " of " << hardEdges << " hard edges under " << ratio << " of target; both ends fixed "
+                  << fixed << ", in a face with another feature edge " << ear << ", would join chains " << join
+                  << ", would make an edge too long " << lengthens << ", other " << (stubs - fixed - ear - join - lengthens - open)
+                  << ", boundary " << open << std::endl;
 }
 
 bool IsotropicHalfedgeMesh::testCollapseWouldJoinFeatureEdges(Halfedge *halfedge)

@@ -99,6 +99,8 @@ private:
     
     void splitLongEdges(double maxEdgeLength);
     void collapseShortEdges(double minEdgeLengthSquared, double maxEdgeLengthSquared);
+    // Research (Quadami, TODO 5.7): collapses the stubs of hard lines left after the last pass.
+    void collapseHardStubs(double targetLength);
     void flipEdges();
     void flipChainEars();
     bool isFlatEar(IsotropicHalfedgeMesh::Halfedge *third);

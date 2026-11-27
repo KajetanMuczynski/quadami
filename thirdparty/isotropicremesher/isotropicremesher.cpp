@@ -398,6 +398,14 @@ void IsotropicRemesher::remesh(size_t iteration)
 
     }
 
+    // Research (Quadami, TODO 5.7, AUTOREMESHER_GUIDE_STUBS=collapse): the
+    // last shift can leave a stub on a hard line; collapseEdge takes only
+    // those here (it refuses every other hard edge this short pass offers).
+    if (const char *stubs = std::getenv("AUTOREMESHER_GUIDE_STUBS")) {
+        if (std::string("collapse") == stubs)
+            collapseHardStubs(targetLength);
+    }
+
     // A face with two feature edges locks the field to one of them only,
     // and the parameterization folds next to it (TODO 2.5: a prism with
     // 45 degree corners, 276 of T's triangles flipped at 1k quads, 2 with
@@ -409,6 +417,8 @@ void IsotropicRemesher::remesh(size_t iteration)
         for (IsotropicHalfedgeMesh::Vertex *vertex: added)
             projectVertex(vertex);
     }
+    if (nullptr != std::getenv("AUTOREMESHER_GUIDE_RINGS_DEBUG"))
+        m_halfedgeMesh->reportHardStubs(targetLength, 0.4);
     report(1.0f, "");
     
     //std::cout << "Done" << std::endl;
@@ -479,6 +489,36 @@ void IsotropicRemesher::collapseShortEdges(double minEdgeLengthSquared, double m
                         break;
                     }
                 }
+            }
+            halfedge = nextHalfedge;
+        } while (halfedge != startHalfedge);
+    }
+}
+
+void IsotropicRemesher::collapseHardStubs(double targetLength)
+{
+    for (IsotropicHalfedgeMesh::Face *face = m_halfedgeMesh->moveToNextFace(nullptr);
+            nullptr != face;
+            ) {
+        if (face->removed) {
+            face = m_halfedgeMesh->moveToNextFace(face);
+            continue;
+        }
+        IsotropicHalfedgeMesh::Halfedge *startHalfedge = face->halfedge;
+        face = m_halfedgeMesh->moveToNextFace(face);
+        IsotropicHalfedgeMesh::Halfedge *halfedge = startHalfedge;
+        do {
+            IsotropicHalfedgeMesh::Halfedge *nextHalfedge = halfedge->nextHalfedge;
+            IsotropicHalfedgeMesh::Vertex *start = halfedge->startVertex;
+            IsotropicHalfedgeMesh::Vertex *end = nextHalfedge->startVertex;
+            if (halfedge->feature && halfedge->hard() && !start->featured && !end->featured &&
+                    !start->pinned && !end->pinned) {
+                double target = targetLength;
+                if (start->targetEdgeLength > 0.0 && end->targetEdgeLength > 0.0)
+                    target = 0.5 * (start->targetEdgeLength + end->targetEdgeLength);
+                if ((start->position - end->position).length() < 0.4 * target &&
+                        m_halfedgeMesh->collapseEdge(halfedge, std::pow(4.0 / 3.0 * target, 2)))
+                    break;
             }
             halfedge = nextHalfedge;
         } while (halfedge != startHalfedge);

@@ -19,6 +19,8 @@ A gap is a stretch of T's chain of at least 0.6 output edges with no output edge
 within 0.15 edges of the chain), on a loop that fails loop_gate.py. For each kind of event the table
 gives how much of the gap length and of the closed length has one within `--reach` output edges, how
 many gaps have one, and how many would by chance (the same interval placed at random on its ring).
+Kinks are counted by the chain's turn in the surface (the core's `guide chain turns` line), and the
+loops are split by their kink count (none, 1 to 4, 5 or more) per target.
 `--cases` adds one row per mesh and target: closes, drops, kinks of T's chain, re-rounds, corners.
 """
 import argparse
@@ -45,7 +47,7 @@ KINK = 45.0       # degrees
 
 def parse(run_dir):
     """(the kept solve's chains, kept solve, dropped, corner counts) of a run."""
-    solves, current, chains, corners = [], collections.defaultdict(list), {}, None
+    solves, current, chains, surface, corners = [], collections.defaultdict(list), {}, {}, None
     with open(os.path.join(run_dir, "log.txt"), errors="replace") as f:
         for line in f:
             if line.startswith("guide chain: loop "):
@@ -55,6 +57,11 @@ def parse(run_dir):
                 owner = solves[-1].setdefault("chains", {}) if solves else chains
                 if int(t[3]) not in owner:
                     owner[int(t[3])] = np.array([[float(x) for x in p.split(",")] for p in t[4:]])
+            elif line.startswith("guide chain turns: loop "):
+                t = line.split()
+                owner = solves[-1].setdefault("turns", {}) if solves else surface
+                if int(t[4]) not in owner:
+                    owner[int(t[4])] = np.array([float(x) for x in t[5:]])
             elif line.startswith("guide follow: turned"):
                 t = line.split()
                 current["follow"].append(tuple(float(x) for x in t[7:10]))
@@ -84,6 +91,8 @@ def parse(run_dir):
         for solve in solves:
             if all(len(solve.get("flips_" + s, ())) == int(record.get(s + "_flipped", -1)) for s in STAGES):
                 kept = solve
+    if kept is not None:
+        kept.setdefault("turns", {})
     return (kept.get("chains", {}) if kept is not None else chains), kept, dropped, corners
 
 
@@ -166,6 +175,7 @@ def main():
     sources = gr.corpus_sources(work)
     total, cases, rng = collections.Counter(), collections.OrderedDict(), random.Random(1)
     names, kink_turn, follow_turn = None, [], []
+    by_kinks = collections.defaultdict(collections.Counter)
     for folder in a.folders:
         for run_dir in sorted(glob.glob(os.path.join(folder, "*", "*", "u*"))):
             if not os.path.exists(os.path.join(run_dir, "out.obj")):
@@ -201,10 +211,22 @@ def main():
             follow = found["follow re-round"]
             case["follow"] += len(follow)
             case["flips"] += len(found["continuous flip"])
-            for chain in chains.values():
+            for loop, chain in chains.items():
                 closes = bool(gate[int(np.argmin([np.mean(t.query(chain)[0]) for t in drawn]))]["closes"])
-                turn = turns(chain)
-                case["kinks"] += int((turn > KINK).sum())
+                # The turn in the surface where the core printed it (a straight line over a ridge
+                # turns 0 there), else the turn of the polyline in space.
+                in_space = turns(chain)
+                turn = kept["turns"].get(loop)
+                if turn is None or len(turn) != len(chain):
+                    turn = in_space
+                    total["loops without a surface turn"] += 1
+                turn = np.where(turn < 0.0, in_space, turn)
+                kinks = int((turn > KINK).sum())
+                case["kinks"] += kinks
+                case["kinks_in_space"] += int((in_space > KINK).sum())
+                band = "none" if 0 == kinks else ("1 to 4" if kinks < 5 else "5 or more")
+                by_kinks[(target, band)]["loops"] += 1
+                by_kinks[(target, band)]["closes"] += closes
                 kink_turn += list(turn)
                 samples, covered = coverage(chain, positions, faces, h)
                 gaps = [] if closes else gaps_of(covered, h)
@@ -254,13 +276,23 @@ def main():
             KINK, 100.0 * np.mean(kink_turn > KINK), 100.0 * np.mean(follow_turn > KINK), len(follow_turn)))
         print("a gap within reach of a follow re-round: %d of %d; of a straight vertex (20 degrees or less): %d of %d" % (
             total["follow at a gap"], len(follow_turn), total["straight at a gap"], total["straight vertices"]))
+    if by_kinks:
+        targets = sorted({t for t, _ in by_kinks})
+        print("\n| kinks over %d degrees in the chain | %s | all |\n|---|%s---|" % (
+            KINK, " | ".join("closes at %d" % t for t in targets), "---|" * len(targets)))
+        for band in ("none", "1 to 4", "5 or more"):
+            cells = ["%d of %d" % (by_kinks[(t, band)]["closes"], by_kinks[(t, band)]["loops"]) for t in targets]
+            print("| %s | %s | %d of %d |" % (band, " | ".join(cells), sum(by_kinks[(t, band)]["closes"] for t in targets),
+                                             sum(by_kinks[(t, band)]["loops"] for t in targets)))
+        if total["loops without a surface turn"]:
+            print("loops counted with the turn in space (no surface turn printed): %d" % total["loops without a surface turn"])
     if a.cases:
-        print("\n| mesh | target | closes | of | runs dropped | kinks in T per run | follow re-rounds per run |"
+        print("\n| mesh | target | closes | of | runs dropped | kinks in T per run | in space | follow re-rounds per run |"
               " corners per run (crossing + kink) | continuous flips per run |\n|---|---|---|---|---|---|---|---|---|")
         for (mesh, target), c in cases.items():
             kept, runs = max(c["kept"], 1), max(c["runs"], 1)
-            print("| %s | %d | %d | %d | %d | %.1f | %.1f | %.1f + %.1f | %.0f |" % (
-                mesh, target, c["closes"], c["loops"], c["dropped"], c["kinks"] / kept, c["follow"] / kept,
+            print("| %s | %d | %d | %d | %d | %.1f | %.1f | %.1f | %.1f + %.1f | %.0f |" % (
+                mesh, target, c["closes"], c["loops"], c["dropped"], c["kinks"] / kept, c["kinks_in_space"] / kept, c["follow"] / kept,
                 c["crossings"] / runs, c["kink_corners"] / runs, c["flips"] / kept))
     return 0
 

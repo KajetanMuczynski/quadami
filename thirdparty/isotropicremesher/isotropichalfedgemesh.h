@@ -134,6 +134,12 @@ public:
     size_t featureDegree(Vertex *vertex, Vertex **first = nullptr, Vertex **second = nullptr);
     // A chain vertex: on exactly two feature edges, not frozen, no corner.
     bool isChainVertex(Vertex *vertex);
+    // Research (Quadami, TODO 5.7): the hard edges shorter than `ratio` of
+    // their target length that the remesh left, by what stands against
+    // collapsing each, on stderr.
+    void reportHardStubs(double targetLength, double ratio);
+    // Stubs of hard lines collapsed under AUTOREMESHER_GUIDE_STUBS=collapse.
+    size_t hardStubCollapses = 0;
     size_t vertexValence(Vertex *vertex, bool *isBoundary=nullptr);
     // Flips and collapses keep at least this many edges at a pinned vertex
     // (Quadami), so that its fan does not turn into a pyramid with creases.
