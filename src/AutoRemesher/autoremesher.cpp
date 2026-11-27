@@ -2075,6 +2075,8 @@ bool AutoRemesher::remeshIslands()
         // cancelled (the cones of a part an earlier run of the island lost).
         std::vector<Vector3> protectedPoints;
         double protectedRadius = 0.0;
+        // PROBE control arm: another pair distance for the simplifier (0: default).
+        size_t probePairDistance = 0;
         // Cleared for the run without marks (marked-edge fallback below).
         bool followMarks = true;
         // Marked length over the length of all edges of the planned quads,
@@ -2440,6 +2442,8 @@ bool AutoRemesher::remeshIslands()
         parameterizer.setFeatureEdges(&run.isotropicFeatureEdges);
         if (!ctx.protectedPoints.empty())
             parameterizer.setProtectedPoints(&ctx.protectedPoints, ctx.protectedRadius);
+        if (ctx.probePairDistance > 0)
+            parameterizer.setMaximumSingularityPairDistance(ctx.probePairDistance);
         bool parameterizeSucceeded = true;
         try {
             parameterizeSucceeded = parameterizer.parameterize();
@@ -3397,6 +3401,7 @@ bool AutoRemesher::remeshIslands()
         const double keepGain = setting("AR_PROBE_KEEP_GAIN", 0.75);
         const size_t keepRounds = (size_t)setting("AR_PROBE_KEEP_ROUNDS", 1.0);
         const size_t keepMaximumPoints = 2000;
+        const size_t keepControlPairDistance = (size_t)setting("AR_PROBE_KEEP_CONTROL", 0.0);
         const auto fan = [](const std::vector<std::vector<size_t>>& faces, size_t offset, std::vector<std::vector<size_t>>* out) {
             for (const auto& face : faces)
                 for (size_t k = 2; k < face.size(); ++k)
@@ -3477,8 +3482,13 @@ bool AutoRemesher::remeshIslands()
                             for (size_t k = 0; k < lost.size(); k += stride)
                                 points.push_back(samples[lost[k]].position);
                             IslandContext ctx = islandContexes[i];
-                            ctx.protectedPoints = points;
-                            ctx.protectedRadius = keepRadius * quadWidth;
+                            if (keepControlPairDistance > 0) {
+                                // Control: a retry that changes cones everywhere, not at the lost part.
+                                ctx.probePairDistance = keepControlPairDistance;
+                            } else {
+                                ctx.protectedPoints = points;
+                                ctx.protectedRadius = keepRadius * quadWidth;
+                            }
                             IslandRun run;
                             run.conicalTips = islandRuns[i].conicalTips;
                             run.features = islandRuns[i].features;
