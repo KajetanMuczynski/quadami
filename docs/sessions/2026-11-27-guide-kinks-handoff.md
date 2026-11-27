@@ -39,3 +39,12 @@ research: `2026-11-26-guide-ring-kinks.md` and the report doc's "Update 3, 26 No
 4. Second route before any "this works": a fresh disprover with its own scripts.
 5. Decimation: repeat on a second private sculpt (a subdivided public mesh only if none fits, labelled synthetic).
 - Not in this arm: corners decided on the input, the guide embedded after decimation (bigger changes; one at a time).
+
+## 27 November, 14:35: result of the endpoint, and a prediction written before its test
+- Endpoint (6k and 10k, same commit ad78219, 6 replicates a side): the stub arm lowers the kinks and does not
+  raise closing. Cut rings 66 -> 61 of 96, staircase twins 67 -> 68 of 96, head 25 -> 23 of 36.
+- Readout at 3k, where I expected nothing: 36 -> 67 of 114 (cut 12 -> 23, staircase 19 -> 33, head 5 -> 11), and the
+  runs in which T has no closed smooth guide chain fall from 30 to 3. Post hoc, so not a result yet.
+- Prediction, written before the stub arm has run on them: on the knight torso (`knight`, 750 and 1400 quads) and
+  the Washington bust (`washington`, 1500 and 3000), where the input is decimated before the remesh, the stub arm
+  closes more loops than the baseline. If it does not, the 3k gain is specific to the head or to chance.
