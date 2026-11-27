@@ -475,6 +475,45 @@ namespace {
         return total > 0.0 ? farther / total : 0.0;
     }
 
+    // Points spread over `faces` (triangles or polygons, fanned) with the
+    // area each stands for: the centroids of each triangle cut into n x n,
+    // n from its longest edge over `spacing` (at most 64).  Of more than
+    // `maximumFaces` faces only every k-th is sampled.
+    struct AreaSample {
+        Vector3 position;
+        double area;
+    };
+    std::vector<AreaSample> areaSamples(const std::vector<Vector3>& vertices, const std::vector<std::vector<size_t>>& faces,
+        double spacing, size_t maximumFaces)
+    {
+        std::vector<AreaSample> samples;
+        const size_t stride = std::max<size_t>(1, (faces.size() + maximumFaces - 1) / std::max<size_t>(1, maximumFaces));
+        for (size_t f = 0; f < faces.size(); f += stride) {
+            const auto& face = faces[f];
+            for (size_t k = 2; k < face.size(); ++k) {
+                const Vector3 a = vertices[face[0]], b = vertices[face[k - 1]], c = vertices[face[k]];
+                const double area = 0.5 * Vector3::crossProduct(b - a, c - a).length();
+                if (!(area > 0.0))
+                    continue;
+                const double longest = std::max({ (b - a).length(), (c - b).length(), (a - c).length() });
+                const size_t n = std::max<size_t>(1, std::min<size_t>(64, (size_t)std::ceil(longest / spacing)));
+                const double weight = area / (double)(n * n);
+                const Vector3 u = (b - a) * (1.0 / (double)n), v = (c - a) * (1.0 / (double)n);
+                for (size_t i = 0; i < n; ++i) {
+                    for (size_t j = 0; i + j < n; ++j) {
+                        for (int inverted = 0; inverted < 2; ++inverted) {
+                            if (inverted && i + j + 2 > n)
+                                break;
+                            const double t = inverted ? 2.0 / 3.0 : 1.0 / 3.0;
+                            samples.push_back({ a + u * ((double)i + t) + v * ((double)j + t), weight });
+                        }
+                    }
+                }
+            }
+        }
+        return samples;
+    }
+
     // Thrown from a cancellation point and caught in remesh().  Deliberately not
     // a std::exception, so the per-island error handling doesn't take it for a
     // failed island.
@@ -2032,6 +2071,10 @@ bool AutoRemesher::remeshIslands()
         std::vector<std::pair<size_t, size_t>> markedEdges;
         size_t inputMarkedEdgeCount = 0;
         size_t isotropicMarkedEdgeCount = 0;
+        // Keep parts: cones within protectedRadius of these points are not
+        // cancelled (the cones of a part an earlier run of the island lost).
+        std::vector<Vector3> protectedPoints;
+        double protectedRadius = 0.0;
         // Cleared for the run without marks (marked-edge fallback below).
         bool followMarks = true;
         // Marked length over the length of all edges of the planned quads,
@@ -2395,6 +2438,8 @@ bool AutoRemesher::remeshIslands()
         parameterizer.setSharpEdgeDegrees(ctx.sharpEdgeDegrees);
         parameterizer.setConicalTips(&run.conicalTips);
         parameterizer.setFeatureEdges(&run.isotropicFeatureEdges);
+        if (!ctx.protectedPoints.empty())
+            parameterizer.setProtectedPoints(&ctx.protectedPoints, ctx.protectedRadius);
         bool parameterizeSucceeded = true;
         try {
             parameterizeSucceeded = parameterizer.parameterize();
@@ -3324,6 +3369,171 @@ bool AutoRemesher::remeshIslands()
                                        .count();
             }
         });
+    // Keep parts (PROBE, TODO G18; AR_PROBE_KEEP=1).  The map can lose a
+    // part a few quads across (a pocket, an ear, a knuckle) although T has
+    // it: the singularity simplifier cancels cone pairs the part's curvature
+    // needs, and the cover solve then squeezes the part flat.  Which parts
+    // go is chance (the same head loses an eye socket at 2000 quads and
+    // keeps it at 1750 and 2250), so nothing before the run predicts it.
+    // After the run, an island with input farther than a quad from the
+    // whole output is parameterized once more on the same T, with the cones
+    // within keepRadius quads of the lost input protected from cancelling.
+    // The second result is kept only if it loses less (by keepGain), is as
+    // faithful and has no more bad faces than a small budget allows; so the
+    // pass changes nothing where nothing is lost, and what it changes is
+    // measured to be better.
+    std::atomic<size_t> keepIslands(0), keepKept(0);
+    std::atomic<long long> keepUs(0);
+    if (nullptr != std::getenv("AR_PROBE_KEEP")) {
+        const auto setting = [](const char* name, double fallback) {
+            const char* text = std::getenv(name);
+            return nullptr != text ? std::atof(text) : fallback;
+        };
+        // Lost area that starts a retry, in quads; the protected radius in
+        // quad widths; the share of the loss a kept retry may still have;
+        // retries per island.
+        const double keepTrigger = setting("AR_PROBE_KEEP_TRIGGER", 0.5);
+        const double keepRadius = setting("AR_PROBE_KEEP_RADIUS", 3.0);
+        const double keepGain = setting("AR_PROBE_KEEP_GAIN", 0.75);
+        const size_t keepRounds = (size_t)setting("AR_PROBE_KEEP_ROUNDS", 1.0);
+        const size_t keepMaximumPoints = 2000;
+        const auto fan = [](const std::vector<std::vector<size_t>>& faces, size_t offset, std::vector<std::vector<size_t>>* out) {
+            for (const auto& face : faces)
+                for (size_t k = 2; k < face.size(); ++k)
+                    out->push_back({ face[0] + offset, face[k - 1] + offset, face[k] + offset });
+        };
+        std::vector<Vector3> allVertices;
+        std::vector<std::vector<size_t>> allTriangles;
+        for (const auto& run : islandRuns) {
+            const size_t offset = allVertices.size();
+            allVertices.insert(allVertices.end(), run.remeshedVertices.begin(), run.remeshedVertices.end());
+            fan(run.remeshedQuads, offset, &allTriangles);
+        }
+        if (!allTriangles.empty()) {
+            const SurfaceProjector everything(&allVertices, &allTriangles);
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, islandContexes.size()),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t i = range.begin(); i != range.end(); ++i) {
+                        if (islandContexes[i].leftOut || islandContexes[i].enveloped || islandRuns[i].remeshedQuads.empty()
+                            || !(islandContexes[i].targetQuadCount > 0.0) || !(islandContexes[i].area > 0.0))
+                            continue;
+                        throwIfCancelled();
+                        const auto keepStart = std::chrono::high_resolution_clock::now();
+                        const double quadWidth = std::sqrt(islandContexes[i].area / std::min(islandContexes[i].targetQuadCount, plannedQuadCounts[i]));
+                        const size_t maximumSamples = std::max<size_t>(maximumUnfaithfulSamples,
+                            (size_t)(unfaithfulSamplesPerQuad * islandContexes[i].targetQuadCount));
+                        const std::vector<AreaSample> samples = areaSamples(m_vertices, trianglesIslands[i], 0.5 * quadWidth, maximumSamples);
+                        double sampledArea = 0.0;
+                        for (const auto& sample : samples)
+                            sampledArea += sample.area;
+                        if (!(sampledArea > 0.0))
+                            continue;
+                        const double quadsPerArea = islandContexes[i].area / sampledArea / (quadWidth * quadWidth);
+                        // The samples a run's own output does not reach, and
+                        // their area in quads.  A sample another island's
+                        // output covers is not this island's to keep.
+                        std::vector<char> coveredByOthers(samples.size(), 0);
+                        const auto lostSamples = [&](const IslandRun& run, std::vector<size_t>* lost) {
+                            lost->clear();
+                            std::vector<std::vector<size_t>> triangles;
+                            fan(run.remeshedQuads, 0, &triangles);
+                            double area = 0.0;
+                            if (triangles.empty()) {
+                                for (size_t k = 0; k < samples.size(); ++k)
+                                    if (!coveredByOthers[k]) {
+                                        lost->push_back(k);
+                                        area += samples[k].area;
+                                    }
+                                return area * quadsPerArea;
+                            }
+                            const SurfaceProjector own(&run.remeshedVertices, &triangles);
+                            for (size_t k = 0; k < samples.size(); ++k) {
+                                if (coveredByOthers[k] || own.distance(samples[k].position, quadWidth * 1.0001) < quadWidth)
+                                    continue;
+                                lost->push_back(k);
+                                area += samples[k].area;
+                            }
+                            return area * quadsPerArea;
+                        };
+                        std::vector<size_t> lost;
+                        lostSamples(islandRuns[i], &lost);
+                        for (size_t k : lost)
+                            if (everything.distance(samples[k].position, quadWidth * 1.0001) < quadWidth)
+                                coveredByOthers[k] = 1;
+                        double best = lostSamples(islandRuns[i], &lost);
+                        const double first = best;
+                        if (best < keepTrigger)
+                            continue;
+                        ++keepIslands;
+                        bool faithful = false;
+                        size_t bad = badFaces(islandRuns[i], &faithful, islandContexes[i], nullptr);
+                        std::vector<Vector3> points;
+                        bool kept = false;
+                        size_t attempts = 0;
+                        const size_t firstBad = bad;
+                        double lastShare = -1.0, lastBad = -1.0, lastFaithful = -1.0;
+                        for (size_t round = 0; round < keepRounds && best >= keepTrigger; ++round) {
+                            const size_t stride = std::max<size_t>(1, (lost.size() + keepMaximumPoints - 1) / keepMaximumPoints);
+                            for (size_t k = 0; k < lost.size(); k += stride)
+                                points.push_back(samples[lost[k]].position);
+                            IslandContext ctx = islandContexes[i];
+                            ctx.protectedPoints = points;
+                            ctx.protectedRadius = keepRadius * quadWidth;
+                            IslandRun run;
+                            run.conicalTips = islandRuns[i].conicalTips;
+                            run.features = islandRuns[i].features;
+                            run.decimatedTopology = islandRuns[i].decimatedTopology;
+                            run.isotropicTopology = islandRuns[i].isotropicTopology;
+                            run.isotropicFeatureEdges = islandRuns[i].isotropicFeatureEdges;
+                            run.resampleUs = islandRuns[i].resampleUs;
+                            parameterizeIsland(i, ctx, run);
+                            ++attempts;
+                            std::vector<size_t> runLost;
+                            const double share = lostSamples(run, &runLost);
+                            bool runFaithful = false;
+                            const size_t runBad = badFaces(run, &runFaithful, ctx, nullptr);
+                            lastShare = share;
+                            lastBad = (double)runBad;
+                            lastFaithful = runFaithful ? 1.0 : 0.0;
+                            const bool replace = share <= keepGain * best && (runFaithful || !faithful)
+                                && (double)runBad <= (double)bad + std::max(2.0, 0.01 * ctx.targetQuadCount);
+                            keepSupersededRecords(replace ? islandRuns[i] : run, replace ? run : islandRuns[i]);
+                            if (!replace)
+                                break;
+                            run.decimatedVertices = std::move(islandRuns[i].decimatedVertices);
+                            run.decimatedTriangles = std::move(islandRuns[i].decimatedTriangles);
+                            islandContexes[i] = std::move(ctx);
+                            islandRuns[i] = std::move(run);
+                            best = share;
+                            bad = runBad;
+                            faithful = runFaithful;
+                            lost = std::move(runLost);
+                            kept = true;
+                        }
+                        if (kept)
+                            ++keepKept;
+                        DiagnosticRecord record("keep_parts");
+                        record.set("island", (double)i);
+                        record.set("lost_quads_before", first);
+                        record.set("lost_quads_after", best);
+                        record.set("attempts", (double)attempts);
+                        record.set("kept", kept ? 1.0 : 0.0);
+                        record.set("protected_points", (double)points.size());
+                        record.set("bad_faces_before", (double)firstBad);
+                        record.set("faithful", faithful ? 1.0 : 0.0);
+                        record.set("last_lost_quads", lastShare);
+                        record.set("last_bad_faces", lastBad);
+                        record.set("last_faithful", lastFaithful);
+                        islandRuns[i].diagnostics.push_back(std::move(record));
+                        keepUs += std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::high_resolution_clock::now() - keepStart)
+                                      .count();
+                    }
+                });
+        }
+        std::cerr << "PROBE keep parts: islands retried " << keepIslands.load() << ", kept " << keepKept.load()
+                  << ", ms " << keepUs.load() / 1000 << std::endl;
+    }
     m_sharpEdgesDroppedIslandCount = (size_t)std::count(sharpEdgesDropped.begin(), sharpEdgesDropped.end(), 1);
     m_envelopedIslandCount = 0;
     for (const auto& ctx : islandContexes)

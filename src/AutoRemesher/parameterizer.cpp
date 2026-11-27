@@ -20,6 +20,8 @@
  *  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  *  SOFTWARE.
  */
+#include <limits>
+#include <cstdio>
 #include <atomic>
 #include <cstdlib>
 #include <fstream>
@@ -370,6 +372,7 @@ bool Parameterizer::parameterize()
         report(0.17f, "Simplifying singularities");
         simplifier.setFeatureEdges(featureEdges);
         simplifier.setMaximumPairDistance(m_maximumSingularityPairDistance);
+        simplifier.setProtectedPoints(m_protectedPoints, m_protectedRadius);
         simplifier.simplify();
         {
             DiagnosticRecord record("singularity_simplifier");

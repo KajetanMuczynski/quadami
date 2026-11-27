@@ -38,6 +38,14 @@ public:
     // Cones are not moved across the concave ones of these edges; none
     // when unset.  Must outlive simplify().
     void setFeatureEdges(const FeatureEdgeSet* sharpEdges) { m_sharpEdges = sharpEdges; }
+    // No pair is cancelled that has a cone within `radius` of one of these
+    // points (keep parts: the cones of a part the map lost).  Must outlive
+    // simplify().
+    void setProtectedPoints(const std::vector<Vector3>* points, double radius)
+    {
+        m_protectedPoints = points;
+        m_protectedRadius = radius;
+    }
     void simplify();
     // Per vertex the cone's charge in quarter turns, exact (not mod 4):
     // 1 at a valence-3 cone, -1 at a valence-5 one, 4 where the field asks
@@ -54,6 +62,8 @@ private:
     std::vector<Vector3>* m_field;
     size_t m_maximumPairDistance = 6, m_maximumRounds = 4, m_regionMargin = 6;
     const FeatureEdgeSet* m_sharpEdges = nullptr;
+    const std::vector<Vector3>* m_protectedPoints = nullptr;
+    double m_protectedRadius = 0.0;
     size_t m_singularityCountBefore = 0, m_singularityCountAfter = 0, m_cancelledPairCount = 0, m_guardedPairCount = 0;
     std::vector<double> m_angles, m_connection;
     std::vector<bool> m_sharpCorner;

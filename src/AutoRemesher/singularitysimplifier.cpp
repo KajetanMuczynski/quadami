@@ -636,6 +636,16 @@ void SingularitySimplifier::simplify()
             banRadius = r;
         }
     }
+    // Squared, so the test below is a comparison.
+    const double protectedRadiusSquared = m_protectedRadius * m_protectedRadius;
+    const auto isProtected = [&](size_t v) {
+        if (nullptr == m_protectedPoints)
+            return false;
+        for (const Vector3& point : *m_protectedPoints)
+            if ((m_mesh.position(v) - point).lengthSquared() < protectedRadiusSquared)
+                return true;
+        return false;
+    };
     m_guardedPairCount = 0;
     for (size_t round = 0; round < m_maximumRounds; ++round) {
         const auto charges = vertexCharges();
@@ -692,6 +702,10 @@ void SingularitySimplifier::simplify()
                 continue;
             const size_t p = singular[c.a], q = singular[c.b];
             if (banRadius > 0.0 && ((m_mesh.position(p) - banCentre).length() < banRadius || (m_mesh.position(q) - banCentre).length() < banRadius)) {
+                ++m_guardedPairCount;
+                continue;
+            }
+            if (isProtected(p) || isProtected(q)) {
                 ++m_guardedPairCount;
                 continue;
             }
