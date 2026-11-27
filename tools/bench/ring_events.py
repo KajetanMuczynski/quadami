@@ -96,8 +96,8 @@ def parse(run_dir):
             r = json.loads(line)
             if "cover_result" == r.get("stage"):
                 record = r
-            if "marked_chains_dropped" in r:
-                dropped = r["marked_chains_dropped"]
+            # Any island: a mesh with a second, guide-less island has a later record with 0.
+            dropped = max(dropped, r.get("marked_chains_dropped", 0))
     kept = None
     if record is not None:
         for solve in solves:
