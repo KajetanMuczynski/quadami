@@ -45,39 +45,51 @@ MIN_GAP = 0.6
 KINK = 45.0       # degrees
 
 
+def parse_line(line, solves, current_box, chains, surface, corners_box):
+    current = current_box[0]
+    if line.startswith("guide chain: loop "):
+        # Printed after the extraction of the solve just dumped (twice: the crease-slide
+        # alternative), so the chain belongs to the last complete solve.
+        t = line.split()
+        owner = solves[-1].setdefault("chains", {}) if solves else chains
+        if int(t[3]) not in owner:
+            owner[int(t[3])] = np.array([[float(x) for x in p.split(",")] for p in t[4:]])
+    elif line.startswith("guide chain turns: loop "):
+        t = line.split()
+        owner = solves[-1].setdefault("turns", {}) if solves else surface
+        if int(t[4]) not in owner:
+            owner[int(t[4])] = np.array([float(x) for x in t[5:]])
+    elif line.startswith("guide follow: turned"):
+        t = line.split()
+        current["follow"].append(tuple(float(x) for x in t[7:10]))
+    elif line.startswith("guide cone: index"):
+        current["on_guide"].append(tuple(float(x) for x in line.split()[-3:]))
+    elif " separation: cone " in line:
+        t = line.split()
+        current[t[0] + "_rows"].append((int(t[3]), tuple(float(x) for x in t[7:10]), float(t[13])))
+    elif line.startswith("cover flips: "):
+        t = line.split()
+        current["flips_" + t[2]] = np.array([[float(x) for x in p.split(",")] for p in t[4:]]).reshape(-1, 3)
+        if "untangled" == t[2]:
+            solves.append(current)
+            current_box[0] = collections.defaultdict(list)
+    elif line.startswith("guide corners:") and corners_box[0] is None:
+        corners_box[0] = [int(x) for x in re.findall(r"\d+", line)]
+
+
 def parse(run_dir):
     """(the kept solve's chains, kept solve, dropped, corner counts) of a run."""
-    solves, current, chains, surface, corners = [], collections.defaultdict(list), {}, {}, None
+    solves, chains, surface = [], {}, {}
+    current_box, corners_box = [collections.defaultdict(list)], [None]
     with open(os.path.join(run_dir, "log.txt"), errors="replace") as f:
-        for line in f:
-            if line.startswith("guide chain: loop "):
-                # Printed after the extraction of the solve just dumped (twice: the crease-slide
-                # alternative), so the chain belongs to the last complete solve.
-                t = line.split()
-                owner = solves[-1].setdefault("chains", {}) if solves else chains
-                if int(t[3]) not in owner:
-                    owner[int(t[3])] = np.array([[float(x) for x in p.split(",")] for p in t[4:]])
-            elif line.startswith("guide chain turns: loop "):
-                t = line.split()
-                owner = solves[-1].setdefault("turns", {}) if solves else surface
-                if int(t[4]) not in owner:
-                    owner[int(t[4])] = np.array([float(x) for x in t[5:]])
-            elif line.startswith("guide follow: turned"):
-                t = line.split()
-                current["follow"].append(tuple(float(x) for x in t[7:10]))
-            elif line.startswith("guide cone: index"):
-                current["on_guide"].append(tuple(float(x) for x in line.split()[-3:]))
-            elif " separation: cone " in line:
-                t = line.split()
-                current[t[0] + "_rows"].append((int(t[3]), tuple(float(x) for x in t[7:10]), float(t[13])))
-            elif line.startswith("cover flips: "):
-                t = line.split()
-                current["flips_" + t[2]] = np.array([[float(x) for x in p.split(",")] for p in t[4:]]).reshape(-1, 3)
-                if "untangled" == t[2]:
-                    solves.append(current)
-                    current = collections.defaultdict(list)
-            elif line.startswith("guide corners:") and corners is None:
-                corners = [int(x) for x in re.findall(r"\d+", line)]
+        lines = list(f)
+    for line in lines:
+        # stdout and stderr share the log; a debug line cut by progress text is skipped.
+        try:
+            parse_line(line, solves, current_box, chains, surface, corners_box)
+        except (ValueError, IndexError):
+            continue
+    current, corners = current_box[0], corners_box[0]
     record, dropped = None, 0
     with open(os.path.join(run_dir, "stages.jsonl")) as f:
         for line in f:
