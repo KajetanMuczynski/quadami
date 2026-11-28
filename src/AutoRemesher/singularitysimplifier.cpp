@@ -489,6 +489,9 @@ void SingularitySimplifier::simplify()
         return;
     buildFramesAndConnection();
     m_cancelledPairCount = 0;
+    m_protectedPairCount = 0;
+    const bool protecting = nullptr != m_protectedPoints && !m_protectedPoints->empty() && m_protectedRadius > 0.0;
+    const double protectedRadiusSquared = m_protectedRadius * m_protectedRadius;
     const auto initial = vertexCharges();
     m_singularityCountBefore = 0;
     for (int i : initial)
@@ -543,12 +546,32 @@ void SingularitySimplifier::simplify()
         }
         std::sort(candidates.begin(), candidates.end(), [](const Candidate& x, const Candidate& y) { return x.hops < y.hops; });
         std::vector<char> used(singular.size(), 0);
+        // A protected cone stays where it is: it takes part in no pair.
+        std::vector<char> isProtected(singular.size(), 0);
+        if (protecting) {
+            for (size_t i = 0; i < singular.size(); ++i) {
+                const Vector3 position = m_mesh.position(singular[i]);
+                for (const Vector3& point : *m_protectedPoints) {
+                    if ((position - point).lengthSquared() < protectedRadiusSquared) {
+                        isProtected[i] = 1;
+                        break;
+                    }
+                }
+            }
+        }
         size_t cancelled = 0;
-        for (const Candidate& c : candidates)
-            if (!used[c.a] && !used[c.b] && cancelPair(singular[c.a], singular[c.b], c.hops, work)) {
+        for (const Candidate& c : candidates) {
+            if (used[c.a] || used[c.b])
+                continue;
+            if (isProtected[c.a] || isProtected[c.b]) {
+                ++m_protectedPairCount;
+                continue;
+            }
+            if (cancelPair(singular[c.a], singular[c.b], c.hops, work)) {
                 used[c.a] = used[c.b] = 1;
                 ++cancelled;
             }
+        }
         if (!cancelled)
             break;
         m_cancelledPairCount += cancelled;
