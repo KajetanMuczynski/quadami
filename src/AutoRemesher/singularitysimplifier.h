@@ -38,6 +38,14 @@ public:
     // Cones are not moved across the concave ones of these edges; none
     // when unset.  Must outlive simplify().
     void setFeatureEdges(const FeatureEdgeSet* sharpEdges) { m_sharpEdges = sharpEdges; }
+    // No pair is cancelled that has a cone within `radius` of one of these
+    // points (keep parts: the cones of a part an earlier map of the island
+    // lost).  Must outlive simplify().
+    void setProtectedPoints(const std::vector<Vector3>* points, double radius)
+    {
+        m_protectedPoints = points;
+        m_protectedRadius = radius;
+    }
     void simplify();
     // Per vertex the cone's charge in quarter turns, exact (not mod 4):
     // 1 at a valence-3 cone, -1 at a valence-5 one, 4 where the field asks
@@ -47,13 +55,17 @@ public:
     size_t singularityCountBefore() const { return m_singularityCountBefore; }
     size_t singularityCountAfter() const { return m_singularityCountAfter; }
     size_t cancelledPairCount() const { return m_cancelledPairCount; }
+    // Candidate pairs left alone for a protected cone, over all rounds.
+    size_t protectedPairCount() const { return m_protectedPairCount; }
 
 private:
     const SurfaceMesh& m_mesh;
     std::vector<Vector3>* m_field;
     size_t m_maximumPairDistance = 6, m_maximumRounds = 4, m_regionMargin = 6;
     const FeatureEdgeSet* m_sharpEdges = nullptr;
-    size_t m_singularityCountBefore = 0, m_singularityCountAfter = 0, m_cancelledPairCount = 0;
+    const std::vector<Vector3>* m_protectedPoints = nullptr;
+    double m_protectedRadius = 0.0;
+    size_t m_singularityCountBefore = 0, m_singularityCountAfter = 0, m_cancelledPairCount = 0, m_protectedPairCount = 0;
     std::vector<double> m_angles, m_connection;
     std::vector<bool> m_sharpCorner;
     std::vector<Vector3> m_frameU, m_frameV;

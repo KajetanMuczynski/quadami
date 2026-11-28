@@ -36,7 +36,7 @@
 namespace AutoRemesher {
 
 const int InterfaceVersionMajor = 1;
-const int InterfaceVersionMinor = 16;
+const int InterfaceVersionMinor = 17;
 
 // Since 1.3.  Peak memory grows linearly with the target, by about this much
 // per quad at Quality resolution (21 KB measured on spot at 25k-100k quads;
@@ -109,6 +109,12 @@ struct RemeshParameters {
     // the parts an earlier run at this target lost came back.  Changes no
     // output geometry.
     uint32_t lostPartsReferenceTarget = 0;
+    // Since 1.17.  An island whose result lost a part a quad or more in area
+    // (an ear, an eye socket; input farther than a quad from the output) is
+    // parameterized a second time with the cones near the part kept, and
+    // the result that loses less is kept.  Costs most of a second solve of
+    // such an island, nothing where nothing is lost.  Off: one run each.
+    bool keepParts = true;
 };
 
 struct RemeshRequest {
@@ -253,6 +259,10 @@ struct QualityReport {
     // the quads can hold (chain mail, strung beads), remeshed on a closed
     // envelope that fills gaps narrower than about two quads.
     size_t envelopedIslandCount = 0;
+    // Since 1.17.  RemeshParameters::keepParts: islands run a second time
+    // for a lost part, and those of them whose second result was kept.
+    size_t keepPartsRetriedIslandCount = 0;
+    size_t keepPartsKeptIslandCount = 0;
     // Since 1.4.  Input islands that are closed (no boundary or non-manifold
     // edge); those of them whose output has a boundary edge, a non-manifold
     // edge or a non-manifold vertex; and the boundary loops and edges in the

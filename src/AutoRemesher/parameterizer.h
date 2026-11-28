@@ -109,6 +109,14 @@ public:
         m_anisotropy = anisotropy;
     }
 
+    // Cones within `radius` of these points are not cancelled
+    // (SingularitySimplifier::setProtectedPoints).  Must outlive parameterize().
+    void setProtectedPoints(const std::vector<Vector3>* points, double radius)
+    {
+        m_protectedPoints = points;
+        m_protectedRadius = radius;
+    }
+
     void setSingularitySimplification(bool simplify)
     {
         m_singularitySimplification = simplify;
@@ -166,6 +174,8 @@ private:
     std::vector<double>* m_planFaceEdges = nullptr;
     double m_maxAspectRatio = 2.3;
     bool m_singularitySimplification = true;
+    const std::vector<Vector3>* m_protectedPoints = nullptr;
+    double m_protectedRadius = 0.0;
     size_t m_maximumSingularityPairDistance = 6;
     ProgressHandler m_progressHandler;
     std::vector<DiagnosticRecord> m_diagnostics;

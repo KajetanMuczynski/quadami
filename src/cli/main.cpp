@@ -69,6 +69,10 @@ const char* const usage = "Usage: autoremesher-cli -i input.obj -o output.obj [o
                           "  --flatten-spikes on|off     with --fold-repair on: where a fold cannot be\n"
                           "                              untangled, also lower needle spikes near it\n"
                           "                              (changes the shape; default off)\n"
+                          "  --keep-parts on|off         run a part of the model again when its result\n"
+                          "                              lost a piece a quad or more in area (an ear, an\n"
+                          "                              eye socket), with the cones near the piece\n"
+                          "                              kept, and keep the better result (default on)\n"
                           "  --quad-smoothing laplacian|tangential\n"
                           "                              how the extracted quads are smoothed: tangential\n"
                           "                              slides them along the surface and keeps ridges\n"
@@ -222,6 +226,12 @@ int parseArguments(const std::vector<std::string>& arguments, Options* options)
                 return 1;
             }
             parameters.repairFolds = "on" == value;
+        } else if ("--keep-parts" == name) {
+            if ("on" != value && "off" != value) {
+                std::fprintf(stderr, "Error: --keep-parts must be on or off, not %s\n", value.c_str());
+                return 1;
+            }
+            parameters.keepParts = "on" == value;
         } else if ("--flatten-spikes" == name) {
             if ("on" != value && "off" != value) {
                 std::fprintf(stderr, "Error: --flatten-spikes must be on or off, not %s\n", value.c_str());

@@ -360,12 +360,15 @@ bool Parameterizer::parameterize()
         report(0.17f, "Simplifying singularities");
         simplifier.setFeatureEdges(featureEdges);
         simplifier.setMaximumPairDistance(m_maximumSingularityPairDistance);
+        simplifier.setProtectedPoints(m_protectedPoints, m_protectedRadius);
         simplifier.simplify();
         {
             DiagnosticRecord record("singularity_simplifier");
             record.set("singularities_before", (double)simplifier.singularityCountBefore());
             record.set("singularities_after", (double)simplifier.singularityCountAfter());
             record.set("cancelled_pairs", (double)simplifier.cancelledPairCount());
+            if (nullptr != m_protectedPoints)
+                record.set("protected_pairs", (double)simplifier.protectedPairCount());
             m_diagnostics.push_back(std::move(record));
         }
     }

@@ -184,6 +184,25 @@ public:
         m_keepPreviewData = keep;
     }
 
+    // Run an island whose map lost a part again with the cones near the
+    // part protected, and keep the better result (autoremesher.cpp,
+    // keepPartsTriggerQuads).  On by default.
+    void setKeepParts(bool keep)
+    {
+        m_keepParts = keep;
+    }
+
+    // Islands that were run again to keep a lost part, and those of them
+    // whose second result was kept.
+    size_t keepPartsRetriedIslandCount() const
+    {
+        return m_keepPartsRetriedIslandCount;
+    }
+    size_t keepPartsKeptIslandCount() const
+    {
+        return m_keepPartsKeptIslandCount;
+    }
+
     // Untangle folded-over input triangles before remeshing (FoldRepair).
     void setRepairInputFolds(bool repair)
     {
@@ -605,6 +624,9 @@ private:
     size_t m_floorRaisedIslandCount = 0;
     double m_floorExtraQuadShare = 0.0;
     size_t m_envelopedIslandCount = 0;
+    bool m_keepParts = true;
+    size_t m_keepPartsRetriedIslandCount = 0;
+    size_t m_keepPartsKeptIslandCount = 0;
 
     bool remeshIslands();
     void throwIfCancelled() const;

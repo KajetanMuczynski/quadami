@@ -1081,6 +1081,7 @@ static std::unique_ptr<::AutoRemesher::AutoRemesher> makeEngine(const RemeshRequ
     engine.setUseQex(Extractor::Qex == parameters.extractor);
     engine.setRepairInputFolds(parameters.repairFolds);
     engine.setFlattenSpikes(parameters.flattenSpikes);
+    engine.setKeepParts(parameters.keepParts);
     engine.setTangentialQuadSmoothing(QuadSmoothing::Tangential == parameters.quadSmoothing);
     engine.setTrianglesPerQuad(MeshResolution::Fast == parameters.resolution
             ? ::AutoRemesher::FastTrianglesPerQuad
@@ -1220,6 +1221,8 @@ static RemeshResult runRemesh(const RemeshRequest& request,
     report.islandCount = engine.islandCount();
     report.islandsWithoutOutput = engine.islandsWithoutOutput();
     report.envelopedIslandCount = engine.envelopedIslandCount();
+    report.keepPartsRetriedIslandCount = engine.keepPartsRetriedIslandCount();
+    report.keepPartsKeptIslandCount = engine.keepPartsKeptIslandCount();
 
     const auto& remeshedVertices = engine.remeshedVertices();
     const auto& remeshedFaces = engine.remeshedQuads();
@@ -1544,6 +1547,7 @@ std::string toJson(const RemeshResult& result)
         << ", \"extractor\": " << jsonString(toString(parameters.extractor))
         << ", \"quad_smoothing\": " << jsonString(toString(parameters.quadSmoothing))
         << ", \"lost_parts_reference\": " << parameters.lostPartsReferenceTarget
+        << ", \"keep_parts\": " << (parameters.keepParts ? "true" : "false")
         << "},\n";
     out << "  \"input\": {"
         << "\"vertices\": " << jsonCount(report.inputVertexCount)
@@ -1573,6 +1577,8 @@ std::string toJson(const RemeshResult& result)
         << "\"input\": " << jsonCount(report.islandCount)
         << ", \"without_output\": " << jsonCount(report.islandsWithoutOutput)
         << ", \"enveloped\": " << jsonCount(report.envelopedIslandCount)
+        << ", \"keep_parts_retried\": " << jsonCount(report.keepPartsRetriedIslandCount)
+        << ", \"keep_parts_kept\": " << jsonCount(report.keepPartsKeptIslandCount)
         << ", \"closed_in_input\": " << jsonCount(report.closedInputIslandCount)
         << ", \"opened\": " << jsonCount(report.openedClosedIslandCount)
         << ",\n              \"holes\": " << jsonCount(report.closedIslandHoleCount)
